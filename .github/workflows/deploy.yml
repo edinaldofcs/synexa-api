@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  APP_DIR: /home/${{ secrets.VPS_USER }}/synexa-api
+  APP_DIR: /opt/synexa-api
 
 jobs:
   lint-and-build:
@@ -63,11 +63,11 @@ jobs:
             --exclude '.env.dev' \
             --exclude 'dist' \
             -e "ssh -p ${{ secrets.VPS_PORT }}" \
-            ./ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ env.APP_DIR }}/
+            ./ deploy@${{ secrets.VPS_HOST }}:${{ env.APP_DIR }}/
 
       - name: 🐳 Build & Restart Docker containers
         run: |
-          ssh -p ${{ secrets.VPS_PORT }} ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh -p ${{ secrets.VPS_PORT }} deploy@${{ secrets.VPS_HOST }} << 'EOF'
             cd ${{ env.APP_DIR }}
             echo "🐳 Building Docker image..."
             docker compose up --build -d
@@ -81,7 +81,7 @@ jobs:
         run: |
           echo "⏳ Waiting 15s for container startup..."
           sleep 15
-          ssh -p ${{ secrets.VPS_PORT }} ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh -p ${{ secrets.VPS_PORT }} deploy@${{ secrets.VPS_HOST }} << 'EOF'
             cd ${{ env.APP_DIR }}
             CONTAINER_STATUS=$(docker compose ps --format "{{.Status}}" | head -1)
             echo "📊 Container status: $CONTAINER_STATUS"
