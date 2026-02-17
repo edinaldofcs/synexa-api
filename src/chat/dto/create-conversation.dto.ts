@@ -1,17 +1,17 @@
-import { IsString, IsOptional, IsUUID } from 'class-validator';
+import { IsOptional, IsUUID } from 'class-validator';
 
 export class CreateConversationDto {
-    @IsUUID()
-    companyId: string;
+  @IsUUID()
+  companyId: string;
 
-    @IsUUID()
-    personId: string;
+  @IsUUID()
+  personId: string;
 
-    @IsOptional()
-    @IsUUID()
-    debtId?: string;
+  @IsOptional()
+  @IsUUID()
+  debtId?: string;
 
-    @IsOptional()
-    @IsUUID()
-    assignedTo?: string;
+  @IsOptional()
+  @IsUUID()
+  assignedTo?: string;
 }

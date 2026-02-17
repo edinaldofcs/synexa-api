@@ -19,4 +19,4 @@ import { PainelClientsModule } from './painel-clients/painel-clients.module';
     PainelClientsModule,
   ],
 })
-export class AppModule { }
+export class AppModule {}

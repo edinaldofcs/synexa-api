@@ -4,10 +4,10 @@ import { ImportContactsDto } from './dto/import-contact.dto';
 
 @Controller('import-contacts') // Exposed at /api/import-contacts via global prefix
 export class ImportsController {
-    constructor(private readonly importsService: ImportsService) { }
+  constructor(private readonly importsService: ImportsService) {}
 
-    @Post()
-    create(@Body() dto: ImportContactsDto) {
-        return this.importsService.importContacts(dto);
-    }
+  @Post()
+  create(@Body() dto: ImportContactsDto) {
+    return this.importsService.importContacts(dto);
+  }
 }

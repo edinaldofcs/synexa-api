@@ -4,7 +4,7 @@ import { SupabaseModule } from './supabase/supabase.module';
 
 @Global()
 @Module({
-    imports: [PrismaModule, SupabaseModule],
-    exports: [PrismaModule, SupabaseModule],
+  imports: [PrismaModule, SupabaseModule],
+  exports: [PrismaModule, SupabaseModule],
 })
-export class CommonModule { }
+export class CommonModule {}
