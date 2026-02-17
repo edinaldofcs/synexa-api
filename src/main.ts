@@ -7,7 +7,11 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Enable CORS
-  app.enableCors();
+  app.enableCors({
+    origin: true, // Permite qualquer origem ou você pode listar explicitamente: ['http://localhost:5173', 'https://synexa.naldofcs-ai.com']
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+  });
 
   // Set Global Prefix /api
   app.setGlobalPrefix('api');
