@@ -44,12 +44,10 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: 🔑 Setup SSH Key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p ${{ secrets.VPS_PORT }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+      - name: 🔑 Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.7.1
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
 
       - name: 📤 Sync files to VPS
         run: |
@@ -59,17 +57,16 @@ jobs:
             --exclude '.env' \
             --exclude '.env.dev' \
             --exclude 'dist' \
-            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            -e "ssh -p ${{ secrets.VPS_PORT }}" \
             ./ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ env.APP_DIR }}/
 
-      - name: 🐳 Build & Restart containers
+      - name: 🐳 Build & Restart Docker containers
         run: |
-          ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }} \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh -p ${{ secrets.VPS_PORT }} ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
             cd ${{ env.APP_DIR }}
             echo "🐳 Building Docker image..."
             docker compose up --build -d
-            echo "🧹 Cleaning old images..."
+            echo "🧹 Cleaning old Docker images..."
             docker image prune -f
             echo "✅ Deploy complete!"
             docker compose ps
@@ -79,8 +76,7 @@ jobs:
         run: |
           echo "⏳ Waiting 15s for container startup..."
           sleep 15
-          ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }} \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh -p ${{ secrets.VPS_PORT }} ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
             cd ${{ env.APP_DIR }}
             CONTAINER_STATUS=$(docker compose ps --format "{{.Status}}" | head -1)
             echo "📊 Container status: $CONTAINER_STATUS"
@@ -92,7 +88,3 @@ jobs:
               exit 1
             fi
           EOF
-
-      - name: 🧹 Cleanup SSH Key
-        if: always()
-        run: rm -f ~/.ssh/deploy_key
