@@ -1,0 +1,98 @@
+name: 🚀 Deploy Synexa API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  APP_DIR: /home/${{ secrets.VPS_USER }}/synexa-api
+
+jobs:
+  lint-and-build:
+    name: ✅ Lint & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Prisma Generate
+        run: npx prisma generate
+
+      - name: 🧹 Lint
+        run: npm run lint
+
+      - name: 🏗️ Build
+        run: npm run build
+
+  deploy:
+    name: 🚀 Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: lint-and-build
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔑 Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.VPS_PORT }} -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 📤 Sync files to VPS
+        run: |
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.env' \
+            --exclude '.env.dev' \
+            --exclude 'dist' \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            ./ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ env.APP_DIR }}/
+
+      - name: 🐳 Build & Restart containers
+        run: |
+          ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+            cd ${{ env.APP_DIR }}
+            echo "🐳 Building Docker image..."
+            docker compose up --build -d
+            echo "🧹 Cleaning old images..."
+            docker image prune -f
+            echo "✅ Deploy complete!"
+            docker compose ps
+          EOF
+
+      - name: 🏥 Health Check
+        run: |
+          echo "⏳ Waiting 15s for container startup..."
+          sleep 15
+          ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+            cd ${{ env.APP_DIR }}
+            CONTAINER_STATUS=$(docker compose ps --format "{{.Status}}" | head -1)
+            echo "📊 Container status: $CONTAINER_STATUS"
+            if echo "$CONTAINER_STATUS" | grep -q "Up"; then
+              echo "✅ Container is running!"
+            else
+              echo "❌ Container is NOT running!"
+              docker compose logs --tail=50
+              exit 1
+            fi
+          EOF
+
+      - name: 🧹 Cleanup SSH Key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

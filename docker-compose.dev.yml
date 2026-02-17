@@ -1,0 +1,23 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: synexa-api-dev
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.dev
+    environment:
+      - NODE_ENV=development
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run start:dev
+    networks:
+      - synexa-network
+
+networks:
+  synexa-network:
+    driver: bridge

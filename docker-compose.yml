@@ -4,12 +4,21 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: synexa-api
-    ports:
-      - "3000:3000"
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=${DATABASE_URL}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     restart: always
+    # Sem ports expostos — acesso via Cloudflare Tunnel ou Nginx reverso
+    networks:
+      - synexa-network
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3000" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  synexa-network:
+    driver: bridge
