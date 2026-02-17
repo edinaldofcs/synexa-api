@@ -13,7 +13,7 @@ services:
     networks:
       - synexa-network
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3000" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/health-test" ]
       interval: 30s
       timeout: 10s
       retries: 3

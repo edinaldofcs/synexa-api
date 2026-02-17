@@ -30,8 +30,8 @@ RUN npm prune --production
 # Stage 2: Production
 FROM node:20-alpine
 
-# Install openssl for Prisma
-RUN apk add --no-cache openssl
+# Install openssl and curl for Prisma and healthchecks
+RUN apk add --no-cache openssl curl
 
 # Use a non-root user for security
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
