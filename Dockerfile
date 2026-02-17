@@ -1,8 +1,8 @@
 # Stage 1: Build
 FROM node:20-alpine AS builder
 
-# Install necessary build tools for native modules if any
-RUN apk add --no-cache libc6-compat
+# Install necessary build tools and openssl
+RUN apk add --no-cache libc6-compat openssl
 
 WORKDIR /app
 
@@ -27,7 +27,11 @@ RUN npm run build
 RUN npm prune --production
 
 # Stage 2: Production
+# Stage 2: Production
 FROM node:20-alpine
+
+# Install openssl for Prisma
+RUN apk add --no-cache openssl
 
 # Use a non-root user for security
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
