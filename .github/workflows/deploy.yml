@@ -49,11 +49,6 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
 
-      - name: 🛡️ Add Known Hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -p ${{ secrets.VPS_PORT }} ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
-
       - name: 📤 Sync files to VPS
         run: |
           rsync -avz --delete \
@@ -62,12 +57,12 @@ jobs:
             --exclude '.env' \
             --exclude '.env.dev' \
             --exclude 'dist' \
-            -e "ssh -p ${{ secrets.VPS_PORT }}" \
+            -e "ssh -p ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no" \
             ./ deploy@${{ secrets.VPS_HOST }}:${{ env.APP_DIR }}/
 
       - name: 🐳 Build & Restart Docker containers
         run: |
-          ssh -p ${{ secrets.VPS_PORT }} deploy@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh -p ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no deploy@${{ secrets.VPS_HOST }} << 'EOF'
             cd ${{ env.APP_DIR }}
             echo "🐳 Building Docker image..."
             docker compose up --build -d
@@ -81,7 +76,7 @@ jobs:
         run: |
           echo "⏳ Waiting 15s for container startup..."
           sleep 15
-          ssh -p ${{ secrets.VPS_PORT }} deploy@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh -p ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no deploy@${{ secrets.VPS_HOST }} << 'EOF'
             cd ${{ env.APP_DIR }}
             CONTAINER_STATUS=$(docker compose ps --format "{{.Status}}" | head -1)
             echo "📊 Container status: $CONTAINER_STATUS"
