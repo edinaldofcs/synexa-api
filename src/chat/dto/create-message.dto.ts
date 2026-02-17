@@ -1,4 +1,5 @@
 import { IsString, IsOptional, IsUUID, IsEnum } from 'class-validator';
+import { Prisma } from '@prisma/client';
 
 export class CreateMessageDto {
   @IsUUID()
@@ -14,5 +15,5 @@ export class CreateMessageDto {
   channel: string;
 
   @IsOptional()
-  attachments?: Record<string, unknown>[];
+  attachments?: Prisma.InputJsonValue;
 }

@@ -9,30 +9,30 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { CreatePainelClientDto } from './dto/create-painel-client.dto';
 import { UpdatePainelClientDto } from './dto/update-painel-client.dto';
 
-interface MetadataResult {
+export interface MetadataResult {
   result: any;
 }
 
-interface PainelClient {
+export interface PainelClient {
   id: string;
   company_name: string;
   agent_name: string;
   [key: string]: any;
 }
 
-interface PainelAgent {
+export interface PainelAgent {
   id: string;
   client_id: string;
   [key: string]: any;
 }
 
-interface PainelIntention {
+export interface PainelIntention {
   id: string;
   client_id: string;
   [key: string]: any;
 }
 
-interface PainelApi {
+export interface PainelApi {
   id: string;
   agent_id: string;
   next_api_id: string | null;
