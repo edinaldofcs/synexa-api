@@ -53,45 +53,45 @@ WITH api_base AS (
   SELECT 
     pa.client_id,
     pa.execution_order,
-    papi.name
+    papi.name,
+    pa.id as agent_id
   FROM public.painel_agents pa
   LEFT JOIN public.painel_apis papi 
     ON pa.id = papi.agent_id
-  WHERE pa.client_id = '${clientId}' AND papi.name IS NOT NULL
+  WHERE papi.name IS NOT NULL
 ),
-
 api_steps AS (
-  SELECT DISTINCT client_id, execution_order
+  SELECT DISTINCT client_id, execution_order, agent_id
   FROM api_base
 ),
-
 api_cumulative AS (
   SELECT
     s.client_id,
-    s.execution_order,
+    s.agent_id,
     jsonb_agg(DISTINCT b.name ORDER BY b.name) AS api_list
   FROM api_steps s
   JOIN api_base b
     ON b.client_id = s.client_id
    AND b.execution_order <= s.execution_order
-  GROUP BY s.client_id, s.execution_order
+  GROUP BY s.client_id, s.agent_id
 ),
-
 regras AS (
   SELECT
     client_id,
     jsonb_object_agg(
-      execution_order::text,
+      agent_id,
       api_list
     ) AS activation_rules
   FROM api_cumulative
   GROUP BY client_id
 ),
-
 api_flags AS (
   SELECT
     client_id,
-    jsonb_object_agg(DISTINCT name, false) AS api_booleans
+    jsonb_object_agg(
+      DISTINCT name, 
+      false
+    ) AS api_booleans
   FROM api_base
   GROUP BY client_id
 )
@@ -106,10 +106,11 @@ SELECT
     'ofertas_disponiveis', NULL
   )
   || COALESCE(f.api_booleans, '{}'::jsonb)
-  || COALESCE(jsonb_build_object(
-       'activation_rules', r.activation_rules
-     ), '{}'::jsonb) AS result
-
+  || jsonb_build_object(
+       'metadata', jsonb_build_object(
+         'activation_rules', r.activation_rules
+       )
+     ) AS result
 FROM public.painel_clients a
 LEFT JOIN regras r ON r.client_id = a.id
 LEFT JOIN api_flags f ON f.client_id = a.id

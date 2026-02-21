@@ -195,13 +195,7 @@ model painel_agents {
   model               String?
   service_step        String?
   execution_order     Int?
-  agent_identity      String?
-  language_guidelines String?
-  system_context      String?
-  available_tools     String?
-  conversation_flow   String?
-  output_rules        String?
-  security_rules      String?
+  system_prompt       String?
   version             Int       @default(1)
   is_active           Boolean   @default(true)
 

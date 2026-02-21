@@ -15,31 +15,7 @@ export class UpdatePainelAgentDto {
 
   @IsString()
   @IsOptional()
-  agent_identity?: string;
-
-  @IsString()
-  @IsOptional()
-  language_guidelines?: string;
-
-  @IsString()
-  @IsOptional()
-  system_context?: string;
-
-  @IsString()
-  @IsOptional()
-  available_tools?: string;
-
-  @IsString()
-  @IsOptional()
-  conversation_flow?: string;
-
-  @IsString()
-  @IsOptional()
-  output_rules?: string;
-
-  @IsString()
-  @IsOptional()
-  security_rules?: string;
+  system_prompt?: string;
 
   @IsInt()
   @IsOptional()
