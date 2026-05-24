@@ -19,6 +19,11 @@ export class MediaController {
     return this.mediaService.createAsset(clientId, dto, user.id);
   }
 
+  @Get('media')
+  findAll(@CurrentUser() user: { id: string }) {
+    return this.mediaService.findAll(user.id);
+  }
+
   @Get('clients/:clientId/media/assets')
   findAllByClient(
     @Param('clientId') clientId: string,

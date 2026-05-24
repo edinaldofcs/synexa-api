@@ -16,6 +16,11 @@ import { CurrentUser } from '../common/auth/current-user.decorator';
 export class AgentsController {
   constructor(private readonly agentsService: AgentsService) {}
 
+  @Get('agents')
+  findAll(@CurrentUser() user: { id: string }) {
+    return this.agentsService.findAll(user.id);
+  }
+
   @Post('clients/:clientId/agents')
   create(
     @Param('clientId') clientId: string,

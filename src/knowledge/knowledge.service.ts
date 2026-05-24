@@ -50,6 +50,19 @@ export class KnowledgeService {
     });
   }
 
+  async listAllBases(userId: string) {
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { company_id: true },
+    });
+    if (!user?.company_id) throw new ForbiddenException('User has no company');
+
+    return this.prisma.knowledge_bases.findMany({
+      where: { company_id: user.company_id },
+      orderBy: { created_at: 'desc' },
+    });
+  }
+
   async createDocument(baseId: string, dto: CreateKnowledgeDocumentDto, userId: string) {
     const base = await this.getAuthorizedBase(baseId, userId);
 

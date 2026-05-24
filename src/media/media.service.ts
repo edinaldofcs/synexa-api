@@ -44,6 +44,19 @@ export class MediaService {
       : null;
   }
 
+  async findAll(userId: string) {
+    const user = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { company_id: true },
+    });
+    if (!user?.company_id) throw new ForbiddenException('User has no company');
+    return this.prisma.media_assets.findMany({
+      where: { company_id: user.company_id },
+      orderBy: { created_at: 'desc' },
+      take: 100,
+    });
+  }
+
   async createAsset(clientId: string, dto: CreateMediaAssetDto, userId: string) {
     const companyId = await this.getAuthorizedCompanyId(clientId, userId);
     this.validateMimeType(dto.mime_type);

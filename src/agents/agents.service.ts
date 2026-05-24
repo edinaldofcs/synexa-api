@@ -46,6 +46,15 @@ export class AgentsService {
     return agent;
   }
 
+  async findAll(userId: string) {
+    const companyId = await this.getUserCompanyId(userId);
+    return this.prisma.painel_agents.findMany({
+      where: { painel_clients: { company_id: companyId } },
+      include: { painel_clients: { select: { company_name: true } } },
+      orderBy: { execution_order: 'asc' },
+    });
+  }
+
   async findAllByClient(clientId: string, userId: string) {
     const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);

@@ -43,6 +43,11 @@ export class KnowledgeController {
     return this.knowledgeService.listDocuments(baseId, user.id);
   }
 
+  @Get('knowledge-bases')
+  listAllBases(@CurrentUser() user: { id: string }) {
+    return this.knowledgeService.listAllBases(user.id);
+  }
+
   @Post('knowledge-bases/:baseId/search')
   search(
     @Param('baseId') baseId: string,
