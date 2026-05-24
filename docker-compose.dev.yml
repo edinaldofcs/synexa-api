@@ -1,23 +1,45 @@
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: synexa-db-dev
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: synexapassword
+      POSTGRES_DB: synexa_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - synexa_db_data:/var/lib/postgresql/data
+    networks:
+      - synexa-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: synexa-redis-dev
+    ports:
+      - "6379:6379"
+    networks:
+      - synexa-network
+
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: edinaldofcs48/synexa-api:latest
     container_name: synexa-api-dev
     ports:
       - "3000:3000"
     env_file:
-      - .env.dev
+      - .env.prod
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
     restart: unless-stopped
-    volumes:
-      - .:/app
-      - /app/node_modules
-    command: npm run start:dev
     networks:
       - synexa-network
 
 networks:
   synexa-network:
     driver: bridge
+
+volumes:
+  synexa_db_data:

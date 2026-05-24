@@ -1,8 +1,9 @@
 import { IsString, IsArray, IsOptional } from 'class-validator';
 
 export class ImportContactsDto {
+  @IsOptional()
   @IsString()
-  userId: string;
+  userId?: string;
 
   @IsString()
   @IsOptional()

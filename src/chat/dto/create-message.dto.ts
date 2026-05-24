@@ -2,8 +2,9 @@ import { IsString, IsOptional, IsUUID, IsEnum } from 'class-validator';
 import { Prisma } from '@prisma/client';
 
 export class CreateMessageDto {
+  @IsOptional()
   @IsUUID()
-  companyId: string;
+  companyId?: string;
 
   @IsString()
   content: string;

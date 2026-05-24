@@ -1,8 +1,9 @@
 import { IsOptional, IsUUID } from 'class-validator';
 
 export class CreateConversationDto {
+  @IsOptional()
   @IsUUID()
-  companyId: string;
+  companyId?: string;
 
   @IsUUID()
   personId: string;

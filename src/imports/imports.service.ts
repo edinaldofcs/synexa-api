@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ImportContactsDto } from './dto/import-contact.dto';
@@ -29,29 +30,30 @@ interface ContactRow {
   segment?: string;
   negotiation_limit?: string | number;
   discount_limit?: string | number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 @Injectable()
 export class ImportsService {
+  private readonly logger = new Logger(ImportsService.name);
+
   constructor(private prisma: PrismaService) {}
 
-  async importContacts(dto: ImportContactsDto) {
-    const { userId, fileName, fileType = 'csv', data } = dto;
+  async importContacts(dto: ImportContactsDto, authenticatedUserId: string) {
+    const { fileName, fileType = 'csv', data } = dto;
 
     if (!data.length) {
       throw new BadRequestException('Data array is empty');
     }
 
     try {
-      // 1. Resolve Company from User
       const user = await this.prisma.users.findUnique({
-        where: { id: userId },
+        where: { id: authenticatedUserId },
       });
 
       if (!user?.company_id) {
         throw new BadRequestException(
-          'Invalid User ID or User has no Company assigned.',
+          'Authenticated user not found or has no Company assigned.',
         );
       }
 
@@ -89,7 +91,7 @@ export class ImportsService {
 
       // 4. Trigger Async Processing
       void this.processImport(importId, companyId).catch((err: unknown) =>
-        console.error(
+        this.logger.error(
           `Background processing failed for import ${importId}:`,
           err,
         ),
@@ -102,15 +104,13 @@ export class ImportsService {
       };
     } catch (err: unknown) {
       const error = err as Error;
-      console.error('Import Error:', error);
-      throw new InternalServerErrorException(
-        `Erro no processamento: ${error.message}`,
-      );
+      this.logger.error('Import Error:', error);
+      throw new InternalServerErrorException('Erro no processamento');
     }
   }
 
   private async processImport(importId: string, companyId: string) {
-    console.log(`Starting processing for import ${importId}`);
+    this.logger.log(`Starting processing for import ${importId}`);
 
     const pendingContacts = await this.prisma.contacts.findMany({
       where: { import_id: importId, status: 'pending' },
@@ -126,7 +126,6 @@ export class ImportsService {
         const row: ContactRow = {};
         // Normalize keys
         Object.keys(raw).forEach((k) => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           row[k.toLowerCase().trim()] = raw[k];
         });
 
@@ -258,10 +257,8 @@ export class ImportsService {
       } catch (e: unknown) {
         const error = e as Error;
         invalidCount++;
-        console.error(
-          `Error processing contact ${contact.id}:`,
-          error.message,
-          error.stack,
+        this.logger.error(
+          `Error processing contact ${contact.id}: ${error.message}`,
         );
         errorLog.push({ id: contact.id, error: error.message });
         await this.prisma.contacts.update({
@@ -290,11 +287,11 @@ export class ImportsService {
       },
     });
 
-    console.log(
+    this.logger.log(
       `Import ${importId} finished. Valid: ${validCount}, Invalid: ${invalidCount}`,
     );
     if (invalidCount > 0) {
-      console.log('First 5 errors:', errorLog.slice(0, 5));
+      this.logger.warn('Import errors:', errorLog.slice(0, 5));
     }
   }
 }

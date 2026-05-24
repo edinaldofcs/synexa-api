@@ -1,11 +1,9 @@
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: edinaldofcs48/synexa-api:latest
     container_name: synexa-api
     env_file:
-      - .env
+      - .env.prod
     environment:
       - NODE_ENV=production
     restart: always

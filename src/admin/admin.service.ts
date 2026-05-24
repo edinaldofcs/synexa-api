@@ -2,16 +2,25 @@ import {
   Injectable,
   BadRequestException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { SupabaseService } from '../common/supabase/supabase.service';
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     private prisma: PrismaService,
-    private supabase: SupabaseService,
   ) {}
+
+  private get adminClient(): SupabaseClient<any, 'public', any> {
+    return createClient<any, 'public', any>(
+      process.env.SUPABASE_URL || '',
+      process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+    );
+  }
 
   async createCompany(data: { name: string; cnpj: string; plan?: string }) {
     const { name, cnpj, plan = 'starter' } = data;
@@ -39,8 +48,8 @@ export class AdminService {
       return { success: true, company };
     } catch (err: unknown) {
       const error = err as Error;
-      console.error('Create Company Error:', error);
-      throw new InternalServerErrorException(error.message);
+      this.logger.error('Create Company Error:', error);
+      throw new InternalServerErrorException('Internal server error');
     }
   }
 
@@ -61,7 +70,7 @@ export class AdminService {
 
       // 1. Create Auth User
       const { data: authUser, error: authError } =
-        await this.supabase.admin.auth.admin.createUser({
+        await this.adminClient.auth.admin.createUser({
           email,
           password: password || undefined,
           email_confirm: true,
@@ -71,7 +80,7 @@ export class AdminService {
       if (authError) {
         if (authError.message.includes('already registered')) {
           // Find existing user
-          const listResult = await this.supabase.admin.auth.admin.listUsers();
+          const listResult = await this.adminClient.auth.admin.listUsers();
           if (listResult.error) throw listResult.error;
 
           const usersList = listResult.data.users as Array<{
@@ -112,8 +121,8 @@ export class AdminService {
       return { success: true, user };
     } catch (err: unknown) {
       const error = err as Error;
-      console.error('Create User Error:', error);
-      throw new InternalServerErrorException(error.message);
+      this.logger.error('Create User Error:', error);
+      throw new InternalServerErrorException('Internal server error');
     }
   }
 }

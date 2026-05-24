@@ -1,4 +1,5 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 
 interface TableResult {
@@ -13,37 +14,41 @@ interface ColumnResult {
 
 @Injectable()
 export class TablesService {
+  private readonly ALLOWED_TABLES = new Set([
+    'painel_clients', 'painel_agents', 'painel_apis', 'painel_intentions',
+  ]);
+
   constructor(private prisma: PrismaService) {}
 
   async getTables() {
     try {
-      const tables = await this.prisma.$queryRawUnsafe<TableResult[]>(`
+      const tables = await this.prisma.$queryRaw<TableResult[]>(Prisma.sql`
         SELECT table_name 
         FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-        AND table_name NOT IN ('_prisma_migrations', 'Dummy')
+        WHERE table_schema = 'public'
+        AND table_name IN (${Prisma.join([...this.ALLOWED_TABLES].map(t => Prisma.sql`${t}`))})
         ORDER BY table_name;
       `);
       return { success: true, tables: tables.map((t) => t.table_name) };
     } catch (err: unknown) {
       const error = err as Error;
-      throw new InternalServerErrorException(error.message);
+      throw new InternalServerErrorException('Internal server error');
     }
   }
 
   async getTableSchema(tableName: string) {
+    if (!this.ALLOWED_TABLES.has(tableName)) {
+      throw new Error(`Table not allowed: ${tableName}`);
+    }
     try {
-      const schema = await this.prisma.$queryRawUnsafe<ColumnResult[]>(
-        `
+      const schema = await this.prisma.$queryRaw<ColumnResult[]>(Prisma.sql`
         SELECT column_name, data_type, is_nullable
         FROM information_schema.columns
         WHERE table_schema = 'public'
-        AND table_name = $1
+        AND table_name = ${tableName}
         AND column_name NOT IN ('id', 'created_at')
         ORDER BY ordinal_position;
-      `,
-        tableName,
-      );
+      `);
 
       const mappedSchema = schema.map((col) => {
         let type = 'string';
@@ -72,7 +77,7 @@ export class TablesService {
       return { success: true, schema: mappedSchema };
     } catch (err: unknown) {
       const error = err as Error;
-      throw new InternalServerErrorException(error.message);
+      throw new InternalServerErrorException('Internal server error');
     }
   }
 
@@ -81,33 +86,49 @@ export class TablesService {
     queryParams: { startDate?: string; endDate?: string },
   ) {
     const { startDate, endDate } = queryParams;
+
+    const validName = /^[a-z_][a-z0-9_]*$/i;
+    if (!validName.test(tableName)) {
+      throw new Error(`Invalid table name: ${tableName}`);
+    }
+    if (!this.ALLOWED_TABLES.has(tableName)) {
+      throw new Error(`Table not allowed: ${tableName}`);
+    }
+
     try {
-      const safeTableName = `"${tableName.replace(/"/g, '""')}"`;
+      const [knownTable] = await this.prisma.$queryRaw<
+        TableResult[]
+      >(Prisma.sql`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = ${tableName}
+        AND table_name NOT IN ('_prisma_migrations', 'Dummy')
+      `);
 
-      let query = `SELECT * FROM ${safeTableName}`;
-      const params: unknown[] = [];
-
-      if (startDate && endDate) {
-        query += ` WHERE created_at BETWEEN $1 AND $2`;
-        params.push(new Date(startDate), new Date(endDate));
-      } else if (startDate) {
-        query += ` WHERE created_at >= $1`;
-        params.push(new Date(startDate));
-      } else if (endDate) {
-        query += ` WHERE created_at <= $1`;
-        params.push(new Date(endDate));
+      if (!knownTable) {
+        throw new Error(`Table ${tableName} not found`);
       }
 
-      query += ` ORDER BY created_at DESC`;
+      const safeTableName = Prisma.raw(`"${knownTable.table_name}"`);
 
-      const data = await this.prisma.$queryRawUnsafe<unknown[]>(
-        query,
-        ...params,
-      );
+      let query = Prisma.sql`SELECT * FROM ${safeTableName}`;
+
+      if (startDate && endDate) {
+        query = Prisma.sql`${query} WHERE created_at BETWEEN ${new Date(startDate)} AND ${new Date(endDate)}`;
+      } else if (startDate) {
+        query = Prisma.sql`${query} WHERE created_at >= ${new Date(startDate)}`;
+      } else if (endDate) {
+        query = Prisma.sql`${query} WHERE created_at <= ${new Date(endDate)}`;
+      }
+
+      query = Prisma.sql`${query} ORDER BY created_at DESC`;
+
+      const data = await this.prisma.$queryRaw<unknown[]>(query);
       return { success: true, data };
     } catch (err: unknown) {
       const error = err as Error;
-      throw new InternalServerErrorException(error.message);
+      throw new InternalServerErrorException('Internal server error');
     }
   }
 }

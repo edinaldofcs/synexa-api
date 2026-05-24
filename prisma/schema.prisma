@@ -25,7 +25,20 @@ model companies {
   debts      debts[]
   conversations conversations[]
   messages    messages[]
-  painel_clients painel_clients[]
+  painel_clients   painel_clients[]
+  channel_connections channel_connections[]
+  end_users          end_users[]
+  channel_identities channel_identities[]
+  inbound_events     inbound_events[]
+  media_assets        media_assets[]
+  outbox_events       outbox_events[]
+  message_events      message_events[]
+  tool_calls          tool_calls[]
+  agent_runs          agent_runs[]
+  knowledge_bases     knowledge_bases[]
+  knowledge_documents knowledge_documents[]
+  knowledge_chunks    knowledge_chunks[]
+  knowledge_embeddings knowledge_embeddings[]
 }
 
 model users {
@@ -134,25 +147,49 @@ model debts {
 }
 
 model conversations {
-  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id      String    @db.Uuid
-  person_id       String    @db.Uuid
-  debt_id         String?   @db.Uuid
-  status          String    @default("active")
-  assigned_to     String?   @db.Uuid
-  started_at      DateTime? @default(now()) @db.Timestamptz(6)
-  last_message_at DateTime? @db.Timestamptz(6)
-  closed_at       DateTime? @db.Timestamptz(6)
-  ai_context      Json?     @db.JsonB
-  metadata        Json?     @db.JsonB
-  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id              String    @db.Uuid
+  client_id               String?   @db.Uuid
+  person_id               String?   @db.Uuid
+  debt_id                 String?   @db.Uuid
+  channel_connection_id   String?   @db.Uuid
+  end_user_id             String?   @db.Uuid
+  origin_channel          String?
+  external_conversation_key String?
+  mode                    String?   @default("auto")
+  status                  String    @default("active")
+  current_agent_id        String?   @db.Uuid
+  current_step            String?
+  priority                Int?      @default(0)
+  assigned_to             String?   @db.Uuid
+  started_at              DateTime? @default(now()) @db.Timestamptz(6)
+  last_message_at         DateTime? @db.Timestamptz(6)
+  last_inbound_at         DateTime? @db.Timestamptz(6)
+  last_outbound_at        DateTime? @db.Timestamptz(6)
+  closed_at               DateTime? @db.Timestamptz(6)
+  ai_context              Json?     @db.JsonB
+  metadata                Json?     @db.JsonB
+  created_at              DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies       companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  person          people    @relation(fields: [person_id], references: [id], onDelete: Cascade)
-  debts           debts?    @relation(fields: [debt_id], references: [id])
-  users           users?    @relation(fields: [assigned_to], references: [id])
+  companies           companies           @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients      painel_clients?     @relation(fields: [client_id], references: [id])
+  person              people?             @relation(fields: [person_id], references: [id], onDelete: SetNull)
+  debts               debts?              @relation(fields: [debt_id], references: [id])
+  channel_connections channel_connections? @relation(fields: [channel_connection_id], references: [id])
+  end_users           end_users?          @relation(fields: [end_user_id], references: [id])
+  users               users?              @relation(fields: [assigned_to], references: [id])
 
-  messages        messages[]
+  messages            messages[]
+  conversation_state  conversation_state[]
+  message_events      message_events[]
+  tool_calls          tool_calls[]
+  agent_runs          agent_runs[]
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([channel_connection_id])
+  @@index([end_user_id])
+  @@index([status])
 }
 
 model messages {
@@ -161,14 +198,104 @@ model messages {
   conversation_id     String    @db.Uuid
   sender_type         String    // customer, ai, human
   channel             String    // whatsapp, sms, webchat, api
+  direction           String?   // inbound, outbound
+  message_type        String?   @default("text") // text, mixed
   content             String?
   attachments         Json?     @db.JsonB
+  raw_payload         Json?     @db.JsonB
+  request_id          String?
+  idempotency_key     String?
+  status              String?   @default("received") // received, processing, completed, failed
+  error_message       String?
   delivery_status     String?   @default("sent")
   external_message_id String?
+  channel_message_id  String?
+  metadata            Json?     @db.JsonB
+  processed_at        DateTime? @db.Timestamptz(6)
   created_at          DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies           companies     @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  conversations       conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversations   conversations   @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  message_parts   message_parts[]
+  media_assets    media_assets[]
+  tool_calls      tool_calls[]
+  message_events  message_events[]
+  agent_runs      agent_runs[]     @relation("AgentRunInboundMessage")
+  response_agent_runs agent_runs[] @relation("AgentRunResponseMessage")
+
+  @@index([conversation_id])
+  @@index([idempotency_key])
+  @@index([status])
+}
+
+model message_parts {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message_id     String   @db.Uuid
+  part_type      String   // text, image, audio, file, tool_result, rag_context, citation
+  text_content   String?
+  media_asset_id String?  @db.Uuid
+  tool_call_id   String?  @db.Uuid
+  order_index    Int      @default(0)
+  metadata       Json?    @default("{}") @db.JsonB
+  created_at     DateTime? @default(now()) @db.Timestamptz(6)
+
+  messages     messages      @relation(fields: [message_id], references: [id], onDelete: Cascade)
+  media_assets media_assets? @relation(fields: [media_asset_id], references: [id], onDelete: SetNull)
+  tool_calls   tool_calls?   @relation(fields: [tool_call_id], references: [id], onDelete: SetNull)
+
+  @@index([message_id])
+  @@index([part_type])
+  @@index([media_asset_id])
+  @@index([tool_call_id])
+}
+
+model conversation_state {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id String   @db.Uuid
+  state           Json     @default("{}") @db.JsonB
+  version         Int      @default(1)
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime? @default(now()) @db.Timestamptz(6)
+
+  conversations conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@unique([conversation_id])
+}
+
+model media_assets {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id     String    @db.Uuid
+  client_id      String    @db.Uuid
+  message_id     String?   @db.Uuid
+  storage_bucket String?
+  storage_path   String?
+  source_url     String?
+  mime_type      String
+  file_size      Int?
+  checksum       String?
+  duration_ms    Int?
+  width          Int?
+  height         Int?
+  transcript     String?
+  ocr_text       String?
+  status         String    @default("pending")
+  error_message  String?
+  metadata       Json?     @default("{}") @db.JsonB
+  created_at     DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  messages       messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  message_parts  message_parts[]
+  knowledge_documents knowledge_documents[]
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([message_id])
+  @@index([status])
+  @@index([checksum])
 }
 
 model painel_clients {
@@ -184,9 +311,26 @@ model painel_clients {
   inbox_id     String?
   logo_url     String?
 
-  companies    companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_agents painel_agents[]
-  metadata      Json?           @default("{}") @db.JsonB
+  companies           companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_agents       painel_agents[]
+  painel_apis         painel_apis[]
+  painel_intentions   painel_intentions[]
+  channel_connections channel_connections[]
+  webhook_endpoints   webhook_endpoints[]
+  end_users           end_users[]
+  channel_identities  channel_identities[]
+  inbound_events      inbound_events[]
+  conversations       conversations[]
+  media_assets        media_assets[]
+  outbox_events       outbox_events[]
+  message_events      message_events[]
+  tool_calls          tool_calls[]
+  agent_runs          agent_runs[]
+  knowledge_bases     knowledge_bases[]
+  knowledge_documents knowledge_documents[]
+  knowledge_chunks    knowledge_chunks[]
+  knowledge_embeddings knowledge_embeddings[]
+  metadata            Json?           @default("{}") @db.JsonB
 }
 
 model painel_agents {
@@ -198,20 +342,429 @@ model painel_agents {
   system_prompt       String?
   version             Int       @default(1)
   is_active           Boolean   @default(true)
+  transitions         Json?     @db.JsonB
+  allowed_tool_names  Json?     @db.JsonB
 
   painel_clients      painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
   painel_apis         painel_apis[]
+  agent_runs          agent_runs[]
 }
 
 model painel_apis {
-  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  agent_id        String        @db.Uuid
-  name            String
-  execution_order Int?
-  method          String?
-  url             String?
-  headers         Json?         @db.JsonB
-  body            Json?         @db.JsonB
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_id        String         @db.Uuid
+  agent_id         String?        @db.Uuid
+  name             String
+  description      String?
+  method           String?
+  url              String?
+  headers          Json?          @db.JsonB
+  body             Json?          @db.JsonB
+  parameters       Json?          @db.JsonB
+  extract_data     Json?          @db.JsonB
+  visible_to_agent Boolean        @default(true)
+  active           Boolean        @default(true)
+  next_tool        String?
+  execution_order  Int?
+  created_at       DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime       @default(now()) @db.Timestamptz(6)
+
+  painel_clients   painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  painel_agents    painel_agents? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
+}
+
+model painel_intentions {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_id   String         @db.Uuid
+  code        String
+  description String
+  is_active   Boolean        @default(true)
+  created_at  DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime       @default(now()) @db.Timestamptz(6)
   
-  painel_agents   painel_agents @relation(fields: [agent_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+
+  @@unique([client_id, code])
+}
+
+/// @deprecated Use conversations + conversation_state. Scheduled for removal on 2026-08-30.
+model orchestrator_sessions {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_phone  String
+  company_phone String
+  session_state Json     @default("{}") @db.JsonB
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([client_phone, company_phone])
+  @@map("orchestrator_sessions")
+}
+
+/// @deprecated Use messages + message_parts. Scheduled for removal on 2026-08-30.
+model orchestrator_chat_messages {
+  id         Int      @id @default(autoincrement())
+  session_id String
+  role       String
+  content    String
+  created_at DateTime @default(now())
+
+  @@index([session_id])
+  @@map("orchestrator_chat_messages")
+}
+
+model channel_connections {
+  id                          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id                  String    @db.Uuid
+  client_id                   String    @db.Uuid
+  channel_type                String
+  provider                    String?
+  provider_account_id         String?
+  status                      String    @default("active")
+  config                      Json?     @db.JsonB
+  inbound_secret_hash         String?
+  default_webhook_endpoint_id String?   @db.Uuid
+  created_at                  DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies          companies       @relation(fields: [company_id], references: [id])
+  painel_clients     painel_clients  @relation(fields: [client_id], references: [id])
+  inbound_events     inbound_events[]
+  webhook_endpoints  webhook_endpoints[]
+  conversations      conversations[]
+
+  @@unique([client_id, channel_type])
+  @@index([company_id])
+  @@index([provider_account_id])
+}
+
+model webhook_endpoints {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_id             String    @db.Uuid
+  channel_connection_id String?   @db.Uuid
+  url                   String
+  events                Json?     @default("[]") @db.JsonB
+  secret_hash           String?
+  retry_policy          Json?     @default("{}") @db.JsonB
+  enabled               Boolean   @default(true)
+  created_at            DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime? @default(now()) @db.Timestamptz(6)
+
+  painel_clients       painel_clients       @relation(fields: [client_id], references: [id])
+  channel_connections  channel_connections? @relation(fields: [channel_connection_id], references: [id])
+  webhook_deliveries   webhook_deliveries[]
+
+  @@index([client_id])
+}
+
+model webhook_deliveries {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  webhook_endpoint_id String  @db.Uuid
+  event             String
+  conversation_id   String?   @db.Uuid
+  inbound_message_id String?  @db.Uuid
+  response_message_id String? @db.Uuid
+  payload           Json      @db.JsonB
+  attempt           Int       @default(1)
+  max_attempts      Int       @default(3)
+  status            String    @default("pending") // pending, delivered, failed, cancelled
+  http_status       Int?
+  response_body     String?
+  error_message     String?
+  next_retry_at     DateTime? @db.Timestamptz(6)
+  completed_at      DateTime? @db.Timestamptz(6)
+  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+
+  webhook_endpoints webhook_endpoints @relation(fields: [webhook_endpoint_id], references: [id])
+
+  @@index([webhook_endpoint_id])
+  @@index([status])
+  @@index([next_retry_at])
+}
+
+model end_users {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id String    @db.Uuid
+  client_id  String    @db.Uuid
+  name       String?
+  metadata   Json?     @default("{}") @db.JsonB
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies           companies           @relation(fields: [company_id], references: [id])
+  painel_clients      painel_clients      @relation(fields: [client_id], references: [id])
+  channel_identities  channel_identities[]
+  conversations       conversations[]
+
+  @@index([company_id])
+  @@index([client_id])
+}
+
+model channel_identities {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id       String   @db.Uuid
+  client_id        String   @db.Uuid
+  end_user_id      String   @db.Uuid
+  channel_type     String
+  external_user_id String
+  normalized_phone String?
+  metadata         Json?    @default("{}") @db.JsonB
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  end_users      end_users      @relation(fields: [end_user_id], references: [id], onDelete: Cascade)
+
+  @@unique([client_id, channel_type, external_user_id])
+  @@index([company_id])
+  @@index([client_id])
+  @@index([channel_type, external_user_id])
+}
+
+model inbound_events {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id            String    @db.Uuid
+  client_id             String    @db.Uuid
+  channel_connection_id String?   @db.Uuid
+  channel_type          String
+  raw_payload           Json      @db.JsonB
+  headers               Json?     @db.JsonB
+  request_id            String?
+  normalized            Boolean   @default(false)
+  status                String    @default("received")
+  error_message         String?
+  idempotency_key       String?
+  created_at            DateTime? @default(now()) @db.Timestamptz(6)
+  processed_at          DateTime? @db.Timestamptz(6)
+
+  companies            companies            @relation(fields: [company_id], references: [id])
+  painel_clients       painel_clients       @relation(fields: [client_id], references: [id])
+  channel_connections  channel_connections? @relation(fields: [channel_connection_id], references: [id])
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([status])
+  @@index([idempotency_key])
+}
+
+model outbox_events {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id      String    @db.Uuid
+  client_id       String?   @db.Uuid
+  aggregate_type  String
+  aggregate_id    String?   @db.Uuid
+  event_type      String
+  payload         Json      @db.JsonB
+  status          String    @default("pending")
+  attempts        Int       @default(0)
+  max_attempts    Int       @default(5)
+  next_attempt_at DateTime? @db.Timestamptz(6)
+  locked_at       DateTime? @db.Timestamptz(6)
+  locked_by       String?
+  error_message   String?
+  processed_at    DateTime? @db.Timestamptz(6)
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients  painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([status])
+  @@index([next_attempt_at])
+  @@index([aggregate_type, aggregate_id])
+}
+
+model message_events {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id      String    @db.Uuid
+  client_id       String?   @db.Uuid
+  conversation_id String?   @db.Uuid
+  message_id      String?   @db.Uuid
+  request_id      String?
+  event_type      String
+  status          String?
+  payload         Json?     @default("{}") @db.JsonB
+  error_message   String?
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients  painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  conversations   conversations?  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  messages        messages?       @relation(fields: [message_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([conversation_id])
+  @@index([message_id])
+  @@index([event_type])
+}
+
+model agent_runs {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id          String    @db.Uuid
+  client_id           String    @db.Uuid
+  conversation_id     String?   @db.Uuid
+  inbound_message_id  String?   @db.Uuid
+  response_message_id String?   @db.Uuid
+  request_id          String?
+  agent_id            String?   @db.Uuid
+  provider            String?
+  model               String?
+  status              String    @default("running")
+  input_tokens        Int?      @default(0)
+  output_tokens       Int?      @default(0)
+  total_tokens        Int?      @default(0)
+  cost                Decimal?  @db.Decimal(14, 6)
+  latency_ms          Int?
+  trace               Json?     @default("{}") @db.JsonB
+  error_message       String?
+  started_at          DateTime? @default(now()) @db.Timestamptz(6)
+  completed_at        DateTime? @db.Timestamptz(6)
+
+  companies           companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients      painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  conversations       conversations?  @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  inbound_message     messages?       @relation("AgentRunInboundMessage", fields: [inbound_message_id], references: [id], onDelete: SetNull)
+  response_message    messages?       @relation("AgentRunResponseMessage", fields: [response_message_id], references: [id], onDelete: SetNull)
+  painel_agents       painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
+  tool_calls          tool_calls[]
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([conversation_id])
+  @@index([status])
+  @@index([started_at])
+}
+
+model tool_calls {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id      String    @db.Uuid
+  client_id       String    @db.Uuid
+  conversation_id String?   @db.Uuid
+  message_id      String?   @db.Uuid
+  agent_run_id    String?   @db.Uuid
+  request_id      String?
+  tool_name       String
+  tool_type       String    @default("api")
+  arguments       Json?     @default("{}") @db.JsonB
+  result          Json?     @db.JsonB
+  status          String    @default("running")
+  latency_ms      Int?
+  error_message   String?
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+  completed_at    DateTime? @db.Timestamptz(6)
+
+  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients  painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  conversations   conversations?  @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  messages        messages?       @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  agent_runs      agent_runs?     @relation(fields: [agent_run_id], references: [id], onDelete: SetNull)
+  message_parts   message_parts[]
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([conversation_id])
+  @@index([agent_run_id])
+  @@index([tool_name])
+  @@index([status])
+}
+
+model knowledge_bases {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id  String    @db.Uuid
+  client_id   String    @db.Uuid
+  name        String
+  description String?
+  status      String    @default("active")
+  settings    Json?     @default("{}") @db.JsonB
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies            companies             @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients       painel_clients        @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  knowledge_documents  knowledge_documents[]
+  knowledge_chunks     knowledge_chunks[]
+  knowledge_embeddings knowledge_embeddings[]
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([status])
+}
+
+model knowledge_documents {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id        String    @db.Uuid
+  client_id         String    @db.Uuid
+  knowledge_base_id String    @db.Uuid
+  media_asset_id    String?   @db.Uuid
+  title             String
+  source_type       String    @default("upload")
+  source_url        String?
+  version           Int       @default(1)
+  status            String    @default("pending")
+  error_message     String?
+  metadata          Json?     @default("{}") @db.JsonB
+  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies         companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients    painel_clients   @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  knowledge_bases   knowledge_bases  @relation(fields: [knowledge_base_id], references: [id], onDelete: Cascade)
+  media_assets      media_assets?    @relation(fields: [media_asset_id], references: [id], onDelete: SetNull)
+  knowledge_chunks  knowledge_chunks[]
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([knowledge_base_id])
+  @@index([status])
+}
+
+model knowledge_chunks {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id        String    @db.Uuid
+  client_id         String    @db.Uuid
+  knowledge_base_id String    @db.Uuid
+  document_id       String    @db.Uuid
+  content           String
+  chunk_index       Int
+  page              Int?
+  metadata          Json?     @default("{}") @db.JsonB
+  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies            companies              @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients       painel_clients         @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  knowledge_bases      knowledge_bases        @relation(fields: [knowledge_base_id], references: [id], onDelete: Cascade)
+  knowledge_documents  knowledge_documents    @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  knowledge_embeddings knowledge_embeddings[]
+
+  @@unique([document_id, chunk_index])
+  @@index([company_id])
+  @@index([client_id])
+  @@index([knowledge_base_id])
+  @@index([document_id])
+}
+
+model knowledge_embeddings {
+  id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id        String                @db.Uuid
+  client_id         String                @db.Uuid
+  knowledge_base_id String                @db.Uuid
+  chunk_id          String                @db.Uuid
+  provider          String
+  model             String
+  dimensions        Int?
+  embedding         Unsupported("vector")
+  metadata          Json?                 @default("{}") @db.JsonB
+  created_at        DateTime?             @default(now()) @db.Timestamptz(6)
+
+  companies         companies         @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients    painel_clients    @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  knowledge_bases   knowledge_bases   @relation(fields: [knowledge_base_id], references: [id], onDelete: Cascade)
+  knowledge_chunks  knowledge_chunks  @relation(fields: [chunk_id], references: [id], onDelete: Cascade)
+
+  @@unique([chunk_id, provider, model])
+  @@index([company_id])
+  @@index([client_id])
+  @@index([knowledge_base_id])
+  @@index([chunk_id])
 }
