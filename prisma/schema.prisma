@@ -18,11 +18,6 @@ model companies {
   created_at DateTime?  @default(now()) @db.Timestamptz(6)
   updated_at DateTime?  @default(now()) @db.Timestamptz(6)
   users      users[]
-  imports    imports[]
-  contacts   contacts[]
-  people     people[]
-  phones     phones[]
-  debts      debts[]
   conversations conversations[]
   messages    messages[]
   painel_clients   painel_clients[]
@@ -52,106 +47,13 @@ model users {
   conversations conversations[]
 }
 
-model imports {
-  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id      String      @db.Uuid
-  file_name       String?
-  file_type       String?
-  total_records   Int?        @default(0)
-  valid_records   Int?        @default(0)
-  invalid_records Int?        @default(0)
-  status          String?     @default("processing")
-  error_log       Json?
-  created_at      DateTime?   @default(now()) @db.Timestamptz(6)
-  completed_at    DateTime?   @db.Timestamptz(6)
-  companies       companies   @relation(fields: [company_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  contacts        contacts[]
-}
-
-model contacts {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id    String    @db.Uuid
-  import_id     String    @db.Uuid
-  raw_data      Json      @db.JsonB
-  status        String?   @default("pending") // pending, processed, failed
-  error_message String?
-  created_at    DateTime? @default(now()) @db.Timestamptz(6)
-  processed_at  DateTime? @db.Timestamptz(6)
-
-  companies     companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  imports       imports   @relation(fields: [import_id], references: [id], onDelete: Cascade)
-}
-
-model people {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id    String    @db.Uuid
-  name          String?
-  cpf           String
-  email         String?
-  birth_date    DateTime? @db.Date
-  created_at    DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
-
-  companies     companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  phones        people_phones[]
-  debts         debts[]
-  conversations conversations[]
-
-  @@unique([company_id, cpf])
-}
-
-model phones {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id    String    @db.Uuid
-  phone_number  String
-  created_at    DateTime? @default(now()) @db.Timestamptz(6)
-
-  companies     companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  people        people_phones[]
-
-  @@unique([company_id, phone_number])
-}
-
-model people_phones {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  person_id     String    @db.Uuid
-  phone_id      String    @db.Uuid
-  is_primary    Boolean?  @default(false)
-  created_at    DateTime? @default(now()) @db.Timestamptz(6)
-
-  person        people    @relation(fields: [person_id], references: [id], onDelete: Cascade)
-  phone         phones    @relation(fields: [phone_id], references: [id], onDelete: Cascade)
-
-  @@unique([person_id, phone_id])
-}
-
-model debts {
-  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id      String    @db.Uuid
-  person_id       String    @db.Uuid
-  contract_number String?
-  original_amount Decimal   @db.Decimal(14, 2)
-  current_amount  Decimal   @db.Decimal(14, 2)
-  due_date        DateTime? @db.Date
-  status          String    @default("open")
-  priority_score  Int?      @default(0)
-  last_contact_at DateTime? @db.Timestamptz
-  next_action_at  DateTime? @db.Timestamptz
-  metadata        Json?     @db.JsonB
-  created_at      DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at      DateTime? @default(now()) @db.Timestamptz(6)
-
-  companies       companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  person          people    @relation(fields: [person_id], references: [id], onDelete: Cascade)
-  conversations   conversations[]
-}
+/// @deprecated Removed. Use conversations + messages directly.
+/// Table will be dropped from Supabase.
 
 model conversations {
   id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id              String    @db.Uuid
   client_id               String?   @db.Uuid
-  person_id               String?   @db.Uuid
-  debt_id                 String?   @db.Uuid
   channel_connection_id   String?   @db.Uuid
   end_user_id             String?   @db.Uuid
   origin_channel          String?
@@ -173,8 +75,6 @@ model conversations {
 
   companies           companies           @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_clients      painel_clients?     @relation(fields: [client_id], references: [id])
-  person              people?             @relation(fields: [person_id], references: [id], onDelete: SetNull)
-  debts               debts?              @relation(fields: [debt_id], references: [id])
   channel_connections channel_connections? @relation(fields: [channel_connection_id], references: [id])
   end_users           end_users?          @relation(fields: [end_user_id], references: [id])
   users               users?              @relation(fields: [assigned_to], references: [id])
@@ -333,6 +233,7 @@ model painel_clients {
   metadata            Json?           @default("{}") @db.JsonB
 }
 
+/// Removed. Agent config now managed via painel_clients.transitions.
 model painel_agents {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   client_id           String    @db.Uuid
@@ -350,6 +251,7 @@ model painel_agents {
   agent_runs          agent_runs[]
 }
 
+/// @deprecated Use channels/channel-connections instead.
 model painel_apis {
   id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   client_id        String         @db.Uuid
@@ -373,6 +275,7 @@ model painel_apis {
   painel_agents    painel_agents? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 }
 
+/// @deprecated Intentions are now embedded in agent transitions.
 model painel_intentions {
   id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   client_id   String         @db.Uuid
@@ -387,30 +290,8 @@ model painel_intentions {
   @@unique([client_id, code])
 }
 
-/// @deprecated Use conversations + conversation_state. Scheduled for removal on 2026-08-30.
-model orchestrator_sessions {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  client_phone  String
-  company_phone String
-  session_state Json     @default("{}") @db.JsonB
-  created_at    DateTime @default(now()) @db.Timestamptz(6)
-  updated_at    DateTime @default(now()) @db.Timestamptz(6)
-
-  @@unique([client_phone, company_phone])
-  @@map("orchestrator_sessions")
-}
-
-/// @deprecated Use messages + message_parts. Scheduled for removal on 2026-08-30.
-model orchestrator_chat_messages {
-  id         Int      @id @default(autoincrement())
-  session_id String
-  role       String
-  content    String
-  created_at DateTime @default(now())
-
-  @@index([session_id])
-  @@map("orchestrator_chat_messages")
-}
+/// Removed. Use conversations + conversation_state.
+/// @deprecated Removed from schema.
 
 model channel_connections {
   id                          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid

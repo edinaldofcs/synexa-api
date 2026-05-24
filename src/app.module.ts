@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { CommonModule } from './common/common.module';
 import { AuthModule } from './common/auth/auth.module';
-import { ImportsModule } from './imports/imports.module';
 import { AdminModule } from './admin/admin.module';
 import { TablesModule } from './tables/tables.module';
 import { ChatModule } from './chat/chat.module';
@@ -37,7 +36,6 @@ import { AppService } from './app.service';
     ]),
     CommonModule,
     AuthModule,
-    ImportsModule,
     AdminModule,
     TablesModule,
     ChatModule,

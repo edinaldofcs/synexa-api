@@ -26,7 +26,6 @@ export class ChatService {
     return this.prisma.conversations.findMany({
       where: { company_id: companyId },
       include: {
-        person: true,
         messages: {
           take: 1,
           orderBy: { created_at: 'desc' },
@@ -41,8 +40,6 @@ export class ChatService {
     return this.prisma.conversations.create({
       data: {
         company_id: companyId,
-        person_id: dto.personId,
-        debt_id: dto.debtId,
         assigned_to: dto.assignedTo,
         status: 'active',
       },
@@ -54,8 +51,6 @@ export class ChatService {
     const conversation = await this.prisma.conversations.findUnique({
       where: { id },
       include: {
-        person: true,
-        debts: true,
         messages: {
           orderBy: { created_at: 'asc' },
         },

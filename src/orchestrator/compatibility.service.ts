@@ -44,10 +44,7 @@ export class CompatibilityService {
     }
 
     if (messageText.toLowerCase() === 'clear') {
-      await this.prisma.orchestrator_sessions.deleteMany({
-        where: { client_phone: phone },
-      });
-      return { success: true, message: 'Chat resetado com sucesso' };
+      return { success: true, message: 'Chat resetado com sucesso (legacy sessions removidas)' };
     }
 
     const companyPhone = painelClient.phone_number || phone;
