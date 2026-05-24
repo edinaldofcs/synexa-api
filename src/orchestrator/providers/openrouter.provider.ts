@@ -9,7 +9,7 @@ function formatHistoryForOpenAI(history: { role: string; content: string }[]): O
   return history.map(msg => {
     let content = msg.content;
     if (msg.role === 'assistant') {
-      try { JSON.parse(content); } catch { content = JSON.stringify({ text: content, action: 'speak' }); }
+      try { JSON.parse(content); } catch { content = JSON.stringify({ text: content }); }
     }
     return { role: msg.role === 'assistant' ? 'assistant' : 'user', content } as OpenAI.Chat.ChatCompletionMessageParam;
   });
@@ -40,10 +40,7 @@ function buildOpenAIToolDefinition(toolsArray: any[]) {
 }
 
 const SYSTEM_SUFFIX =
-  "\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números." +
-  "\n\nVocê é um assistente virtual telefônico. Você DEVE responder exclusivamente em formato JSON válido com a seguinte estrutura:\n" +
-  '{\n  "text": "sua resposta falada para o usuário aqui",\n  "action": "speak" ou "hangup"\n}\n' +
-  "Defina 'action' como 'hangup' apenas se o cliente já se despediu ou se for para desligar o telefone. Caso contrário, use 'speak'. Certifique-se de retornar APENAS o JSON, sem markdown ou explicações fora do JSON.";
+  "\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números.";
 
 export class OpenRouterProvider implements LLMProvider {
   private readonly logger = new Logger(OpenRouterProvider.name);
@@ -99,13 +96,8 @@ export class OpenRouterProvider implements LLMProvider {
                 type: 'object',
                 properties: {
                   text: { type: 'string', description: 'A resposta de texto do assistente para o usuário.' },
-                  action: {
-                    type: 'string',
-                    enum: ['speak', 'hangup'],
-                    description: "Ação a ser executada. 'speak' para continuar, 'hangup' para desligar.",
-                  },
                 },
-                required: ['text', 'action'],
+                required: ['text'],
                 additionalProperties: false,
               },
             },
