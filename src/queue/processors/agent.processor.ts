@@ -59,7 +59,10 @@ export class AgentProcessor {
       );
 
       this.logger.log(
-        { conversation_id: data.conversation_id, response_length: result.responseText.length },
+        {
+          conversation_id: data.conversation_id,
+          response_length: result.responseText.length,
+        },
         'Agent processing complete',
       );
 

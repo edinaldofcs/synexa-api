@@ -12,10 +12,7 @@ describe('IntentionsService', () => {
     users: { findUnique: jest.fn() },
     painel_clients: { findUnique: jest.fn() },
   };
-  const service = new IntentionsService(
-    repository as never,
-    prisma as never,
-  );
+  const service = new IntentionsService(repository as never, prisma as never);
 
   const userId = 'user-1';
   const companyId = 'company-1';
@@ -23,7 +20,9 @@ describe('IntentionsService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.users.findUnique.mockResolvedValue({ company_id: companyId });
-    prisma.painel_clients.findUnique.mockResolvedValue({ company_id: companyId });
+    prisma.painel_clients.findUnique.mockResolvedValue({
+      company_id: companyId,
+    });
   });
 
   it('delegates CRUD operations to the repository', async () => {
@@ -40,7 +39,11 @@ describe('IntentionsService', () => {
     repository.remove.mockResolvedValue({ success: true });
 
     await expect(
-      service.create('client-1', { code: 'hello', description: 'Hello' }, userId),
+      service.create(
+        'client-1',
+        { code: 'hello', description: 'Hello' },
+        userId,
+      ),
     ).resolves.toEqual({ id: 'intention-1' });
     await service.findAllByClient('client-1', userId);
     await service.findOne('intention-1', userId);

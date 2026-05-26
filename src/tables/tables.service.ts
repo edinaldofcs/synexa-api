@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 
@@ -15,7 +19,10 @@ interface ColumnResult {
 @Injectable()
 export class TablesService {
   private readonly ALLOWED_TABLES = new Set([
-    'painel_clients', 'painel_agents', 'painel_apis', 'painel_intentions',
+    'painel_clients',
+    'painel_agents',
+    'painel_apis',
+    'painel_intentions',
   ]);
 
   constructor(private prisma: PrismaService) {}
@@ -26,7 +33,7 @@ export class TablesService {
         SELECT table_name 
         FROM information_schema.tables 
         WHERE table_schema = 'public'
-        AND table_name IN (${Prisma.join([...this.ALLOWED_TABLES].map(t => Prisma.sql`${t}`))})
+        AND table_name IN (${Prisma.join([...this.ALLOWED_TABLES].map((t) => Prisma.sql`${t}`))})
         ORDER BY table_name;
       `);
       return { success: true, tables: tables.map((t) => t.table_name) };

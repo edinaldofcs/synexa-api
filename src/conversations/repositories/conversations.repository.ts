@@ -5,7 +5,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 export class ConversationsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findActiveByEndUser(clientId: string, originChannel: string, externalUserId: string) {
+  async findActiveByEndUser(
+    clientId: string,
+    originChannel: string,
+    externalUserId: string,
+  ) {
     return this.prisma.conversations.findFirst({
       where: {
         client_id: clientId,
@@ -35,7 +39,11 @@ export class ConversationsRepository {
         external_conversation_key: externalKey,
         status: { not: 'closed' },
       },
-      include: { end_users: true, channel_connections: true, conversation_state: true },
+      include: {
+        end_users: true,
+        channel_connections: true,
+        conversation_state: true,
+      },
     });
   }
 

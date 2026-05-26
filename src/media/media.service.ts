@@ -1,17 +1,21 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
 import { extname } from 'path';
+import { fileTypeFromBuffer } from 'file-type';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { CreateMediaAssetDto } from './dto/create-media-asset.dto';
 import { UpdateMediaAssetDto } from './dto/update-media-asset.dto';
 import { UploadMediaAssetDto } from './dto/upload-media-asset.dto';
+import { StorageProvider } from './providers/storage-provider.interface';
 
 const DEFAULT_ALLOWED_MIME_PREFIXES = ['image/', 'audio/', 'video/'];
 const DEFAULT_ALLOWED_MIME_TYPES = [
@@ -23,25 +27,38 @@ const DEFAULT_ALLOWED_MIME_TYPES = [
 
 @Injectable()
 export class MediaService {
-  private readonly maxFileSizeBytes = Number(process.env.MEDIA_MAX_FILE_SIZE_BYTES || 25 * 1024 * 1024);
-  private readonly bucketName = process.env.MEDIA_BUCKET || 'synexa-media';
+  private readonly maxFileSizeBytes: number;
+  private readonly bucketName: string;
   private readonly supabase: SupabaseClient | null;
+  private readonly isDevelopment: boolean;
   private bucketReady = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly queueService: QueueService,
+    private readonly configService: ConfigService,
+    @Inject('STORAGE_PROVIDER')
+    private readonly storageProvider: StorageProvider | null,
   ) {
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceRoleKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.SUPABASE_SECRET_KEY;
+    this.maxFileSizeBytes = configService.get<number>(
+      'UPLOAD_MAX_SIZE',
+      50 * 1024 * 1024,
+    );
+    this.bucketName = configService.get<string>('MEDIA_BUCKET', 'synexa-media');
+    this.isDevelopment =
+      configService.get<string>('ENVIRONMENT', 'development') === 'development';
 
-    this.supabase = supabaseUrl && serviceRoleKey
-      ? createClient(supabaseUrl, serviceRoleKey, {
-          auth: { persistSession: false, autoRefreshToken: false },
-        })
-      : null;
+    const supabaseUrl = configService.get<string>('SUPABASE_URL');
+    const serviceRoleKey =
+      configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ||
+      configService.get<string>('SUPABASE_SECRET_KEY');
+
+    this.supabase =
+      supabaseUrl && serviceRoleKey
+        ? createClient(supabaseUrl, serviceRoleKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          })
+        : null;
   }
 
   async findAll(userId: string) {
@@ -57,7 +74,11 @@ export class MediaService {
     });
   }
 
-  async createAsset(clientId: string, dto: CreateMediaAssetDto, userId: string) {
+  async createAsset(
+    clientId: string,
+    dto: CreateMediaAssetDto,
+    userId: string,
+  ) {
     const companyId = await this.getAuthorizedCompanyId(clientId, userId);
     this.validateMimeType(dto.mime_type);
     this.validateFileSize(dto.file_size);
@@ -108,12 +129,28 @@ export class MediaService {
     return asset;
   }
 
-  async uploadAsset(clientId: string, file: any, dto: UploadMediaAssetDto, userId: string) {
+  async uploadAsset(
+    clientId: string,
+    file: any,
+    dto: UploadMediaAssetDto,
+    userId: string,
+  ) {
     if (!file?.buffer) throw new BadRequestException('File is required');
-    this.ensureSupabaseConfigured();
 
     const companyId = await this.getAuthorizedCompanyId(clientId, userId);
-    this.validateMimeType(file.mimetype);
+
+    const detectedType = await fileTypeFromBuffer(file.buffer);
+    if (!detectedType) {
+      throw new BadRequestException(
+        'Could not determine file type from content',
+      );
+    }
+    if (!this.isAllowedMime(detectedType.mime)) {
+      throw new BadRequestException(
+        `Unsupported file type: ${detectedType.mime}`,
+      );
+    }
+
     this.validateFileSize(file.size);
 
     if (dto.message_id) {
@@ -122,16 +159,35 @@ export class MediaService {
 
     await this.ensureBucket();
 
-    const storagePath = this.buildStoragePath(companyId, clientId, file.originalname);
-    const { error } = await this.supabase!.storage
-      .from(this.bucketName)
-      .upload(storagePath, file.buffer, {
+    const storagePath = this.buildStoragePath(
+      companyId,
+      clientId,
+      file.originalname,
+    );
+
+    if (this.isDevelopment && this.storageProvider) {
+      const { error } = await this.storageProvider.upload(
+        this.bucketName,
+        storagePath,
+        file.buffer,
+        { contentType: detectedType.mime, cacheControl: '3600' },
+      );
+      if (error)
+        throw new BadRequestException(`Storage upload failed: ${error}`);
+    } else {
+      this.ensureSupabaseConfigured();
+      const { error } = await this.supabase!.storage.from(
+        this.bucketName,
+      ).upload(storagePath, file.buffer, {
         cacheControl: '3600',
-        contentType: file.mimetype,
+        contentType: detectedType.mime,
         upsert: false,
       });
-
-    if (error) throw new BadRequestException(`Storage upload failed: ${error.message}`);
+      if (error)
+        throw new BadRequestException(
+          `Storage upload failed: ${error.message}`,
+        );
+    }
 
     const asset = await this.prisma.media_assets.create({
       data: {
@@ -140,12 +196,13 @@ export class MediaService {
         message_id: dto.message_id || null,
         storage_bucket: this.bucketName,
         storage_path: storagePath,
-        mime_type: file.mimetype,
+        mime_type: detectedType.mime,
         file_size: file.size || null,
         status: 'stored',
         metadata: {
           ...(dto.metadata || {}),
           original_name: file.originalname,
+          detected_ext: detectedType.ext,
         } as any,
       },
     });
@@ -154,23 +211,44 @@ export class MediaService {
     return asset;
   }
 
-  async createSignedUrl(assetId: string, userId: string, expiresInSeconds = 300) {
-    this.ensureSupabaseConfigured();
+  async createSignedUrl(
+    assetId: string,
+    userId: string,
+    expiresInSeconds = 300,
+  ) {
+    const clampedExpiresIn = Math.min(Math.max(expiresInSeconds, 60), 3600);
+
     const asset = await this.findOne(assetId, userId);
     if (!asset.storage_bucket || !asset.storage_path) {
       throw new BadRequestException('Media asset has no stored file');
     }
 
-    const { data, error } = await this.supabase!.storage
-      .from(asset.storage_bucket)
-      .createSignedUrl(asset.storage_path, expiresInSeconds);
+    if (this.isDevelopment && this.storageProvider) {
+      const { signedUrl, error } = await this.storageProvider.createSignedUrl(
+        asset.storage_bucket,
+        asset.storage_path,
+        clampedExpiresIn,
+      );
+      if (error) throw new BadRequestException(`Signed URL failed: ${error}`);
+      return {
+        asset_id: asset.id,
+        signed_url: signedUrl,
+        expires_in: clampedExpiresIn,
+      };
+    }
 
-    if (error) throw new BadRequestException(`Signed URL failed: ${error.message}`);
+    this.ensureSupabaseConfigured();
+    const { data, error } = await this.supabase!.storage.from(
+      asset.storage_bucket,
+    ).createSignedUrl(asset.storage_path, clampedExpiresIn);
+
+    if (error)
+      throw new BadRequestException(`Signed URL failed: ${error.message}`);
 
     return {
       asset_id: asset.id,
       signed_url: data.signedUrl,
-      expires_in: expiresInSeconds,
+      expires_in: clampedExpiresIn,
     };
   }
 
@@ -191,7 +269,10 @@ export class MediaService {
     });
   }
 
-  private async getAuthorizedCompanyId(clientId: string, userId: string): Promise<string> {
+  private async getAuthorizedCompanyId(
+    clientId: string,
+    userId: string,
+  ): Promise<string> {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
       select: { company_id: true },
@@ -209,7 +290,11 @@ export class MediaService {
     return user.company_id;
   }
 
-  private async validateMessageAccess(messageId: string, companyId: string, clientId: string) {
+  private async validateMessageAccess(
+    messageId: string,
+    companyId: string,
+    clientId: string,
+  ) {
     const message = await this.prisma.messages.findUnique({
       where: { id: messageId },
       select: {
@@ -218,15 +303,27 @@ export class MediaService {
       },
     });
 
-    if (!message || message.company_id !== companyId || message.conversations.client_id !== clientId) {
+    if (
+      !message ||
+      message.company_id !== companyId ||
+      message.conversations.client_id !== clientId
+    ) {
       throw new NotFoundException('Message not found');
     }
   }
 
+  private isAllowedMime(mime: string): boolean {
+    return (
+      DEFAULT_ALLOWED_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix)) ||
+      DEFAULT_ALLOWED_MIME_TYPES.includes(mime)
+    );
+  }
+
   private validateMimeType(mimeType: string) {
     const isAllowed =
-      DEFAULT_ALLOWED_MIME_PREFIXES.some(prefix => mimeType.startsWith(prefix)) ||
-      DEFAULT_ALLOWED_MIME_TYPES.includes(mimeType);
+      DEFAULT_ALLOWED_MIME_PREFIXES.some((prefix) =>
+        mimeType.startsWith(prefix),
+      ) || DEFAULT_ALLOWED_MIME_TYPES.includes(mimeType);
 
     if (!isAllowed) {
       throw new BadRequestException(`Unsupported media type: ${mimeType}`);
@@ -235,7 +332,9 @@ export class MediaService {
 
   private validateFileSize(fileSize?: number) {
     if (fileSize && fileSize > this.maxFileSizeBytes) {
-      throw new BadRequestException(`File exceeds max size of ${this.maxFileSizeBytes} bytes`);
+      throw new BadRequestException(
+        `File exceeds max size of ${this.maxFileSizeBytes} bytes`,
+      );
     }
   }
 
@@ -248,25 +347,35 @@ export class MediaService {
   private async ensureBucket() {
     if (this.bucketReady) return;
 
+    if (this.isDevelopment && this.storageProvider) {
+      await this.storageProvider.ensureBucket(this.bucketName);
+      this.bucketReady = true;
+      return;
+    }
+
+    this.ensureSupabaseConfigured();
     const existing = await this.supabase!.storage.getBucket(this.bucketName);
     if (!existing.error) {
       this.bucketReady = true;
       return;
     }
 
-    const { error } = await this.supabase!.storage.createBucket(this.bucketName, {
-      public: false,
-      allowedMimeTypes: [
-        'image/*',
-        'audio/*',
-        'video/*',
-        'application/pdf',
-        'text/plain',
-        'text/csv',
-        'application/json',
-      ],
-      fileSizeLimit: this.maxFileSizeBytes,
-    });
+    const { error } = await this.supabase!.storage.createBucket(
+      this.bucketName,
+      {
+        public: false,
+        allowedMimeTypes: [
+          'image/*',
+          'audio/*',
+          'video/*',
+          'application/pdf',
+          'text/plain',
+          'text/csv',
+          'application/json',
+        ],
+        fileSizeLimit: this.maxFileSizeBytes,
+      },
+    );
 
     if (error && !error.message.toLowerCase().includes('already exists')) {
       throw new BadRequestException(`Bucket setup failed: ${error.message}`);
@@ -275,7 +384,11 @@ export class MediaService {
     this.bucketReady = true;
   }
 
-  private buildStoragePath(companyId: string, clientId: string, originalName?: string) {
+  private buildStoragePath(
+    companyId: string,
+    clientId: string,
+    originalName?: string,
+  ) {
     const now = new Date();
     const year = String(now.getUTCFullYear());
     const month = String(now.getUTCMonth() + 1).padStart(2, '0');

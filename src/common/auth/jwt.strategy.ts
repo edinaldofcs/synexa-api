@@ -1,28 +1,43 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import * as jwksRsa from 'jwks-rsa';
-
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
-  constructor() {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
+    const supabaseUrl = configService.get<string>('SUPABASE_URL', '');
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       secretOrKeyProvider: jwksRsa.passportJwtSecret({
         cache: true,
         rateLimit: true,
         jwksRequestsPerMinute: 5,
-        jwksUri: `${SUPABASE_URL}/auth/v1/.well-known/jwks.json`,
+        jwksUri: `${supabaseUrl}/auth/v1/.well-known/jwks.json`,
       }),
-      algorithms: ['RS256'],
-      issuer: `${SUPABASE_URL}/auth/v1`,
+      algorithms: ['ES256', 'RS256'],
+      issuer: `${supabaseUrl}/auth/v1`,
       audience: 'authenticated',
     });
   }
 
   async validate(payload: { sub: string; email?: string; role?: string }) {
-    return { id: payload.sub, email: payload.email, role: payload.role };
+    const dbUser = await this.prisma.users.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, email: true, role: true, company_id: true },
+    });
+
+    return {
+      id: payload.sub,
+      email: payload.email,
+      role: dbUser?.role || payload.role || 'operator',
+      company_id: dbUser?.company_id || null,
+    };
   }
 }

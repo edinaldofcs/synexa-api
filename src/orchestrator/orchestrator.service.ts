@@ -12,7 +12,10 @@ export class OrchestratorService {
   }
 
   async deleteSession(clientPhone: string, companyPhone: string) {
-    this.logger.warn({ clientPhone, companyPhone }, '[DEPRECATED] deleteSession called - legacy sessions removed');
+    this.logger.warn(
+      { clientPhone, companyPhone },
+      '[DEPRECATED] deleteSession called - legacy sessions removed',
+    );
     return true;
   }
 }

@@ -1,5 +1,61 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { sanitize } from '../common/utils/sanitize-log.util';
+
+const MAX_PAYLOAD_CHARS = 200;
+
+function truncatePayload(payload: unknown): unknown {
+  if (typeof payload === 'string' && payload.length > MAX_PAYLOAD_CHARS) {
+    return payload.substring(0, MAX_PAYLOAD_CHARS) + '...';
+  }
+  if (payload && typeof payload === 'object') {
+    const str = JSON.stringify(payload);
+    if (str.length > MAX_PAYLOAD_CHARS) {
+      return str.substring(0, MAX_PAYLOAD_CHARS) + '...';
+    }
+    return payload;
+  }
+  return payload;
+}
+
+function sanitizeAgentRun(run: any): any {
+  if (!run) return run;
+  const cleaned = { ...run };
+  delete cleaned.ai_context;
+  delete cleaned.metadata;
+  cleaned.raw_payload = truncatePayload(cleaned.raw_payload);
+  if (cleaned.tool_calls) {
+    cleaned.tool_calls = cleaned.tool_calls.map(sanitizeToolCall);
+  }
+  return sanitize(cleaned, 2);
+}
+
+function sanitizeToolCall(tc: any): any {
+  if (!tc) return tc;
+  const cleaned = { ...tc };
+  delete cleaned.input;
+  delete cleaned.output;
+  cleaned.raw_payload = truncatePayload(cleaned.raw_payload);
+  return sanitize(cleaned, 2);
+}
+
+function sanitizeMessageEvent(ev: any): any {
+  if (!ev) return ev;
+  const cleaned = { ...ev };
+  delete cleaned.payload;
+  delete cleaned.metadata;
+  cleaned.raw_payload = truncatePayload(cleaned.raw_payload);
+  return sanitize(cleaned, 2);
+}
+
+function sanitizeInboundEvent(ev: any): any {
+  if (!ev) return ev;
+  const cleaned = { ...ev };
+  cleaned.raw_payload = truncatePayload(cleaned.raw_payload);
+  delete cleaned.ai_context;
+  delete cleaned.metadata;
+  return sanitize(cleaned, 2);
+}
 
 @Injectable()
 export class AuditService {
@@ -10,12 +66,16 @@ export class AuditService {
       where: { id: agentRunId },
       include: {
         tool_calls: { orderBy: { created_at: 'asc' } },
-        inbound_message: { include: { message_parts: { orderBy: { order_index: 'asc' } } } },
-        response_message: { include: { message_parts: { orderBy: { order_index: 'asc' } } } },
+        inbound_message: {
+          include: { message_parts: { orderBy: { order_index: 'asc' } } },
+        },
+        response_message: {
+          include: { message_parts: { orderBy: { order_index: 'asc' } } },
+        },
       },
     });
     if (!run) throw new NotFoundException('Agent run not found');
-    return run;
+    return sanitizeAgentRun(run);
   }
 
   async listAgentRuns(params: {
@@ -24,8 +84,8 @@ export class AuditService {
     conversation_id?: string;
     request_id?: string;
     status?: string;
+    page?: number;
     limit?: number;
-    offset?: number;
   }) {
     const where: any = {};
     if (params.company_id) where.company_id = params.company_id;
@@ -34,17 +94,27 @@ export class AuditService {
     if (params.request_id) where.request_id = params.request_id;
     if (params.status) where.status = params.status;
 
+    const page = params.page ?? 1;
+    const limit = params.limit ?? 20;
+    const skip = (page - 1) * limit;
+
     const [data, total] = await Promise.all([
       this.prisma.agent_runs.findMany({
         where,
         orderBy: { started_at: 'desc' },
-        take: params.limit || 50,
-        skip: params.offset || 0,
+        take: limit,
+        skip,
       }),
       this.prisma.agent_runs.count({ where }),
     ]);
 
-    return { data, total, limit: params.limit || 50, offset: params.offset || 0 };
+    return {
+      data: data.map(sanitizeAgentRun),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async listToolCalls(params: {
@@ -55,8 +125,8 @@ export class AuditService {
     request_id?: string;
     tool_name?: string;
     status?: string;
+    page?: number;
     limit?: number;
-    offset?: number;
   }) {
     const where: any = {};
     if (params.company_id) where.company_id = params.company_id;
@@ -67,17 +137,27 @@ export class AuditService {
     if (params.tool_name) where.tool_name = params.tool_name;
     if (params.status) where.status = params.status;
 
+    const page = params.page ?? 1;
+    const limit = params.limit ?? 20;
+    const skip = (page - 1) * limit;
+
     const [data, total] = await Promise.all([
       this.prisma.tool_calls.findMany({
         where,
         orderBy: { created_at: 'desc' },
-        take: params.limit || 50,
-        skip: params.offset || 0,
+        take: limit,
+        skip,
       }),
       this.prisma.tool_calls.count({ where }),
     ]);
 
-    return { data, total, limit: params.limit || 50, offset: params.offset || 0 };
+    return {
+      data: data.map(sanitizeToolCall),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async listMessageEvents(params: {
@@ -87,8 +167,8 @@ export class AuditService {
     message_id?: string;
     request_id?: string;
     event_type?: string;
+    page?: number;
     limit?: number;
-    offset?: number;
   }) {
     const where: any = {};
     if (params.company_id) where.company_id = params.company_id;
@@ -98,17 +178,27 @@ export class AuditService {
     if (params.request_id) where.request_id = params.request_id;
     if (params.event_type) where.event_type = params.event_type;
 
+    const page = params.page ?? 1;
+    const limit = params.limit ?? 20;
+    const skip = (page - 1) * limit;
+
     const [data, total] = await Promise.all([
       this.prisma.message_events.findMany({
         where,
         orderBy: { created_at: 'desc' },
-        take: params.limit || 50,
-        skip: params.offset || 0,
+        take: limit,
+        skip,
       }),
       this.prisma.message_events.count({ where }),
     ]);
 
-    return { data, total, limit: params.limit || 50, offset: params.offset || 0 };
+    return {
+      data: data.map(sanitizeMessageEvent),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async getInboundEvent(inboundEventId: string) {
@@ -116,7 +206,7 @@ export class AuditService {
       where: { id: inboundEventId },
     });
     if (!event) throw new NotFoundException('Inbound event not found');
-    return event;
+    return sanitizeInboundEvent(event);
   }
 
   async listInboundEvents(params: {
@@ -124,8 +214,8 @@ export class AuditService {
     client_id?: string;
     request_id?: string;
     status?: string;
+    page?: number;
     limit?: number;
-    offset?: number;
   }) {
     const where: any = {};
     if (params.company_id) where.company_id = params.company_id;
@@ -133,36 +223,51 @@ export class AuditService {
     if (params.request_id) where.request_id = params.request_id;
     if (params.status) where.status = params.status;
 
+    const page = params.page ?? 1;
+    const limit = params.limit ?? 20;
+    const skip = (page - 1) * limit;
+
     const [data, total] = await Promise.all([
       this.prisma.inbound_events.findMany({
         where,
         orderBy: { created_at: 'desc' },
-        take: params.limit || 50,
-        skip: params.offset || 0,
+        take: limit,
+        skip,
       }),
       this.prisma.inbound_events.count({ where }),
     ]);
 
-    return { data, total, limit: params.limit || 50, offset: params.offset || 0 };
+    return {
+      data: data.map(sanitizeInboundEvent),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async getTraceByRequestId(requestId: string) {
-    const [inboundEvents, agentRuns, toolCalls, messageEvents] = await Promise.all([
-      this.prisma.inbound_events.findMany({ where: { request_id: requestId } }),
-      this.prisma.agent_runs.findMany({
-        where: { request_id: requestId },
-        include: { tool_calls: true },
-      }),
-      this.prisma.tool_calls.findMany({ where: { request_id: requestId } }),
-      this.prisma.message_events.findMany({ where: { request_id: requestId } }),
-    ]);
+    const [inboundEvents, agentRuns, toolCalls, messageEvents] =
+      await Promise.all([
+        this.prisma.inbound_events.findMany({
+          where: { request_id: requestId },
+        }),
+        this.prisma.agent_runs.findMany({
+          where: { request_id: requestId },
+          include: { tool_calls: true },
+        }),
+        this.prisma.tool_calls.findMany({ where: { request_id: requestId } }),
+        this.prisma.message_events.findMany({
+          where: { request_id: requestId },
+        }),
+      ]);
 
     return {
       request_id: requestId,
-      inbound_events: inboundEvents,
-      agent_runs: agentRuns,
-      tool_calls: toolCalls,
-      message_events: messageEvents,
+      inbound_events: inboundEvents.map(sanitizeInboundEvent),
+      agent_runs: agentRuns.map(sanitizeAgentRun),
+      tool_calls: toolCalls.map(sanitizeToolCall),
+      message_events: messageEvents.map(sanitizeMessageEvent),
     };
   }
 }

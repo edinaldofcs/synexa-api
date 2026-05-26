@@ -43,7 +43,9 @@ describe('ClientsService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.users.findUnique.mockResolvedValue({ company_id: companyId });
-    prisma.painel_clients.findUnique.mockResolvedValue({ company_id: companyId });
+    prisma.painel_clients.findUnique.mockResolvedValue({
+      company_id: companyId,
+    });
   });
 
   it('creates a client using the company from the user', async () => {
@@ -119,11 +121,14 @@ describe('ClientsService', () => {
   });
 
   it('fails duplicate when source client cannot be copied', async () => {
-    clientsRepository.findOne.mockResolvedValue({ id: 'client-old', company_id: companyId });
+    clientsRepository.findOne.mockResolvedValue({
+      id: 'client-old',
+      company_id: companyId,
+    });
     clientsRepository.duplicate.mockResolvedValue(null);
 
-    await expect(service.duplicate('client-old', userId)).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      service.duplicate('client-old', userId),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

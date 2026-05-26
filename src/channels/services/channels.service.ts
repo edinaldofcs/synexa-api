@@ -1,13 +1,24 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WebhooksService } from '../../webhooks/services/webhooks.service';
 import { QueueService } from '../../queue/queue.service';
-import { ChannelAdapter, NormalizedMessage, ChannelConnectionConfig, OutboundMessage } from '../adapters/channel-adapter.interface';
+import {
+  ChannelAdapter,
+  NormalizedMessage,
+  ChannelConnectionConfig,
+  OutboundMessage,
+} from '../adapters/channel-adapter.interface';
 import { WhatsappAdapter } from '../adapters/whatsapp.adapter';
 import { ApiAdapter } from '../adapters/api.adapter';
 import { SendMessageDto } from '../dto/send-message.dto';
+import { sanitize } from '../../common/utils/sanitize-log.util';
 
 export interface InboundResult {
   request_id: string;
@@ -36,15 +47,22 @@ export class ChannelsService {
   async processInbound(dto: SendMessageDto): Promise<InboundResult> {
     const adapter = this.adapters.get(dto.origin_channel);
     if (!adapter) {
-      throw new BadRequestException(`Unsupported channel: ${dto.origin_channel}`);
+      throw new BadRequestException(
+        `Unsupported channel: ${dto.origin_channel}`,
+      );
     }
 
-    const connection = await this.resolveConnection(dto.client_id, dto.origin_channel);
+    const connection = await this.resolveConnection(
+      dto.client_id,
+      dto.origin_channel,
+    );
     if (!connection) {
-      throw new NotFoundException(`No active channel connection for client ${dto.client_id} / ${dto.origin_channel}`);
+      throw new BadRequestException('Invalid channel or connection');
     }
 
-    const normalized = adapter.normalize(dto as unknown as Record<string, unknown>);
+    const normalized = adapter.normalize(
+      dto as unknown as Record<string, unknown>,
+    );
     normalized.company_id = connection.company_id;
 
     if (dto.idempotency_key) {
@@ -94,6 +112,14 @@ export class ChannelsService {
       metadata: dto.metadata,
     });
 
+    this.logger.log(
+      {
+        client_id: sanitize(dto.client_id),
+        origin_channel: dto.origin_channel,
+      },
+      'Inbound message processed',
+    );
+
     return {
       request_id: requestId,
       inbound_event_id: inboundEvent.id,
@@ -114,7 +140,9 @@ export class ChannelsService {
     });
 
     if (!connection) {
-      throw new NotFoundException(`Channel connection ${connectionId} not found`);
+      throw new NotFoundException(
+        `Channel connection ${connectionId} not found`,
+      );
     }
 
     if (connection.channel_type === 'api') {
@@ -122,9 +150,9 @@ export class ChannelsService {
       if (returnUrl) {
         await this.webhooksService.deliver(connection.client_id, {
           event: 'message.completed',
-          conversation_id: metadata?.conversation_id as string || '',
-          inbound_message_id: metadata?.inbound_message_id as string || '',
-          response_message_id: metadata?.response_message_id as string || '',
+          conversation_id: (metadata?.conversation_id as string) || '',
+          inbound_message_id: (metadata?.inbound_message_id as string) || '',
+          response_message_id: (metadata?.response_message_id as string) || '',
           origin_channel: 'api',
           external_user_id: to,
           response: { type: 'text', text },
@@ -137,7 +165,9 @@ export class ChannelsService {
 
     const adapter = this.adapters.get(connection.channel_type);
     if (!adapter) {
-      throw new BadRequestException(`No adapter for channel type: ${connection.channel_type}`);
+      throw new BadRequestException(
+        `No adapter for channel type: ${connection.channel_type}`,
+      );
     }
 
     const config: ChannelConnectionConfig = {
@@ -155,7 +185,14 @@ export class ChannelsService {
     const result = await adapter.send(config, message);
 
     if (!result.success) {
-      this.logger.error({ connectionId, to, error: result.error }, 'Outbound delivery failed');
+      this.logger.error(
+        {
+          connectionId: sanitize(connectionId),
+          to: sanitize(to),
+          error: sanitize(result.error),
+        },
+        'Outbound delivery failed',
+      );
     }
   }
 
@@ -163,7 +200,7 @@ export class ChannelsService {
     connection: ChannelConnectionConfig,
     dto: SendMessageDto,
   ): Promise<string> {
-    let identity = await this.prisma.channel_identities.findFirst({
+    const identity = await this.prisma.channel_identities.findFirst({
       where: {
         client_id: dto.client_id,
         channel_type: dto.origin_channel,
@@ -178,7 +215,7 @@ export class ChannelsService {
       data: {
         company_id: connection.company_id,
         client_id: dto.client_id,
-        metadata: dto.metadata as any || {},
+        metadata: (dto.metadata as any) || {},
       },
     });
 
@@ -189,14 +226,18 @@ export class ChannelsService {
         end_user_id: endUser.id,
         channel_type: dto.origin_channel,
         external_user_id: dto.external_user_id,
-        normalized_phone: dto.origin_channel === 'whatsapp' ? dto.external_user_id : null,
+        normalized_phone:
+          dto.origin_channel === 'whatsapp' ? dto.external_user_id : null,
       },
     });
 
     return endUser.id;
   }
 
-  private async resolveConnection(clientId: string, channelType: string): Promise<ChannelConnectionConfig | null> {
+  private async resolveConnection(
+    clientId: string,
+    channelType: string,
+  ): Promise<ChannelConnectionConfig | null> {
     const connection = await this.prisma.channel_connections.findUnique({
       where: {
         client_id_channel_type: {

@@ -36,8 +36,14 @@ export function logBenchmark(data: BenchmarkData): void {
       aiResponse: data.aiResponse,
       provider: data.provider,
       model: data.model,
-      startTime: data.startTime instanceof Date ? data.startTime.toISOString() : new Date(data.startTime).toISOString(),
-      endTime: data.endTime instanceof Date ? data.endTime.toISOString() : new Date(data.endTime).toISOString(),
+      startTime:
+        data.startTime instanceof Date
+          ? data.startTime.toISOString()
+          : new Date(data.startTime).toISOString(),
+      endTime:
+        data.endTime instanceof Date
+          ? data.endTime.toISOString()
+          : new Date(data.endTime).toISOString(),
       latencyMs: data.latencyMs,
       hadToolCalls: data.hadToolCalls,
       calledTools: data.calledTools,

@@ -5,13 +5,22 @@ import { logBenchmark } from '../utils/benchmark-logger.util';
 import { llmConfig } from './llm-config';
 import type { LLMProvider, ChatParams } from './llm-provider.interface';
 
-function formatHistoryForOpenAI(history: { role: string; content: string }[]): OpenAI.Chat.ChatCompletionMessageParam[] {
-  return history.map(msg => {
+function formatHistoryForOpenAI(
+  history: { role: string; content: string }[],
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  return history.map((msg) => {
     let content = msg.content;
     if (msg.role === 'assistant') {
-      try { JSON.parse(content); } catch { content = JSON.stringify({ text: content }); }
+      try {
+        JSON.parse(content);
+      } catch {
+        content = JSON.stringify({ text: content });
+      }
     }
-    return { role: msg.role === 'assistant' ? 'assistant' : 'user', content } as OpenAI.Chat.ChatCompletionMessageParam;
+    return {
+      role: msg.role === 'assistant' ? 'assistant' : 'user',
+      content,
+    } as OpenAI.Chat.ChatCompletionMessageParam;
   });
 }
 
@@ -21,11 +30,17 @@ function simplifySchema(parameters: any): any {
 
   if (schema.properties) {
     for (const key in schema.properties) {
-      if (schema.properties[key].type === 'integer' || schema.properties[key].type === 'number') {
+      if (
+        schema.properties[key].type === 'integer' ||
+        schema.properties[key].type === 'number'
+      ) {
         schema.properties[key].type = 'string';
-        schema.properties[key].description = (schema.properties[key].description || '') + ' (Deve ser um valor numérico)';
+        schema.properties[key].description =
+          (schema.properties[key].description || '') +
+          ' (Deve ser um valor numérico)';
       }
-      if (schema.properties[key].description === '') delete schema.properties[key].description;
+      if (schema.properties[key].description === '')
+        delete schema.properties[key].description;
     }
   }
   return schema;
@@ -43,7 +58,7 @@ function buildOpenAIToolDefinition(toolsArray: any[]) {
 }
 
 const SYSTEM_SUFFIX =
-  "\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números.";
+  '\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números.';
 
 export class GroqProvider implements LLMProvider {
   private readonly logger = new Logger(GroqProvider.name);
@@ -56,7 +71,14 @@ export class GroqProvider implements LLMProvider {
     });
   }
 
-  async chat({ systemPrompt, userMessage, history, publicTools, allToolsList, executeExternalApiCallback }: ChatParams) {
+  async chat({
+    systemPrompt,
+    userMessage,
+    history,
+    publicTools,
+    allToolsList,
+    executeExternalApiCallback,
+  }: ChatParams) {
     const startTime = new Date();
     const calledTools: string[] = [];
     let hadToolCalls = false;
@@ -64,10 +86,13 @@ export class GroqProvider implements LLMProvider {
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
-    let totalCost = 0;
+    const totalCost = 0;
 
     try {
-      const toolsDefinition = publicTools && publicTools.length > 0 ? buildOpenAIToolDefinition(publicTools) : undefined;
+      const toolsDefinition =
+        publicTools && publicTools.length > 0
+          ? buildOpenAIToolDefinition(publicTools)
+          : undefined;
 
       const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: systemPrompt + SYSTEM_SUFFIX },
@@ -100,7 +125,11 @@ export class GroqProvider implements LLMProvider {
               schema: {
                 type: 'object',
                 properties: {
-                  text: { type: 'string', description: 'A resposta de texto do assistente para o usuário.' },
+                  text: {
+                    type: 'string',
+                    description:
+                      'A resposta de texto do assistente para o usuário.',
+                  },
                 },
                 required: ['text'],
                 additionalProperties: false,
@@ -110,7 +139,8 @@ export class GroqProvider implements LLMProvider {
         }
 
         this.logger.log(`Enviando mensagem para Groq (Loop ${loopCount})`);
-        const chatCompletion = await this.openai.chat.completions.create(payload);
+        const chatCompletion =
+          await this.openai.chat.completions.create(payload);
 
         if (chatCompletion.usage) {
           totalInputTokens += chatCompletion.usage.prompt_tokens || 0;
@@ -118,19 +148,30 @@ export class GroqProvider implements LLMProvider {
         }
 
         responseMessage = chatCompletion.choices[0].message;
-      messages.push(responseMessage as OpenAI.Chat.ChatCompletionMessageParam);
+        messages.push(
+          responseMessage as OpenAI.Chat.ChatCompletionMessageParam,
+        );
 
-        if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+        if (
+          responseMessage.tool_calls &&
+          responseMessage.tool_calls.length > 0
+        ) {
           hadToolCalls = true;
           for (const toolCall of responseMessage.tool_calls) {
-            const tc = toolCall as OpenAI.Chat.ChatCompletionMessageToolCall & { function: { name: string; arguments: string } };
+            const tc = toolCall as OpenAI.Chat.ChatCompletionMessageToolCall & {
+              function: { name: string; arguments: string };
+            };
             const functionName = tc.function.name;
             calledTools.push(functionName);
             const args = JSON.parse(tc.function.arguments);
 
             this.logger.log(`Groq chamou: ${functionName}`);
 
-            const apiResult = await executeExternalApiCallback({ functionName, args, toolsList: allToolsList });
+            const apiResult = await executeExternalApiCallback({
+              functionName,
+              args,
+              toolsList: allToolsList,
+            });
 
             messages.push({
               tool_call_id: tc.id,

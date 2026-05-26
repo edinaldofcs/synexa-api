@@ -47,7 +47,11 @@ export class IntentionsController {
     @Body() updateIntentionDto: UpdateIntentionDto,
     @CurrentUser() user: { id: string },
   ) {
-    return this.intentionsService.update(intentionId, updateIntentionDto, user.id);
+    return this.intentionsService.update(
+      intentionId,
+      updateIntentionDto,
+      user.id,
+    );
   }
 
   @Delete('intentions/:intentionId')

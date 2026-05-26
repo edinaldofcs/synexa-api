@@ -1,11 +1,24 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
+const FIELD_ALIAS: Record<string, string> = {
+  is_active: 'active',
+};
+
 const KNOWN_FIELDS = new Set([
-  'client_id', 'agent_id', 'name', 'description',
-  'execution_order', 'method', 'url', 'body',
-  'parameters', 'extract_data', 'visible_to_agent',
-  'active', 'next_tool',
+  'client_id',
+  'agent_id',
+  'name',
+  'description',
+  'execution_order',
+  'method',
+  'url',
+  'body',
+  'parameters',
+  'extract_data',
+  'visible_to_agent',
+  'active',
+  'next_tool',
 ]);
 
 @Injectable()
@@ -16,7 +29,8 @@ export class ApisRepository {
     const db: Record<string, unknown> = {};
     const meta: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(payload)) {
-      if (KNOWN_FIELDS.has(k)) db[k] = v;
+      const dbKey = FIELD_ALIAS[k] || k;
+      if (KNOWN_FIELDS.has(dbKey)) db[dbKey] = v;
       else meta[k] = v;
     }
     return { ...db, headers: meta };
@@ -29,7 +43,15 @@ export class ApisRepository {
       typeof headers === 'object' && headers !== null
         ? (headers as Record<string, unknown>)
         : {};
-    return { ...meta, ...rest } as any;
+    const merged = { ...meta, ...rest } as Record<string, unknown>;
+
+    for (const [alias, dbKey] of Object.entries(FIELD_ALIAS)) {
+      if (dbKey in merged && !(alias in merged)) {
+        merged[alias] = merged[dbKey];
+      }
+    }
+
+    return merged as any;
   }
 
   async create(clientId: string, payload: Record<string, unknown>) {
@@ -63,7 +85,7 @@ export class ApisRepository {
     const dbPayload = this.splitPayload(payload);
     dbPayload.headers = {
       ...existingHeaders,
-      ...(dbPayload.headers as Record<string, unknown>),
+      ...dbPayload.headers,
     };
     const api = await this.prisma.painel_apis.update({
       where: { id },

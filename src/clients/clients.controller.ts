@@ -1,8 +1,20 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Put,
+} from '@nestjs/common';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
+import { LlmConfigDto } from './dto/llm-config.dto';
 import { ClientsService } from './clients.service';
+import { extractTenantContext } from '../common/utils/tenant-access.helper';
 
 @Controller()
 export class ClientsController {
@@ -14,27 +26,58 @@ export class ClientsController {
   }
 
   @Get('clients/:id')
-  get(@Param('id') id: string, @CurrentUser() user: { id: string }) {
+  get(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string },
+  ) {
     return this.clientsService.findOne(id, user.id);
   }
 
   @Post('clients')
-  create(@Body() dto: CreateClientDto) {
-    return this.clientsService.create(dto);
+  create(@Body() dto: CreateClientDto, @CurrentUser() user: any) {
+    const ctx = extractTenantContext(user);
+    return this.clientsService.create(dto, ctx.userId, ctx.companyId);
   }
 
-  @Post('clients/:id')
-  update(@Param('id') id: string, @Body() dto: UpdateClientDto, @CurrentUser() user: { id: string }) {
+  @Patch('clients/:id')
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateClientDto,
+    @CurrentUser() user: { id: string },
+  ) {
     return this.clientsService.update(id, dto, user.id);
   }
 
-  @Post('clients/:id/delete')
-  remove(@Param('id') id: string, @CurrentUser() user: { id: string }) {
+  @Delete('clients/:id')
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string },
+  ) {
     return this.clientsService.remove(id, user.id);
   }
 
   @Post('clients/:id/duplicate')
-  duplicate(@Param('id') id: string, @CurrentUser() user: { id: string }) {
+  duplicate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string },
+  ) {
     return this.clientsService.duplicate(id, user.id);
+  }
+
+  @Get('clients/:id/llm-config')
+  getLlmConfig(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.clientsService.getLlmConfig(id, user.id);
+  }
+
+  @Put('clients/:id/llm-config')
+  saveLlmConfig(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: LlmConfigDto,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.clientsService.saveLlmConfig(id, body, user.id);
   }
 }

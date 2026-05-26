@@ -1,10 +1,27 @@
-import { Controller, Post, Delete, Get, Body, Logger, Res } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Delete,
+  Get,
+  Body,
+  Logger,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from '../common/auth/public.decorator';
 import { CompatibilityService } from './compatibility.service';
 import { OrchestratorService } from './orchestrator.service';
-import { ChatRequestDto, WebhookMessageDto, DeleteSessionDto } from './dto/chat-request.dto';
+import { TestChatService } from './test-chat.service';
+import { ClearTestChatDto, TestChatDto } from './dto/test-chat.dto';
+import {
+  ChatRequestDto,
+  WebhookMessageDto,
+  DeleteSessionDto,
+} from './dto/chat-request.dto';
+import { DevOnlyGuard } from '../common/auth/dev-only.guard';
+import { ListModelsDto } from './dto/list-models.dto';
 
 @Controller('orchestrator')
 export class OrchestratorController {
@@ -13,7 +30,49 @@ export class OrchestratorController {
   constructor(
     private readonly orchestratorService: OrchestratorService,
     private readonly compatibilityService: CompatibilityService,
+    private readonly testChatService: TestChatService,
   ) {}
+
+  @Public()
+  @UseGuards(DevOnlyGuard)
+  @Post('test-chat')
+  async testChat(@Body() dto: TestChatDto) {
+    try {
+      this.logger.log({ provider: dto.provider, model: dto.model }, 'TestChat');
+      return await this.testChatService.send(dto);
+    } catch (error: any) {
+      this.logger.error({ error: error.message }, 'TestChat error');
+      return { error: error.message };
+    }
+  }
+
+  @Public()
+  @UseGuards(DevOnlyGuard)
+  @Delete('test-chat')
+  async clearTestChat(@Body() dto: ClearTestChatDto) {
+    try {
+      return await this.testChatService.clear(dto);
+    } catch (error: any) {
+      this.logger.error({ error: error.message }, 'Clear test chat error');
+      return { error: error.message };
+    }
+  }
+
+  @Public()
+  @UseGuards(DevOnlyGuard)
+  @Post('list-models')
+  async listModels(@Body() body: ListModelsDto) {
+    try {
+      const models = await this.testChatService.listModels(
+        body.provider,
+        body.apiKey,
+      );
+      return { models };
+    } catch (error: any) {
+      this.logger.error({ error: error.message }, 'ListModels error');
+      return { error: error.message, models: [] };
+    }
+  }
 
   @Public()
   @Get('health')
@@ -25,27 +84,43 @@ export class OrchestratorController {
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('chat')
   async chat(@Body() body: ChatRequestDto, @Res() res: Response) {
-    this.logger.warn({ route: '/chat' }, '[DEPRECATED] /orchestrator/chat chamado');
+    this.logger.warn(
+      { route: '/chat' },
+      '[DEPRECATED] /orchestrator/chat chamado',
+    );
 
     res.setHeader('X-Deprecated', 'true');
-    res.setHeader('X-Deprecated-Message', 'Use POST /api/public/messages no lugar');
+    res.setHeader(
+      'X-Deprecated-Message',
+      'Use POST /api/public/messages no lugar',
+    );
     res.setHeader('Sunset', 'Sat, 30 Aug 2026 23:59:59 GMT');
 
-    const { cellPhone, to, transcript, client_phone, company_phone, message: oldMessage } = body;
+    const {
+      cellPhone,
+      to,
+      transcript,
+      client_phone,
+      company_phone,
+      message: oldMessage,
+    } = body;
 
     const finalClientPhone = cellPhone || client_phone;
     const finalCompanyPhone = to || company_phone;
     const finalMessage = transcript || oldMessage;
 
     if (!finalClientPhone || !finalCompanyPhone || !finalMessage) {
-      return res.json({ error: 'cellPhone (ou client_phone), to (ou company_phone) e transcript (ou message) sao obrigatorios' });
+      return res.json({
+        error:
+          'cellPhone (ou client_phone), to (ou company_phone) e transcript (ou message) sao obrigatorios',
+      });
     }
 
     try {
       const result = await this.compatibilityService.processChat(
-        finalClientPhone!,
-        finalCompanyPhone!,
-        finalMessage!,
+        finalClientPhone,
+        finalCompanyPhone,
+        finalMessage,
       );
       return res.json(result);
     } catch (error: any) {
@@ -58,10 +133,16 @@ export class OrchestratorController {
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   @Post('webhook/painel_message')
   async webhookMessage(@Body() body: WebhookMessageDto, @Res() res: Response) {
-    this.logger.warn({ route: '/webhook/painel_message' }, '[DEPRECATED] /orchestrator/webhook/painel_message chamado');
+    this.logger.warn(
+      { route: '/webhook/painel_message' },
+      '[DEPRECATED] /orchestrator/webhook/painel_message chamado',
+    );
 
     res.setHeader('X-Deprecated', 'true');
-    res.setHeader('X-Deprecated-Message', 'Use POST /api/public/messages no lugar');
+    res.setHeader(
+      'X-Deprecated-Message',
+      'Use POST /api/public/messages no lugar',
+    );
     res.setHeader('Sunset', 'Sat, 30 Aug 2026 23:59:59 GMT');
 
     const { message, client_id, phone, request_origin } = body;

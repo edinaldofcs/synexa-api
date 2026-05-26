@@ -17,7 +17,8 @@ const DEFAULT_CHUNK_OVERLAP = 180;
 @Injectable()
 export class KnowledgeService {
   private readonly openai: OpenAI | null;
-  private readonly embeddingModel = process.env.RAG_EMBEDDING_MODEL || 'text-embedding-3-small';
+  private readonly embeddingModel =
+    process.env.RAG_EMBEDDING_MODEL || 'text-embedding-3-small';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -28,7 +29,11 @@ export class KnowledgeService {
       : null;
   }
 
-  async createBase(clientId: string, dto: CreateKnowledgeBaseDto, userId: string) {
+  async createBase(
+    clientId: string,
+    dto: CreateKnowledgeBaseDto,
+    userId: string,
+  ) {
     const companyId = await this.getAuthorizedCompanyId(clientId, userId);
 
     return this.prisma.knowledge_bases.create({
@@ -63,7 +68,11 @@ export class KnowledgeService {
     });
   }
 
-  async createDocument(baseId: string, dto: CreateKnowledgeDocumentDto, userId: string) {
+  async createDocument(
+    baseId: string,
+    dto: CreateKnowledgeDocumentDto,
+    userId: string,
+  ) {
     const base = await this.getAuthorizedBase(baseId, userId);
 
     const document = await this.prisma.knowledge_documents.create({
@@ -184,7 +193,8 @@ export class KnowledgeService {
         data: { status: 'ready' },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Knowledge ingestion failed';
+      const message =
+        error instanceof Error ? error.message : 'Knowledge ingestion failed';
       await this.prisma.knowledge_documents.update({
         where: { id: document.id },
         data: { status: 'failed', error_message: message },
@@ -193,7 +203,10 @@ export class KnowledgeService {
     }
   }
 
-  private async getAuthorizedCompanyId(clientId: string, userId: string): Promise<string> {
+  private async getAuthorizedCompanyId(
+    clientId: string,
+    userId: string,
+  ): Promise<string> {
     const user = await this.prisma.users.findUnique({
       where: { id: userId },
       select: { company_id: true },
@@ -227,7 +240,9 @@ export class KnowledgeService {
 
   private async createEmbedding(input: string) {
     if (!this.openai) {
-      throw new BadRequestException('OPENAI_API_KEY is required for RAG embeddings');
+      throw new BadRequestException(
+        'OPENAI_API_KEY is required for RAG embeddings',
+      );
     }
 
     const response = await this.openai.embeddings.create({
@@ -245,7 +260,10 @@ export class KnowledgeService {
     while (start < text.length) {
       const end = Math.min(start + DEFAULT_CHUNK_SIZE, text.length);
       chunks.push(text.slice(start, end).trim());
-      start = Math.max(end - DEFAULT_CHUNK_OVERLAP, end === text.length ? end : 0);
+      start = Math.max(
+        end - DEFAULT_CHUNK_OVERLAP,
+        end === text.length ? end : 0,
+      );
       if (end === text.length) break;
     }
 

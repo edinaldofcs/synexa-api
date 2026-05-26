@@ -23,15 +23,32 @@ export class CompatibilityService {
     }
   }
 
-  async processChat(clientPhone: string, companyPhone: string, messageText: string) {
+  async processChat(
+    clientPhone: string,
+    companyPhone: string,
+    messageText: string,
+  ) {
     this.logDeprecation('/orchestrator/chat');
-    this.logger.log({ clientPhone, companyPhone }, '[Compat] processChat wrapper');
+    this.logger.log(
+      { clientPhone, companyPhone },
+      '[Compat] processChat wrapper',
+    );
 
-    const result = await this.routeToNewPipeline(clientPhone, companyPhone, messageText, 'whatsapp');
+    const result = await this.routeToNewPipeline(
+      clientPhone,
+      companyPhone,
+      messageText,
+      'whatsapp',
+    );
     return result;
   }
 
-  async processWebhook(messageText: string, clientId: string, phone: string, requestOrigin?: string) {
+  async processWebhook(
+    messageText: string,
+    clientId: string,
+    phone: string,
+    requestOrigin?: string,
+  ) {
     this.logDeprecation('/orchestrator/webhook/painel_message');
     this.logger.log({ clientId, phone }, '[Compat] processWebhook wrapper');
 
@@ -44,7 +61,10 @@ export class CompatibilityService {
     }
 
     if (messageText.toLowerCase() === 'clear') {
-      return { success: true, message: 'Chat resetado com sucesso (legacy sessions removidas)' };
+      return {
+        success: true,
+        message: 'Chat resetado com sucesso (legacy sessions removidas)',
+      };
     }
 
     const companyPhone = painelClient.phone_number || phone;
@@ -54,11 +74,23 @@ export class CompatibilityService {
     });
 
     if (!connection) {
-      this.logger.warn({ clientId }, '[Compat] No channel_connection found for client, using legacy flow');
-      return { error: 'Canal WhatsApp nao configurado. Configure em Canais no painel enterprise.' };
+      this.logger.warn(
+        { clientId },
+        '[Compat] No channel_connection found for client, using legacy flow',
+      );
+      return {
+        error:
+          'Canal WhatsApp nao configurado. Configure em Canais no painel enterprise.',
+      };
     }
 
-    const result = await this.routeToNewPipeline(phone, companyPhone, messageText, 'whatsapp', requestOrigin);
+    const result = await this.routeToNewPipeline(
+      phone,
+      companyPhone,
+      messageText,
+      'whatsapp',
+      requestOrigin,
+    );
     const responseText = result.text || '';
     const now = new Date();
     const modelUsed = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
@@ -68,7 +100,11 @@ export class CompatibilityService {
       client_id: clientId,
       session_id: `compat-${phone}`,
       message_date: now.toISOString().split('T')[0] + 'T03:00:00.000Z',
-      message_time: now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      message_time: now.toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
       identifier: phone,
       intention: 'NI01',
       message: messageText,
@@ -85,7 +121,11 @@ export class CompatibilityService {
       client_id: clientId,
       session_id: `compat-${phone}`,
       message_date: now.toISOString().split('T')[0] + 'T03:00:00.000Z',
-      message_time: now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      message_time: now.toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
       identifier: phone,
       intention: 'NI01',
       message: responseText,
@@ -122,11 +162,21 @@ export class CompatibilityService {
     }
 
     if (!connection) {
-      this.logger.warn({ clientPhone, companyPhone }, '[Compat] No channel_connection, falling back to legacy OrchestrationService');
-      return { text: 'Canal nao configurado no novo pipeline. Configure o canal WhatsApp no painel.', action: 'speak' };
+      this.logger.warn(
+        { clientPhone, companyPhone },
+        '[Compat] No channel_connection, falling back to legacy OrchestrationService',
+      );
+      return {
+        text: 'Canal nao configurado no novo pipeline. Configure o canal WhatsApp no painel.',
+        action: 'speak',
+      };
     }
 
-    const endUserId = await this.resolveOrCreateEndUser(connection.company_id, connection.client_id, clientPhone);
+    const endUserId = await this.resolveOrCreateEndUser(
+      connection.company_id,
+      connection.client_id,
+      clientPhone,
+    );
 
     const conversation = await this.findOrCreateConversation(
       connection.company_id,
@@ -161,9 +211,17 @@ export class CompatibilityService {
     return { text: result.responseText, action: 'speak' };
   }
 
-  private async resolveOrCreateEndUser(companyId: string, clientId: string, phone: string): Promise<string> {
+  private async resolveOrCreateEndUser(
+    companyId: string,
+    clientId: string,
+    phone: string,
+  ): Promise<string> {
     const identity = await this.prisma.channel_identities.findFirst({
-      where: { client_id: clientId, channel_type: 'whatsapp', external_user_id: phone },
+      where: {
+        client_id: clientId,
+        channel_type: 'whatsapp',
+        external_user_id: phone,
+      },
     });
 
     if (identity) return identity.end_user_id;

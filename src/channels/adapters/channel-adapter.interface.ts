@@ -32,9 +32,19 @@ export interface OutboundMessage {
 
 export interface ChannelAdapter {
   readonly channelType: string;
-  normalize(payload: unknown, headers?: Record<string, string>): NormalizedMessage;
-  send(connection: ChannelConnectionConfig, message: OutboundMessage): Promise<DeliveryResult>;
-  validateSignature(connection: ChannelConnectionConfig, signature: string, payload: unknown): boolean;
+  normalize(
+    payload: unknown,
+    headers?: Record<string, string>,
+  ): NormalizedMessage;
+  send(
+    connection: ChannelConnectionConfig,
+    message: OutboundMessage,
+  ): Promise<DeliveryResult>;
+  validateSignature(
+    connection: ChannelConnectionConfig,
+    signature: string,
+    payload: unknown,
+  ): boolean;
 }
 
 export interface ChannelConnectionConfig {

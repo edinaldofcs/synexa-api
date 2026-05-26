@@ -1,4 +1,8 @@
-import type { AgentMessage, AgentInput, AgentOutput } from '../types/agent-message.types';
+import type {
+  AgentMessage,
+  AgentInput,
+  AgentOutput,
+} from '../types/agent-message.types';
 import type { AgentCapabilities } from '../types/capabilities.types';
 
 export interface ChatParams {
@@ -27,7 +31,10 @@ export interface AgentChatParams {
   };
   ragContext?: string;
   webSearchResults?: string;
-  onToolCall: (toolName: string, args: Record<string, unknown>) => Promise<unknown>;
+  onToolCall: (
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => Promise<unknown>;
 }
 
 export interface ToolDefinition {

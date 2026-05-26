@@ -34,10 +34,7 @@ export class ApisController {
   }
 
   @Get('apis/:apiId')
-  findOne(
-    @Param('apiId') apiId: string,
-    @CurrentUser() user: { id: string },
-  ) {
+  findOne(@Param('apiId') apiId: string, @CurrentUser() user: { id: string }) {
     return this.apisService.findOne(apiId, user.id);
   }
 
@@ -51,10 +48,7 @@ export class ApisController {
   }
 
   @Delete('apis/:apiId')
-  remove(
-    @Param('apiId') apiId: string,
-    @CurrentUser() user: { id: string },
-  ) {
+  remove(@Param('apiId') apiId: string, @CurrentUser() user: { id: string }) {
     return this.apisService.remove(apiId, user.id);
   }
 }

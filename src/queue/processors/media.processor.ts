@@ -1,12 +1,13 @@
 import { Processor, Process } from '@nestjs/bull';
 import type { Job } from 'bull';
-import { BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Logger, Inject } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI, { toFile } from 'openai';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { JOB_PROCESS_MEDIA, QUEUE_MEDIA } from '../queue.constants';
 import type { MediaJobData } from '../queue.service';
+import { StorageProvider } from '../../media/providers/storage-provider.interface';
 
 @Processor(QUEUE_MEDIA)
 export class MediaProcessor {
@@ -14,13 +15,22 @@ export class MediaProcessor {
   private readonly supabase: SupabaseClient | null;
   private readonly openai: OpenAI | null;
   private readonly gemini: GoogleGenerativeAI | null;
+  private readonly isDevelopment = process.env.ENVIRONMENT === 'development';
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('STORAGE_PROVIDER')
+    private readonly storageProvider: StorageProvider | null,
+  ) {
     const supabaseUrl = process.env.SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
-    this.supabase = supabaseUrl && serviceRoleKey
-      ? createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })
-      : null;
+    const serviceRoleKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+    this.supabase =
+      supabaseUrl && serviceRoleKey
+        ? createClient(supabaseUrl, serviceRoleKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          })
+        : null;
 
     this.openai = process.env.OPENAI_API_KEY
       ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -67,8 +77,14 @@ export class MediaProcessor {
         data: { status: 'ready' },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown media processing error';
-      this.logger.error({ media_asset_id: asset.id, error: message }, 'Media processing failed');
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unknown media processing error';
+      this.logger.error(
+        { media_asset_id: asset.id, error: message },
+        'Media processing failed',
+      );
       await this.prisma.media_assets.update({
         where: { id: asset.id },
         data: { status: 'failed', error_message: message },
@@ -85,13 +101,19 @@ export class MediaProcessor {
     source_url: string | null;
   }) {
     if (!this.openai) {
-      throw new BadRequestException('OPENAI_API_KEY is required for audio transcription');
+      throw new BadRequestException(
+        'OPENAI_API_KEY is required for audio transcription',
+      );
     }
 
     const buffer = await this.loadAssetBytes(asset);
-    const file = await toFile(buffer, `${asset.id}.${this.audioExtension(asset.mime_type)}`, {
-      type: asset.mime_type,
-    });
+    const file = await toFile(
+      buffer,
+      `${asset.id}.${this.audioExtension(asset.mime_type)}`,
+      {
+        type: asset.mime_type,
+      },
+    );
 
     const response = await this.openai.audio.transcriptions.create({
       file,
@@ -108,12 +130,17 @@ export class MediaProcessor {
     source_url: string | null;
   }) {
     if (!this.gemini) {
-      throw new BadRequestException('GEMINI_API_KEY is required for image OCR/vision');
+      throw new BadRequestException(
+        'GEMINI_API_KEY is required for image OCR/vision',
+      );
     }
 
     const buffer = await this.loadAssetBytes(asset);
     const model = this.gemini.getGenerativeModel({
-      model: process.env.MEDIA_VISION_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
+      model:
+        process.env.MEDIA_VISION_MODEL ||
+        process.env.GEMINI_MODEL ||
+        'gemini-2.5-flash-lite',
     });
 
     const result = await model.generateContent([
@@ -135,24 +162,41 @@ export class MediaProcessor {
     source_url: string | null;
   }): Promise<Buffer> {
     if (asset.storage_bucket && asset.storage_path) {
-      if (!this.supabase) throw new BadRequestException('Supabase storage is not configured');
+      if (this.isDevelopment && this.storageProvider) {
+        const { data, error } = await this.storageProvider.download(
+          asset.storage_bucket,
+          asset.storage_path,
+        );
+        if (error)
+          throw new BadRequestException(`Storage download failed: ${error}`);
+        return data;
+      }
+
+      if (!this.supabase)
+        throw new BadRequestException('Supabase storage is not configured');
 
       const { data, error } = await this.supabase.storage
         .from(asset.storage_bucket)
         .download(asset.storage_path);
 
-      if (error) throw new BadRequestException(`Storage download failed: ${error.message}`);
+      if (error)
+        throw new BadRequestException(
+          `Storage download failed: ${error.message}`,
+        );
 
       return Buffer.from(await data.arrayBuffer());
     }
 
     if (asset.source_url) {
       const response = await fetch(asset.source_url);
-      if (!response.ok) throw new BadRequestException(`Source URL returned ${response.status}`);
+      if (!response.ok)
+        throw new BadRequestException(`Source URL returned ${response.status}`);
       return Buffer.from(await response.arrayBuffer());
     }
 
-    throw new BadRequestException('Media asset has no storage path or source URL');
+    throw new BadRequestException(
+      'Media asset has no storage path or source URL',
+    );
   }
 
   private audioExtension(mimeType: string) {

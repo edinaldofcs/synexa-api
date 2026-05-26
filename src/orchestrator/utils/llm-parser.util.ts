@@ -2,7 +2,10 @@ import { Logger } from '@nestjs/common';
 
 const logger = new Logger('LLMParser');
 
-export function parseStructuredResponse(content: string | null): { text: string; action: string } {
+export function parseStructuredResponse(content: string | null): {
+  text: string;
+  action: string;
+} {
   if (!content) {
     return { text: '', action: 'speak' };
   }
@@ -10,9 +13,15 @@ export function parseStructuredResponse(content: string | null): { text: string;
   let cleaned = content.trim();
 
   if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    cleaned = cleaned
+      .replace(/^```json\s*/i, '')
+      .replace(/```$/, '')
+      .trim();
     if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```\s*/, '').replace(/```$/, '').trim();
+      cleaned = cleaned
+        .replace(/^```\s*/, '')
+        .replace(/```$/, '')
+        .trim();
     }
   }
 
@@ -24,7 +33,9 @@ export function parseStructuredResponse(content: string | null): { text: string;
       try {
         return JSON.parse(jsonMatch[0]);
       } catch (innerError) {
-        logger.error(`Falha ao parsear JSON extraído: ${(innerError as Error).message}`);
+        logger.error(
+          `Falha ao parsear JSON extraído: ${(innerError as Error).message}`,
+        );
       }
     }
 

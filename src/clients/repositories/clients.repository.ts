@@ -19,8 +19,7 @@ export class ClientsRepository {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id },
     });
-    if (!client)
-      throw new NotFoundException(`Client with ID ${id} not found`);
+    if (!client) throw new NotFoundException(`Client with ID ${id} not found`);
     return client;
   }
 

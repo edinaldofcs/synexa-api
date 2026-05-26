@@ -19,7 +19,10 @@ export class DispatcherProcessor {
   async process(job: Job<DispatchJobData>) {
     const data = job.data;
     this.logger.log(
-      { conversation_id: data.conversation_id, origin_channel: data.origin_channel },
+      {
+        conversation_id: data.conversation_id,
+        origin_channel: data.origin_channel,
+      },
       'Dispatching response',
     );
 

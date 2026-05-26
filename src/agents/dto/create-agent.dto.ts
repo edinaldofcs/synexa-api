@@ -1,4 +1,14 @@
-import { IsString, IsOptional, IsInt, IsBoolean, IsArray } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  IsBoolean,
+  IsArray,
+  IsIn,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { ActivationCondition, ActivationConditionGroup } from './activation-condition.dto';
 
 export class CreateAgentDto {
   @IsString()
@@ -25,7 +35,25 @@ export class CreateAgentDto {
   @IsOptional()
   is_active?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  is_initial?: boolean;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ActivationConditionGroup)
+  activation_conditions?: ActivationConditionGroup | null;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(['on_next_message', 'immediate'])
+  activation_mode?: string;
+
   @IsArray()
   @IsOptional()
   allowed_tool_names?: string[];
+
+  @IsString()
+  @IsOptional()
+  llm_provider?: string;
 }

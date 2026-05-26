@@ -26,24 +26,32 @@ describe('ApisService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.users.findUnique.mockResolvedValue({ company_id: companyId });
-    prisma.painel_clients.findUnique.mockResolvedValue({ company_id: companyId });
+    prisma.painel_clients.findUnique.mockResolvedValue({
+      company_id: companyId,
+    });
   });
 
   it('refreshes owning client metadata after api mutations', async () => {
     repository.create.mockResolvedValue({ id: 'api-1', client_id: 'client-1' });
-    repository.findOne
-      .mockResolvedValue({ id: 'api-1', client_id: 'client-1' });
+    repository.findOne.mockResolvedValue({
+      id: 'api-1',
+      client_id: 'client-1',
+    });
     repository.update.mockResolvedValue({ id: 'api-1', client_id: 'client-1' });
     repository.remove.mockResolvedValue({
       api: { client_id: 'client-1' },
       result: { success: true },
     });
 
-    await service.create('client-1', {
-      name: 'tool',
-      method: 'GET',
-      url: 'https://example.com',
-    }, userId);
+    await service.create(
+      'client-1',
+      {
+        name: 'tool',
+        method: 'GET',
+        url: 'https://example.com',
+      },
+      userId,
+    );
     await service.update('api-1', { name: 'tool-2' }, userId);
     await service.remove('api-1', userId);
 

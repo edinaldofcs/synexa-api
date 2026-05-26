@@ -1,7 +1,17 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ConversationsRepository } from './repositories/conversations.repository';
-import { FindOrCreateConversationDto, AddMessageDto, ConversationResult, HandoffRequestDto } from './dto/find-or-create.dto';
+import {
+  FindOrCreateConversationDto,
+  AddMessageDto,
+  ConversationResult,
+  HandoffRequestDto,
+} from './dto/find-or-create.dto';
 
 @Injectable()
 export class ConversationsService {
@@ -12,11 +22,16 @@ export class ConversationsService {
     private readonly conversationsRepo: ConversationsRepository,
   ) {}
 
-  async findOrCreate(dto: FindOrCreateConversationDto): Promise<ConversationResult> {
+  async findOrCreate(
+    dto: FindOrCreateConversationDto,
+  ): Promise<ConversationResult> {
     let conversation: any;
 
     if (dto.conversation_key) {
-      conversation = await this.conversationsRepo.findByExternalKey(dto.client_id, dto.conversation_key);
+      conversation = await this.conversationsRepo.findByExternalKey(
+        dto.client_id,
+        dto.conversation_key,
+      );
     } else {
       conversation = await this.conversationsRepo.findActiveByEndUser(
         dto.client_id,
@@ -26,7 +41,10 @@ export class ConversationsService {
     }
 
     if (conversation) {
-      this.logger.log({ conversation_id: conversation.id }, 'Reusing active conversation');
+      this.logger.log(
+        { conversation_id: conversation.id },
+        'Reusing active conversation',
+      );
       return this.mapResult(conversation);
     }
 
@@ -40,7 +58,10 @@ export class ConversationsService {
       metadata: dto.metadata,
     });
 
-    this.logger.log({ conversation_id: conversation.id }, 'Created new conversation');
+    this.logger.log(
+      { conversation_id: conversation.id },
+      'Created new conversation',
+    );
     return this.mapResult(conversation);
   }
 
@@ -56,13 +77,16 @@ export class ConversationsService {
         content: dto.content || null,
         idempotency_key: dto.idempotency_key || null,
         request_id: dto.request_id || null,
-        raw_payload: dto.raw_payload as any || null,
-        metadata: dto.metadata as any || null,
+        raw_payload: (dto.raw_payload as any) || null,
+        metadata: (dto.metadata as any) || null,
         status: 'received',
       },
     });
 
-    await this.conversationsRepo.updateLastMessage(dto.conversation_id, dto.direction);
+    await this.conversationsRepo.updateLastMessage(
+      dto.conversation_id,
+      dto.direction,
+    );
 
     await this.addMessageParts(message.id, dto);
     await this.prisma.message_events.create({
@@ -108,9 +132,10 @@ export class ConversationsService {
     });
   }
 
-  async listByClient(clientId?: string) {
+  async listByClient(clientId?: string, companyId?: string | null) {
     const where: any = {};
     if (clientId) where.client_id = clientId;
+    if (companyId) where.company_id = companyId;
 
     return this.prisma.conversations.findMany({
       where,
@@ -132,6 +157,17 @@ export class ConversationsService {
       where: { conversation_id: conversationId },
     });
     return (cs?.state as Record<string, unknown>) || {};
+  }
+
+  async mergeVariables(
+    conversationId: string,
+    variables: Record<string, unknown>,
+  ) {
+    const currentState = await this.getState(conversationId);
+    await this.updateState(conversationId, {
+      ...currentState,
+      ...variables,
+    });
   }
 
   async requestHandoff(conversationId: string, dto: HandoffRequestDto) {
@@ -165,7 +201,10 @@ export class ConversationsService {
       },
     });
 
-    this.logger.log({ conversation_id: conversationId, assigned_to: dto.assigned_to }, 'Handoff requested');
+    this.logger.log(
+      { conversation_id: conversationId, assigned_to: dto.assigned_to },
+      'Handoff requested',
+    );
     return updated;
   }
 
@@ -200,12 +239,13 @@ export class ConversationsService {
     return updated;
   }
 
-  async listHandoffQueue(clientId?: string) {
+  async listHandoffQueue(clientId?: string, companyId?: string | null) {
     const where: any = {
       mode: 'manual',
       status: 'active',
     };
     if (clientId) where.client_id = clientId;
+    if (companyId) where.company_id = companyId;
 
     return this.prisma.conversations.findMany({
       where,
@@ -247,7 +287,10 @@ export class ConversationsService {
 
       if (['image', 'audio', 'file'].includes(part.type)) {
         if (!dto.client_id) {
-          this.logger.warn({ messageId, partType: part.type }, 'Skipping media part without client_id');
+          this.logger.warn(
+            { messageId, partType: part.type },
+            'Skipping media part without client_id',
+          );
           continue;
         }
 

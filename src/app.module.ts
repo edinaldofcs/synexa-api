@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { validateEnv } from './common/config/env.validation';
 import { CommonModule } from './common/common.module';
 import { AuthModule } from './common/auth/auth.module';
 import { AdminModule } from './admin/admin.module';
@@ -19,6 +20,7 @@ import { QueueModule } from './queue/queue.module';
 import { MediaModule } from './media/media.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { OrchestratorModule } from './orchestrator/orchestrator.module';
+import { ImportsModule } from './imports/imports.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -26,7 +28,9 @@ import { AppService } from './app.service';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.prod', '.env.dev', '.env'],
+      envFilePath: ['.env', '.env.dev', '.env.prod'],
+      validate: (config) => validateEnv(config, { forbidUnknown: false }),
+      validationOptions: { allowUnknown: true, abortEarly: false },
     }),
     ThrottlerModule.forRoot([
       {
@@ -35,7 +39,7 @@ import { AppService } from './app.service';
       },
     ]),
     CommonModule,
-    AuthModule,
+    AuthModule.forRoot(),
     AdminModule,
     TablesModule,
     ChatModule,
@@ -52,6 +56,7 @@ import { AppService } from './app.service';
     MediaModule,
     KnowledgeModule,
     OrchestratorModule,
+    ImportsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

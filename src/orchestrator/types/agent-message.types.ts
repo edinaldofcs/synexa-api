@@ -1,4 +1,11 @@
-export type PartType = 'text' | 'image' | 'audio' | 'file' | 'tool_result' | 'rag_context' | 'citation';
+export type PartType =
+  | 'text'
+  | 'image'
+  | 'audio'
+  | 'file'
+  | 'tool_result'
+  | 'rag_context'
+  | 'citation';
 
 export interface MessagePart {
   type: PartType;

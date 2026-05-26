@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { CreateMessageDto } from './dto/create-message.dto';
@@ -79,7 +84,11 @@ export class ChatService {
     });
   }
 
-  async sendMessage(conversationId: string, dto: CreateMessageDto, userId: string) {
+  async sendMessage(
+    conversationId: string,
+    dto: CreateMessageDto,
+    userId: string,
+  ) {
     const companyId = await this.getUserCompanyId(userId);
     const conversation = await this.prisma.conversations.findUnique({
       where: { id: conversationId },

@@ -10,6 +10,7 @@ import {
 import { AgentsService } from './agents.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
+import { WebSearchConfigDto } from './dto/web-search-config.dto';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 
 @Controller()
@@ -38,12 +39,34 @@ export class AgentsController {
     return this.agentsService.findAllByClient(clientId, user.id);
   }
 
+  @Get('agents/web-search')
+  getAllWebSearchConfigs(@CurrentUser() user: { id: string }) {
+    return this.agentsService.getAllWebSearchConfigs(user.id);
+  }
+
   @Get('agents/:agentId')
   findOne(
     @Param('agentId') agentId: string,
     @CurrentUser() user: { id: string },
   ) {
     return this.agentsService.findOne(agentId, user.id);
+  }
+
+  @Get('agents/:agentId/web-search')
+  getWebSearchConfig(
+    @Param('agentId') agentId: string,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.agentsService.getWebSearchConfig(agentId, user.id);
+  }
+
+  @Patch('agents/:agentId/web-search')
+  updateWebSearchConfig(
+    @Param('agentId') agentId: string,
+    @Body() dto: WebSearchConfigDto,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.agentsService.updateWebSearchConfig(agentId, dto, user.id);
   }
 
   @Patch('agents/:agentId')

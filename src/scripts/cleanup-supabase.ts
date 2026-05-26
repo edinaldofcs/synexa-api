@@ -1,6 +1,8 @@
 import { Client } from 'pg';
 
-const directUrl = process.env.DIRECT_URL || 'postgresql://postgres.tpkuwyfzqsdbfiwmtxcn:GWnebnePNHW1541w61bn631wb@aws-1-us-west-2.pooler.supabase.com:5432/postgres';
+const directUrl =
+  process.env.DIRECT_URL ||
+  `postgresql://postgres.tpkuwyfzqsdbfiwmtxcn:${process.env.DB_PASS_SUPABASE || ''}@aws-1-us-west-2.pooler.supabase.com:5432/postgres`;
 
 async function cleanup() {
   const client = new Client({ connectionString: directUrl });
@@ -34,20 +36,33 @@ async function cleanup() {
 
   console.log('\nEnsuring enterprise tables exist...');
   const requiredTables = [
-    'companies', 'users',
-    'channel_connections', 'webhook_endpoints', 'webhook_deliveries',
-    'end_users', 'channel_identities',
-    'conversations', 'messages', 'message_parts', 'conversation_state',
+    'companies',
+    'users',
+    'channel_connections',
+    'webhook_endpoints',
+    'webhook_deliveries',
+    'end_users',
+    'channel_identities',
+    'conversations',
+    'messages',
+    'message_parts',
+    'conversation_state',
     'media_assets',
-    'inbound_events', 'outbox_events',
-    'message_events', 'agent_runs', 'tool_calls',
-    'knowledge_bases', 'knowledge_documents', 'knowledge_chunks', 'knowledge_embeddings',
+    'inbound_events',
+    'outbox_events',
+    'message_events',
+    'agent_runs',
+    'tool_calls',
+    'knowledge_bases',
+    'knowledge_documents',
+    'knowledge_chunks',
+    'knowledge_embeddings',
   ];
 
   for (const table of requiredTables) {
     const { rows } = await client.query(
       `SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = $1)`,
-      [table]
+      [table],
     );
     console.log(`  ${table}: ${rows[0].exists ? 'OK' : 'MISSING'}`);
   }

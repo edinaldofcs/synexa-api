@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateMediaAssetDto } from './dto/create-media-asset.dto';
@@ -8,7 +19,10 @@ import { MediaService } from './media.service';
 
 @Controller()
 export class MediaController {
-  constructor(private readonly mediaService: MediaService) {}
+  constructor(
+    private readonly mediaService: MediaService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Post('clients/:clientId/media/assets')
   createAsset(
@@ -41,7 +55,14 @@ export class MediaController {
   }
 
   @Post('clients/:clientId/media/upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize: 50 * 1024 * 1024,
+        files: 1,
+      },
+    }),
+  )
   upload(
     @Param('clientId') clientId: string,
     @UploadedFile() file: any,
@@ -58,7 +79,11 @@ export class MediaController {
     @CurrentUser() user: { id: string },
   ) {
     const expiresInSeconds = expiresIn ? Number(expiresIn) : undefined;
-    return this.mediaService.createSignedUrl(assetId, user.id, expiresInSeconds);
+    return this.mediaService.createSignedUrl(
+      assetId,
+      user.id,
+      expiresInSeconds,
+    );
   }
 
   @Patch('media/assets/:assetId')

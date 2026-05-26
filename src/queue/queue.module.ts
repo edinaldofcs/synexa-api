@@ -1,4 +1,11 @@
-import { Module, Global, OnModuleInit, Logger, forwardRef } from '@nestjs/common';
+import {
+  Module,
+  Global,
+  OnModuleInit,
+  Logger,
+  forwardRef,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { BullModule, InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { CommonModule } from '../common/common.module';
@@ -6,6 +13,7 @@ import { ChannelsModule } from '../channels/channels.module';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
+import { MediaModule } from '../media/media.module';
 import { QueueService } from './queue.service';
 import { QueueController } from './queue.controller';
 import { IngestionProcessor } from './processors/ingestion.processor';
@@ -13,25 +21,37 @@ import { DispatcherProcessor } from './processors/dispatcher.processor';
 import { AgentProcessor } from './processors/agent.processor';
 import { MediaProcessor } from './processors/media.processor';
 import { DeadLetterProcessor } from './processors/dead-letter.processor';
-import { QUEUE_INGESTION, QUEUE_DISPATCHER, QUEUE_AGENT, QUEUE_MEDIA, QUEUE_KNOWLEDGE, QUEUE_DEAD_LETTER, JOB_DEAD_LETTER_STORE } from './queue.constants';
+import {
+  QUEUE_INGESTION,
+  QUEUE_DISPATCHER,
+  QUEUE_AGENT,
+  QUEUE_MEDIA,
+  QUEUE_KNOWLEDGE,
+  QUEUE_DEAD_LETTER,
+  JOB_DEAD_LETTER_STORE,
+} from './queue.constants';
+import { sanitize } from '../common/utils/sanitize-log.util';
 
 @Global()
 @Module({
   imports: [
     BullModule.forRootAsync({
-      useFactory: () => ({
-        redis: {
-          host: process.env.REDIS_HOST || 'localhost',
-          port: Number(process.env.REDIS_PORT) || 6379,
-          password: process.env.REDIS_PASSWORD || undefined,
-        },
-        defaultJobOptions: {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 2000 },
-          removeOnComplete: 100,
-          removeOnFail: 50,
-        },
-      }),
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const redisUrl = configService.get<string>(
+          'REDIS_URL',
+          'redis://localhost:6379',
+        );
+        return {
+          redis: redisUrl,
+          defaultJobOptions: {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: 100,
+            removeOnFail: 50,
+          },
+        };
+      },
     }),
     BullModule.registerQueue(
       { name: QUEUE_INGESTION },
@@ -42,6 +62,7 @@ import { QUEUE_INGESTION, QUEUE_DISPATCHER, QUEUE_AGENT, QUEUE_MEDIA, QUEUE_KNOW
       { name: QUEUE_DEAD_LETTER },
     ),
     CommonModule,
+    MediaModule,
     forwardRef(() => ChannelsModule),
     ConversationsModule,
     WebhooksModule,
@@ -95,9 +116,9 @@ export class QueueModule implements OnModuleInit {
               original_queue: name,
               original_job_id: job.id,
               job_name: job.name,
-              data: job.data,
+              data: sanitize(job.data),
               failed_reason: err.message,
-              failed_stacktrace: err.stack?.split('\n') || [],
+              failed_stacktrace: (err.stack?.split('\n') || []).slice(0, 5),
               attempts: attemptsMade,
               failed_at: new Date().toISOString(),
             });

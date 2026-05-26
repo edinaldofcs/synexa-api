@@ -3,8 +3,17 @@ import { Logger } from '@nestjs/common';
 import { parseStructuredResponse } from '../utils/llm-parser.util';
 import { logBenchmark } from '../utils/benchmark-logger.util';
 import { llmConfig } from './llm-config';
-import type { AgentOutput, AgentMessage, MessagePart } from '../types/agent-message.types';
-import type { LLMProvider, ChatParams, AgentChatParams, ProviderCapabilities } from './llm-provider.interface';
+import type {
+  AgentOutput,
+  AgentMessage,
+  MessagePart,
+} from '../types/agent-message.types';
+import type {
+  LLMProvider,
+  ChatParams,
+  AgentChatParams,
+  ProviderCapabilities,
+} from './llm-provider.interface';
 
 function formatHistoryForGemini(history: { role: string; content: string }[]) {
   const formatted: { role: string; parts: { text: string }[] }[] = [];
@@ -17,7 +26,11 @@ function formatHistoryForGemini(history: { role: string; content: string }[]) {
       let content = msg.content;
 
       if (msg.role === 'assistant') {
-        try { JSON.parse(content); } catch { content = JSON.stringify({ text: content, action: 'speak' }); }
+        try {
+          JSON.parse(content);
+        } catch {
+          content = JSON.stringify({ text: content, action: 'speak' });
+        }
       }
 
       formatted.push({
@@ -45,30 +58,42 @@ function agentPartToGeminiPart(part: MessagePart): any {
     case 'text':
       return { text: part.text || '' };
     case 'image':
-      if (part.media_url) return { inlineData: { mimeType: 'image/*', data: part.media_url } };
+      if (part.media_url)
+        return { inlineData: { mimeType: 'image/*', data: part.media_url } };
       return { text: `[Image: ${part.media_asset_id || 'unknown'}]` };
     case 'audio':
       return { text: `[Audio: ${part.media_asset_id || 'unknown'}]` };
     case 'tool_result':
-      return { text: `[Tool ${part.tool_name || 'unknown'} result]: ${JSON.stringify(part.tool_result)}` };
+      return {
+        text: `[Tool ${part.tool_name || 'unknown'} result]: ${JSON.stringify(part.tool_result)}`,
+      };
     case 'rag_context':
       return { text: `[RAG context]: ${part.text || ''}` };
     case 'citation':
-      return { text: `[Citation from ${part.citation?.document || 'unknown'}]: ${part.citation?.text || ''}` };
+      return {
+        text: `[Citation from ${part.citation?.document || 'unknown'}]: ${part.citation?.text || ''}`,
+      };
     default:
       return { text: part.text || '' };
   }
 }
 
-function agentHistoryToGemini(history: AgentMessage[]): { role: string; parts: any[] }[] {
-  return history.map(msg => ({
-    role: msg.role === 'assistant' ? 'model' : msg.role === 'system' ? 'user' : msg.role,
+function agentHistoryToGemini(
+  history: AgentMessage[],
+): { role: string; parts: any[] }[] {
+  return history.map((msg) => ({
+    role:
+      msg.role === 'assistant'
+        ? 'model'
+        : msg.role === 'system'
+          ? 'user'
+          : msg.role,
     parts: msg.parts.map(agentPartToGeminiPart),
   }));
 }
 
 const SYSTEM_SUFFIX =
-  "\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números.";
+  '\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números.';
 
 export class GeminiProvider implements LLMProvider {
   private readonly logger = new Logger(GeminiProvider.name);
@@ -87,7 +112,14 @@ export class GeminiProvider implements LLMProvider {
     };
   }
 
-  async chat({ systemPrompt, userMessage, history, publicTools, allToolsList, executeExternalApiCallback }: ChatParams) {
+  async chat({
+    systemPrompt,
+    userMessage,
+    history,
+    publicTools,
+    allToolsList,
+    executeExternalApiCallback,
+  }: ChatParams) {
     const startTime = new Date();
     const calledTools: string[] = [];
     let hadToolCalls = false;
@@ -98,7 +130,10 @@ export class GeminiProvider implements LLMProvider {
     let totalCost = 0;
 
     try {
-      const toolsDefinition = publicTools && publicTools.length > 0 ? buildToolDefinition(publicTools) : undefined;
+      const toolsDefinition =
+        publicTools && publicTools.length > 0
+          ? buildToolDefinition(publicTools)
+          : undefined;
 
       const structuredSystemPrompt = systemPrompt + SYSTEM_SUFFIX;
 
@@ -143,7 +178,11 @@ export class GeminiProvider implements LLMProvider {
         hadToolCalls = true;
         calledTools.push(functionName);
 
-        const apiResult = await executeExternalApiCallback({ functionName, args: args as Record<string, unknown>, toolsList: allToolsList });
+        const apiResult = await executeExternalApiCallback({
+          functionName,
+          args: args as Record<string, unknown>,
+          toolsList: allToolsList,
+        });
 
         result = await chatSession.sendMessage([
           { functionResponse: { name: functionName, response: apiResult } },
@@ -160,7 +199,7 @@ export class GeminiProvider implements LLMProvider {
         functionCalls = response.functionCalls();
       }
 
-      let finalText = response.text();
+      const finalText = response.text();
       this.logger.log('Resposta final da Gemini obtida.');
 
       const endTime = new Date();
@@ -217,9 +256,13 @@ export class GeminiProvider implements LLMProvider {
 
     try {
       const systemPrompt = params.systemPrompt;
-      const toolsDefinition = params.tools.length > 0 ? buildToolDefinition(params.tools) : undefined;
+      const toolsDefinition =
+        params.tools.length > 0 ? buildToolDefinition(params.tools) : undefined;
 
-      const modelConfig: any = { model: modelName, systemInstruction: systemPrompt };
+      const modelConfig: any = {
+        model: modelName,
+        systemInstruction: systemPrompt,
+      };
       if (toolsDefinition) modelConfig.tools = [toolsDefinition];
 
       const model = this.genAI.getGenerativeModel(modelConfig);
@@ -259,16 +302,22 @@ export class GeminiProvider implements LLMProvider {
           this.logger.log({ toolName, args }, 'Gemini tool call');
           calledTools.push(toolName);
 
-          const toolResult = await params.onToolCall(toolName, args as Record<string, unknown>);
+          const toolResult = await params.onToolCall(
+            toolName,
+            args as Record<string, unknown>,
+          );
 
           result = await chatSession.sendMessage([
-            { functionResponse: { name: toolName, response: toolResult as any } },
+            {
+              functionResponse: { name: toolName, response: toolResult as any },
+            },
           ]);
 
           response = await result.response;
           if (response.usageMetadata) {
             totalInputTokens += response.usageMetadata.promptTokenCount || 0;
-            totalOutputTokens += response.usageMetadata.candidatesTokenCount || 0;
+            totalOutputTokens +=
+              response.usageMetadata.candidatesTokenCount || 0;
           }
           functionCalls = response.functionCalls();
         }
@@ -276,9 +325,14 @@ export class GeminiProvider implements LLMProvider {
 
       const finalText = response.text();
 
-      this.logger.log({ model: modelName, latency: Date.now() - startTime }, 'chatWithParts complete');
+      this.logger.log(
+        { model: modelName, latency: Date.now() - startTime },
+        'chatWithParts complete',
+      );
 
-      const outputParts: MessagePart[] = [{ type: 'text', text: finalText, order_index: 0 }];
+      const outputParts: MessagePart[] = [
+        { type: 'text', text: finalText, order_index: 0 },
+      ];
 
       return {
         text: finalText,

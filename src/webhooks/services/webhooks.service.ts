@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WebhookCallbackPayload } from '../dto/webhook-payload.dto';
+import { validateWebhookUrl } from '../../common/utils/ssrf-guard';
 
 interface DeliveryResult {
   success: boolean;
@@ -13,10 +15,20 @@ interface DeliveryResult {
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
+  private readonly allowLocalInDev: boolean;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {
+    this.allowLocalInDev =
+      configService.get<string>('ENVIRONMENT', 'development') === 'development';
+  }
 
-  async deliver(clientId: string, payload: WebhookCallbackPayload): Promise<void> {
+  async deliver(
+    clientId: string,
+    payload: WebhookCallbackPayload,
+  ): Promise<void> {
     const endpoints = await this.prisma.webhook_endpoints.findMany({
       where: {
         client_id: clientId,
@@ -26,12 +38,21 @@ export class WebhooksService {
     });
 
     if (endpoints.length === 0) {
-      this.logger.log({ client_id: clientId, event: payload.event }, 'No webhook endpoints configured for event');
+      this.logger.log(
+        { client_id: clientId, event: payload.event },
+        'No webhook endpoints configured for event',
+      );
       return;
     }
 
     for (const endpoint of endpoints) {
-      await this.deliverToEndpoint(endpoint.id, endpoint.url, endpoint.secret_hash, endpoint.retry_policy as any, payload);
+      await this.deliverToEndpoint(
+        endpoint.id,
+        endpoint.url,
+        endpoint.secret_hash,
+        endpoint.retry_policy as any,
+        payload,
+      );
     }
   }
 
@@ -42,7 +63,7 @@ export class WebhooksService {
     retryPolicy: Record<string, unknown> | null,
     payload: WebhookCallbackPayload,
   ): Promise<void> {
-    const maxAttempts = ((retryPolicy?.max_retries as number) || 3);
+    const maxAttempts = (retryPolicy?.max_retries as number) || 3;
 
     const delivery = await this.prisma.webhook_deliveries.create({
       data: {
@@ -90,7 +111,7 @@ export class WebhooksService {
   }
 
   private async scheduleRetry(
-    originalId: string,
+    originalEndpointId: string,
     url: string,
     payload: WebhookCallbackPayload,
     attempt: number,
@@ -101,7 +122,7 @@ export class WebhooksService {
 
     const retry = await this.prisma.webhook_deliveries.create({
       data: {
-        webhook_endpoint_id: originalId,
+        webhook_endpoint_id: originalEndpointId,
         event: payload.event,
         conversation_id: payload.conversation_id,
         inbound_message_id: payload.inbound_message_id,
@@ -118,6 +139,15 @@ export class WebhooksService {
       { delivery_id: retry.id, attempt, next_retry_at: nextRetryAt },
       'Webhook delivery scheduled for retry',
     );
+
+    setTimeout(() => {
+      this.processRetry(retry.id).catch((err) => {
+        this.logger.error(
+          { delivery_id: retry.id, error: err },
+          'Retry processing failed',
+        );
+      });
+    }, delayMs);
   }
 
   async processRetry(deliveryId: string): Promise<void> {
@@ -151,7 +181,13 @@ export class WebhooksService {
 
     const nextAttempt = delivery.attempt + 1;
     if (nextAttempt <= delivery.max_attempts) {
-      await this.scheduleRetry(delivery.webhook_endpoint_id, delivery.webhook_endpoints.url, delivery.payload as unknown as WebhookCallbackPayload, nextAttempt, delivery.max_attempts);
+      await this.scheduleRetry(
+        delivery.webhook_endpoint_id,
+        delivery.webhook_endpoints.url,
+        delivery.payload as unknown as WebhookCallbackPayload,
+        nextAttempt,
+        delivery.max_attempts,
+      );
     }
 
     const status = nextAttempt > delivery.max_attempts ? 'dead' : 'failed';
@@ -166,12 +202,20 @@ export class WebhooksService {
     });
   }
 
-  private async trySend(url: string, payload: WebhookCallbackPayload, secret?: string | null): Promise<DeliveryResult> {
+  private async trySend(
+    url: string,
+    payload: WebhookCallbackPayload,
+    secret?: string | null,
+  ): Promise<DeliveryResult> {
     try {
+      await validateWebhookUrl(url, this.allowLocalInDev);
+
       const body = JSON.stringify(payload);
       const timestamp = Math.floor(Date.now() / 1000).toString();
       const signature = secret
-        ? createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')
+        ? createHmac('sha256', secret)
+            .update(`${timestamp}.${body}`)
+            .digest('hex')
         : undefined;
 
       const response = await fetch(url, {
@@ -193,7 +237,9 @@ export class WebhooksService {
         success: response.ok,
         httpStatus: response.status,
         responseBody,
-        error: response.ok ? undefined : `HTTP ${response.status}: ${responseBody.slice(0, 500)}`,
+        error: response.ok
+          ? undefined
+          : `HTTP ${response.status}: ${responseBody.slice(0, 500)}`,
       };
     } catch (error) {
       return {

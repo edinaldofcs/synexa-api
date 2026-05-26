@@ -3,7 +3,9 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { AgentsRepository } from '../agents/repositories/agents.repository';
@@ -11,10 +13,14 @@ import { ApisRepository } from '../apis/repositories/apis.repository';
 import { IntentionsRepository } from '../intentions/repositories/intentions.repository';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
+import { LlmConfigDto } from './dto/llm-config.dto';
 import { ClientsRepository } from './repositories/clients.repository';
+import { encrypt, decrypt } from '../common/utils/crypto.util';
 
 @Injectable()
 export class ClientsService {
+  private readonly logger = new Logger(ClientsService.name);
+
   constructor(
     private readonly clientsRepository: ClientsRepository,
     private readonly agentsRepository: AgentsRepository,
@@ -22,6 +28,7 @@ export class ClientsService {
     private readonly apisRepository: ApisRepository,
     private readonly metadataService: ClientMetadataService,
     private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
   ) {}
 
   private async getUserCompanyId(userId: string): Promise<string> {
@@ -45,25 +52,35 @@ export class ClientsService {
     }
   }
 
-  async create(createClientDto: CreateClientDto) {
+  async create(
+    createClientDto: CreateClientDto,
+    userId: string,
+    userCompanyId: string | null,
+  ) {
     const { user_id, ...rest } = createClientDto;
 
-    if (!user_id) throw new BadRequestException('User ID is required');
+    const companyId = userCompanyId;
 
-    const user = await this.prisma.users.findUnique({
-      where: { id: user_id },
-      select: { company_id: true },
-    });
+    if (!companyId) {
+      if (!user_id) throw new BadRequestException('User ID is required');
 
-    if (!user?.company_id) {
-      throw new NotFoundException(
-        `User with ID ${user_id} not found or has no company associated.`,
-      );
+      const user = await this.prisma.users.findUnique({
+        where: { id: user_id },
+        select: { company_id: true },
+      });
+
+      if (!user?.company_id) {
+        throw new NotFoundException(
+          `User with ID ${user_id} not found or has no company associated.`,
+        );
+      }
     }
+
+    const finalCompanyId = companyId || (await this.getUserCompanyId(userId));
 
     const client = await this.clientsRepository.create({
       ...rest,
-      company_id: user.company_id,
+      company_id: finalCompanyId,
     });
 
     if (client) void this.metadataService.refresh(client.id);
@@ -92,7 +109,10 @@ export class ClientsService {
   async update(id: string, updateClientDto: UpdateClientDto, userId: string) {
     const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(id, companyId);
-    const client = await this.clientsRepository.update(id, updateClientDto as Record<string, unknown>);
+    const client = await this.clientsRepository.update(
+      id,
+      updateClientDto as Record<string, unknown>,
+    );
     if (client) void this.metadataService.refresh(client.id);
     return client;
   }
@@ -103,7 +123,10 @@ export class ClientsService {
     return this.clientsRepository.remove(id);
   }
 
-  async duplicate(clientId: string, userId: string): Promise<Record<string, unknown>> {
+  async duplicate(
+    clientId: string,
+    userId: string,
+  ): Promise<Record<string, unknown>> {
     const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
 
@@ -183,5 +206,106 @@ export class ClientsService {
 
     void this.metadataService.refresh(newClient.id);
     return newClient;
+  }
+
+  async getLlmConfig(clientId: string, userId: string) {
+    const companyId = await this.getUserCompanyId(userId);
+    await this.validateClientAccess(clientId, companyId);
+    const client = await this.clientsRepository.findOne(clientId);
+    const providers = (client.metadata as any)?.llm_providers || {};
+
+    return { providers: this.decryptLlmProviders(providers) };
+  }
+
+  private decryptLlmProviders(
+    providers: Record<string, any>,
+  ): Record<string, any> {
+    const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+    if (!encryptionKey) return providers;
+
+    try {
+      const decrypted: Record<string, any> = {};
+      for (const [key, config] of Object.entries(providers)) {
+        decrypted[key] = { ...config };
+        if (
+          config?.apiKey &&
+          typeof config.apiKey === 'string' &&
+          config.apiKey.startsWith('enc:')
+        ) {
+          try {
+            decrypted[key].apiKey = decrypt(
+              config.apiKey.slice(4),
+              encryptionKey,
+            );
+          } catch {
+            decrypted[key].apiKey = config.apiKey;
+          }
+        }
+      }
+      return decrypted;
+    } catch {
+      return providers;
+    }
+  }
+
+  private encryptLlmProviders(
+    providers: Record<string, any>,
+  ): Record<string, any> {
+    const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+    if (!encryptionKey) return providers;
+
+    try {
+      const encrypted: Record<string, any> = {};
+      for (const [key, config] of Object.entries(providers)) {
+        encrypted[key] = { ...config };
+        if (
+          config?.apiKey &&
+          typeof config.apiKey === 'string' &&
+          !config.apiKey.startsWith('enc:')
+        ) {
+          encrypted[key].apiKey =
+            `enc:${encrypt(config.apiKey, encryptionKey)}`;
+        }
+      }
+      return encrypted;
+    } catch {
+      return providers;
+    }
+  }
+
+  private normalizeLlmProviders(providers: unknown) {
+    if (!providers || typeof providers !== 'object') return {};
+
+    return Object.fromEntries(
+      Object.entries(providers as Record<string, any>).map(
+        ([providerId, config]) => [
+          providerId,
+          {
+            apiKey: typeof config?.apiKey === 'string' ? config.apiKey : '',
+            enabledModels: Array.isArray(config?.enabledModels)
+              ? config.enabledModels.filter(
+                  (model: unknown): model is string =>
+                    typeof model === 'string',
+                )
+              : [],
+          },
+        ],
+      ),
+    );
+  }
+
+  async saveLlmConfig(clientId: string, body: LlmConfigDto, userId: string) {
+    const companyId = await this.getUserCompanyId(userId);
+    await this.validateClientAccess(clientId, companyId);
+    const client = await this.clientsRepository.findOne(clientId);
+    const metadata =
+      typeof client.metadata === 'object' && client.metadata !== null
+        ? { ...(client.metadata as Record<string, unknown>) }
+        : {};
+    metadata.llm_providers = this.encryptLlmProviders(
+      this.normalizeLlmProviders(body?.providers),
+    );
+    metadata.llm_providers_updated_at = new Date().toISOString();
+    return this.clientsRepository.update(clientId, { metadata });
   }
 }

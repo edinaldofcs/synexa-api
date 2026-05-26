@@ -1,4 +1,5 @@
 import { Injectable, OnModuleDestroy, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 @Injectable()
@@ -7,12 +8,17 @@ export class RedisService implements OnModuleDestroy {
   private client: Redis;
   private readonly sessionTtl = 60 * 60 * 24;
 
-  constructor() {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+  constructor(private readonly configService: ConfigService) {
+    const redisUrl = this.configService.get<string>(
+      'REDIS_URL',
+      'redis://localhost:6379',
+    );
     this.client = new Redis(redisUrl, { maxRetriesPerRequest: null });
 
     this.client.on('connect', () => this.logger.log('Conectado ao Redis'));
-    this.client.on('error', (err) => this.logger.error(`Redis: ${err.message}`));
+    this.client.on('error', (err) =>
+      this.logger.error(`Redis: ${err.message}`),
+    );
   }
 
   async set(key: string, value: unknown): Promise<void> {
@@ -28,7 +34,11 @@ export class RedisService implements OnModuleDestroy {
     await this.client.del(key);
   }
 
-  async checkRateLimit(key: string, maxRequests: number, windowSeconds: number): Promise<{ allowed: boolean; remaining: number; resetAt: Date }> {
+  async checkRateLimit(
+    key: string,
+    maxRequests: number,
+    windowSeconds: number,
+  ): Promise<{ allowed: boolean; remaining: number; resetAt: Date }> {
     const now = Date.now();
     const windowKey = `ratelimit:${key}:${Math.floor(now / (windowSeconds * 1000))}`;
 
@@ -46,7 +56,13 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async acquireLock(key: string, ttlSeconds: number = 30): Promise<boolean> {
-    const result = await this.client.set(key, 'locked', 'PX', ttlSeconds * 1000, 'NX');
+    const result = await this.client.set(
+      key,
+      'locked',
+      'PX',
+      ttlSeconds * 1000,
+      'NX',
+    );
     return result === 'OK';
   }
 

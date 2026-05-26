@@ -30,7 +30,7 @@ async function main() {
 
   // 2. Criar Usuário no Supabase Auth
   const email = 'admin@synexa.com.br';
-  const password = 'SynexaAdmin2026!';
+  const password = process.env.SEED_ADMIN_PASSWORD || 'SynexaAdmin2026!';
   
   console.log(`Criando usuário no Supabase Auth: ${email}...`);
   const { data: authUser, error: authError } = await supabase.auth.admin.createUser({

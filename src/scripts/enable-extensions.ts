@@ -1,6 +1,8 @@
 import { Client } from 'pg';
 
-const directUrl = process.env.DIRECT_URL || 'postgresql://postgres.tpkuwyfzqsdbfiwmtxcn:GWnebnePNHW1541w61bn631wb@aws-1-us-west-2.pooler.supabase.com:5432/postgres';
+const directUrl =
+  process.env.DIRECT_URL ||
+  `postgresql://postgres.tpkuwyfzqsdbfiwmtxcn:${process.env.DB_PASS_SUPABASE || ''}@aws-1-us-west-2.pooler.supabase.com:5432/postgres`;
 
 async function main() {
   const client = new Client({ connectionString: directUrl });

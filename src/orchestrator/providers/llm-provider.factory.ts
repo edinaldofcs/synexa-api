@@ -11,7 +11,8 @@ export function getLLMProvider(): LLMProvider {
   const providerName = llmConfig.provider.toLowerCase();
   logger.log(`Inicializando LLM Provider: ${providerName}`);
 
-  if (providerName === 'groq' || providerName === 'openai') return new GroqProvider();
+  if (providerName === 'groq' || providerName === 'openai')
+    return new GroqProvider();
   if (providerName === 'openrouter') return new OpenRouterProvider();
 
   return new GeminiProvider();

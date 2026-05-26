@@ -1,4 +1,18 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: synexa-redis
+    volumes:
+      - synexa_redis_data:/data
+    restart: always
+    networks:
+      - synexa-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   api:
     image: edinaldofcs48/synexa-api:latest
     container_name: synexa-api
@@ -6,8 +20,12 @@ services:
       - .env.prod
     environment:
       - NODE_ENV=production
+      - ENVIRONMENT=production
+      - REDIS_URL=redis://redis:6379
     restart: always
-    # Sem ports expostos — acesso via Cloudflare Tunnel ou Nginx reverso
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - synexa-network
     healthcheck:
@@ -20,3 +38,6 @@ services:
 networks:
   synexa-network:
     driver: bridge
+
+volumes:
+  synexa_redis_data:

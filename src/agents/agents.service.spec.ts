@@ -25,7 +25,9 @@ describe('AgentsService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.users.findUnique.mockResolvedValue({ company_id: companyId });
-    prisma.painel_clients.findUnique.mockResolvedValue({ company_id: companyId });
+    prisma.painel_clients.findUnique.mockResolvedValue({
+      company_id: companyId,
+    });
   });
 
   it('refreshes client metadata after create/update/remove', async () => {
@@ -33,7 +35,10 @@ describe('AgentsService', () => {
       id: 'agent-1',
       client_id: 'client-1',
     });
-    repository.findOne.mockResolvedValue({ id: 'agent-1', client_id: 'client-1' });
+    repository.findOne.mockResolvedValue({
+      id: 'agent-1',
+      client_id: 'client-1',
+    });
     repository.update.mockResolvedValue({
       id: 'agent-1',
       client_id: 'client-1',

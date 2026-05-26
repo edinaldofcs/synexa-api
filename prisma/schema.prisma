@@ -6,7 +6,7 @@ generator client {
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  // directUrl = env("DIRECT_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model companies {
@@ -37,13 +37,15 @@ model companies {
 }
 
 model users {
-  id         String    @id @db.Uuid
-  company_id String    @db.Uuid
-  name       String?
-  role       String    @default("operator")
-  created_at DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at DateTime? @default(now()) @db.Timestamptz(6)
-  companies  companies @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id            String    @id @db.Uuid
+  company_id    String    @db.Uuid
+  name          String?
+  email         String?   @unique
+  password_hash String?
+  role          String    @default("operator")
+  created_at    DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
+  companies     companies @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   conversations conversations[]
 }
 
@@ -233,18 +235,20 @@ model painel_clients {
   metadata            Json?           @default("{}") @db.JsonB
 }
 
-/// Removed. Agent config now managed via painel_clients.transitions.
 model painel_agents {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  client_id           String    @db.Uuid
-  model               String?
-  service_step        String?
-  execution_order     Int?
-  system_prompt       String?
-  version             Int       @default(1)
-  is_active           Boolean   @default(true)
-  transitions         Json?     @db.JsonB
-  allowed_tool_names  Json?     @db.JsonB
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_id             String    @db.Uuid
+  model                 String?
+  service_step          String?
+  execution_order       Int?
+  system_prompt         String?
+  version               Int       @default(1)
+  is_active             Boolean   @default(true)
+  is_initial            Boolean   @default(false)
+  activation_conditions Json?     @db.JsonB
+  activation_mode       String?   @default("on_next_message")
+  transitions           Json?     @db.JsonB
+  allowed_tool_names    Json?     @db.JsonB
 
   painel_clients      painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
   painel_apis         painel_apis[]

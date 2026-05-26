@@ -2,8 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import {
-  QUEUE_INGESTION, QUEUE_AGENT, QUEUE_DISPATCHER, QUEUE_MEDIA, QUEUE_KNOWLEDGE,
-  JOB_NORMALIZE_INBOUND, JOB_PROCESS_WITH_AGENT, JOB_DISPATCH_RESPONSE, JOB_PROCESS_MEDIA,
+  QUEUE_INGESTION,
+  QUEUE_AGENT,
+  QUEUE_DISPATCHER,
+  QUEUE_MEDIA,
+  QUEUE_KNOWLEDGE,
+  JOB_NORMALIZE_INBOUND,
+  JOB_PROCESS_WITH_AGENT,
+  JOB_DISPATCH_RESPONSE,
+  JOB_PROCESS_MEDIA,
   JOB_INGEST_KNOWLEDGE_DOCUMENT,
 } from './queue.constants';
 
@@ -85,7 +92,10 @@ export class QueueService {
     const job = await this.ingestionQueue.add(JOB_NORMALIZE_INBOUND, data, {
       jobId: data.idempotency_key || undefined,
     });
-    this.logger.log({ job_id: job.id, inbound_event_id: data.inbound_event_id }, 'Ingestion job queued');
+    this.logger.log(
+      { job_id: job.id, inbound_event_id: data.inbound_event_id },
+      'Ingestion job queued',
+    );
     return String(job.id ?? '');
   }
 
@@ -93,15 +103,24 @@ export class QueueService {
     const job = await this.agentQueue.add(JOB_PROCESS_WITH_AGENT, data, {
       delay: delayMs || 0,
     });
-    this.logger.log({ job_id: job.id, conversation_id: data.conversation_id }, 'Agent job queued');
+    this.logger.log(
+      { job_id: job.id, conversation_id: data.conversation_id },
+      'Agent job queued',
+    );
     return String(job.id ?? '');
   }
 
-  async addDispatchJob(data: DispatchJobData, delayMs?: number): Promise<string> {
+  async addDispatchJob(
+    data: DispatchJobData,
+    delayMs?: number,
+  ): Promise<string> {
     const job = await this.dispatcherQueue.add(JOB_DISPATCH_RESPONSE, data, {
       delay: delayMs || 0,
     });
-    this.logger.log({ job_id: job.id, conversation_id: data.conversation_id }, 'Dispatch job queued');
+    this.logger.log(
+      { job_id: job.id, conversation_id: data.conversation_id },
+      'Dispatch job queued',
+    );
     return String(job.id ?? '');
   }
 
@@ -110,16 +129,29 @@ export class QueueService {
       delay: delayMs || 0,
       jobId: data.media_asset_id,
     });
-    this.logger.log({ job_id: job.id, media_asset_id: data.media_asset_id }, 'Media job queued');
+    this.logger.log(
+      { job_id: job.id, media_asset_id: data.media_asset_id },
+      'Media job queued',
+    );
     return String(job.id ?? '');
   }
 
-  async addKnowledgeJob(data: KnowledgeJobData, delayMs?: number): Promise<string> {
-    const job = await this.knowledgeQueue.add(JOB_INGEST_KNOWLEDGE_DOCUMENT, data, {
-      delay: delayMs || 0,
-      jobId: data.document_id,
-    });
-    this.logger.log({ job_id: job.id, document_id: data.document_id }, 'Knowledge job queued');
+  async addKnowledgeJob(
+    data: KnowledgeJobData,
+    delayMs?: number,
+  ): Promise<string> {
+    const job = await this.knowledgeQueue.add(
+      JOB_INGEST_KNOWLEDGE_DOCUMENT,
+      data,
+      {
+        delay: delayMs || 0,
+        jobId: data.document_id,
+      },
+    );
+    this.logger.log(
+      { job_id: job.id, document_id: data.document_id },
+      'Knowledge job queued',
+    );
     return String(job.id ?? '');
   }
 }

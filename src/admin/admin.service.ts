@@ -6,13 +6,16 @@ import {
 } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { LocalAdminService } from '../common/auth/local/local-admin.service';
 
 @Injectable()
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
+  private readonly isDevelopment = process.env.ENVIRONMENT === 'development';
 
   constructor(
     private prisma: PrismaService,
+    private localAdminService: LocalAdminService,
   ) {}
 
   private get adminClient(): SupabaseClient<any, 'public', any> {
@@ -22,7 +25,7 @@ export class AdminService {
     );
   }
 
-  async createCompany(data: { name: string; cnpj: string; plan?: string }) {
+  async createCompany(data: { name: string; cnpj?: string; plan?: string }) {
     const { name, cnpj, plan = 'starter' } = data;
 
     if (!name) throw new BadRequestException('Name is required');
@@ -60,6 +63,10 @@ export class AdminService {
     company_id: string;
     name?: string;
   }) {
+    if (this.isDevelopment) {
+      return this.localAdminService.createUser(data);
+    }
+
     const { email, password, role = 'operator', company_id, name } = data;
 
     if (!email || !company_id)
@@ -68,7 +75,6 @@ export class AdminService {
     try {
       let userId: string;
 
-      // 1. Create Auth User
       const { data: authUser, error: authError } =
         await this.adminClient.auth.admin.createUser({
           email,
@@ -79,7 +85,6 @@ export class AdminService {
 
       if (authError) {
         if (authError.message.includes('already registered')) {
-          // Find existing user
           const listResult = await this.adminClient.auth.admin.listUsers();
           if (listResult.error) throw listResult.error;
 
@@ -100,7 +105,6 @@ export class AdminService {
         userId = authUser.user.id;
       }
 
-      // 2. Create Public Profile
       const existingProfile = await this.prisma.users.findUnique({
         where: { id: userId },
       });

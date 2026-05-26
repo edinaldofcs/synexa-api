@@ -1,4 +1,8 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateIntentionDto } from './dto/create-intention.dto';
 import { UpdateIntentionDto } from './dto/update-intention.dto';
@@ -39,7 +43,10 @@ export class IntentionsService {
   ) {
     const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
-    return this.intentionsRepository.create(clientId, createIntentionDto as Record<string, unknown>);
+    return this.intentionsRepository.create(
+      clientId,
+      createIntentionDto as Record<string, unknown>,
+    );
   }
 
   async findAllByClient(clientId: string, userId: string) {
@@ -75,7 +82,10 @@ export class IntentionsService {
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`Intention with ID ${id} not found`);
     }
-    return this.intentionsRepository.update(id, updateIntentionDto as Record<string, unknown>);
+    return this.intentionsRepository.update(
+      id,
+      updateIntentionDto as Record<string, unknown>,
+    );
   }
 
   async remove(id: string, userId: string) {

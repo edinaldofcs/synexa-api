@@ -1,27 +1,42 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ObservabilityService } from './observability.service';
+import { CurrentUser } from '../common/auth/current-user.decorator';
+import { extractTenantContext } from '../common/utils/tenant-access.helper';
 
 @Controller('observability')
 export class ObservabilityController {
   constructor(private readonly observabilityService: ObservabilityService) {}
 
   @Get('queues')
-  getQueues() {
-    return this.observabilityService.getQueueMetrics();
+  getQueues(@CurrentUser() user: any) {
+    const ctx = extractTenantContext(user);
+    return this.observabilityService.getQueueMetrics(ctx.companyId);
   }
 
   @Get('latency')
-  getLatency(@Query('hours') hours?: string) {
-    return this.observabilityService.getLatencyMetrics(Number(hours) || 24);
+  getLatency(@CurrentUser() user: any, @Query('hours') hours?: string) {
+    const ctx = extractTenantContext(user);
+    return this.observabilityService.getLatencyMetrics(
+      Number(hours) || 24,
+      ctx.companyId,
+    );
   }
 
   @Get('cost')
-  getCost(@Query('hours') hours?: string) {
-    return this.observabilityService.getCostMetrics(Number(hours) || 168);
+  getCost(@CurrentUser() user: any, @Query('hours') hours?: string) {
+    const ctx = extractTenantContext(user);
+    return this.observabilityService.getCostMetrics(
+      Number(hours) || 168,
+      ctx.companyId,
+    );
   }
 
   @Get('errors')
-  getErrors(@Query('hours') hours?: string) {
-    return this.observabilityService.getErrorsByTenant(Number(hours) || 24);
+  getErrors(@CurrentUser() user: any, @Query('hours') hours?: string) {
+    const ctx = extractTenantContext(user);
+    return this.observabilityService.getErrorsByTenant(
+      Number(hours) || 24,
+      ctx.companyId,
+    );
   }
 }

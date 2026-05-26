@@ -1,4 +1,8 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { ApisRepository } from './repositories/apis.repository';
@@ -34,11 +38,7 @@ export class ApisService {
     }
   }
 
-  async create(
-    clientId: string,
-    payload: CreateApiDto,
-    userId: string,
-  ) {
+  async create(clientId: string, payload: CreateApiDto, userId: string) {
     const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
     const api = await this.apisRepository.create(clientId, payload as any);
@@ -56,7 +56,7 @@ export class ApisService {
     const api = await this.apisRepository.findOne(id);
     const companyId = await this.getUserCompanyId(userId);
     const client = await this.prisma.painel_clients.findUnique({
-      where: { id: (api as any).client_id },
+      where: { id: api.client_id },
       select: { company_id: true },
     });
     if (!client || client.company_id !== companyId) {
@@ -65,22 +65,18 @@ export class ApisService {
     return api;
   }
 
-  async update(
-    id: string,
-    payload: UpdateApiDto,
-    userId: string,
-  ) {
+  async update(id: string, payload: UpdateApiDto, userId: string) {
     const companyId = await this.getUserCompanyId(userId);
     const existing = await this.apisRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
-      where: { id: (existing as any).client_id },
+      where: { id: existing.client_id },
       select: { company_id: true },
     });
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`API with ID ${id} not found`);
     }
     const api = await this.apisRepository.update(id, payload as any);
-    const clientId = (api as any)?.client_id;
+    const clientId = api?.client_id;
     if (clientId) void this.metadataService.refresh(clientId);
     return api;
   }
@@ -89,14 +85,14 @@ export class ApisService {
     const companyId = await this.getUserCompanyId(userId);
     const existing = await this.apisRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
-      where: { id: (existing as any).client_id },
+      where: { id: existing.client_id },
       select: { company_id: true },
     });
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`API with ID ${id} not found`);
     }
     const { api, result } = await this.apisRepository.remove(id);
-    const clientId = (api as any)?.client_id;
+    const clientId = api?.client_id;
     if (clientId) void this.metadataService.refresh(clientId);
     return result;
   }
