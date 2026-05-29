@@ -273,4 +273,49 @@ export class KnowledgeService {
   private vectorLiteral(values: number[]) {
     return `[${values.join(',')}]`;
   }
+
+  async updateBase(
+    baseId: string,
+    dto: Partial<CreateKnowledgeBaseDto>,
+    userId: string,
+  ) {
+    const base = await this.getAuthorizedBase(baseId, userId);
+
+    return this.prisma.knowledge_bases.update({
+      where: { id: base.id },
+      data: {
+        name: dto.name || undefined,
+        description: dto.description || undefined,
+        settings: dto.settings ? (dto.settings as any) : undefined,
+        updated_at: new Date(),
+      },
+    });
+  }
+
+  async deleteBase(baseId: string, userId: string) {
+    const base = await this.getAuthorizedBase(baseId, userId);
+
+    return this.prisma.knowledge_bases.delete({
+      where: { id: base.id },
+    });
+  }
+
+  async deleteDocument(baseId: string, docId: string, userId: string) {
+    const base = await this.getAuthorizedBase(baseId, userId);
+
+    const document = await this.prisma.knowledge_documents.findFirst({
+      where: {
+        id: docId,
+        knowledge_base_id: base.id,
+      },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document not found in this knowledge base');
+    }
+
+    return this.prisma.knowledge_documents.delete({
+      where: { id: docId },
+    });
+  }
 }

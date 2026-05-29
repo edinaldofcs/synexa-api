@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, Patch, Param, ParseUUIDPipe, Delete } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AdminService } from './admin.service';
 import { Roles } from '../common/auth/roles.decorator';
@@ -24,4 +24,26 @@ export class AdminController {
   async createUser(@Body() body: AdminCreateUserDto) {
     return this.adminService.createUser(body);
   }
+
+  @Get('companies')
+  @Roles('admin')
+  async listCompanies() {
+    return this.adminService.listCompanies();
+  }
+
+  @Patch('companies/:id')
+  @Roles('admin')
+  async updateCompany(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { name?: string; cnpj?: string; plan?: string; status?: string },
+  ) {
+    return this.adminService.updateCompany(id, body);
+  }
+
+  @Delete('companies/:id')
+  @Roles('admin')
+  async deleteCompany(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.deleteCompany(id);
+  }
 }
+

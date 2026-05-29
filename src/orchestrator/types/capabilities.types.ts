@@ -14,7 +14,7 @@ export const DEFAULT_CAPABILITIES: AgentCapabilities = {
   audio_in: false,
   audio_out: false,
   rag: false,
-  web_search: false,
+  web_search: true,
   tools: true,
 };
 
@@ -32,7 +32,5 @@ export interface AgentConfig {
   allowed_knowledge_base_ids: string[];
   allowed_tool_names: string[];
   web_search_allowed: boolean;
-  web_search_domains_allowed: string[];
-  web_search_domains_blocked: string[];
   temperature?: number;
 }

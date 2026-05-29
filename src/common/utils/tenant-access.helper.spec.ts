@@ -87,13 +87,13 @@ describe('tenant-access.helper', () => {
     });
 
     it('should throw when userCompanyId is null and resourceCompanyId is a string', () => {
-      expect(() => assertTenantAccess(null, 'company-1')).toThrow(
+      expect(() => assertTenantAccess(null as any, 'company-1')).toThrow(
         ForbiddenException,
       );
     });
 
     it('should throw when resourceCompanyId is undefined', () => {
-      expect(() => assertTenantAccess('company-1', undefined)).toThrow(
+      expect(() => assertTenantAccess('company-1', undefined as any)).toThrow(
         ForbiddenException,
       );
     });
@@ -107,11 +107,11 @@ describe('tenant-access.helper', () => {
     });
 
     it('should return company_id as null when given null', () => {
-      expect(applyTenantFilter(null)).toEqual({ company_id: null });
+      expect(applyTenantFilter(null as any)).toEqual({ company_id: null });
     });
 
     it('should return company_id as undefined when given undefined', () => {
-      expect(applyTenantFilter(undefined)).toEqual({ company_id: undefined });
+      expect(applyTenantFilter(undefined as any)).toEqual({ company_id: undefined });
     });
   });
 });

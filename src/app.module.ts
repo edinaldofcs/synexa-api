@@ -20,6 +20,7 @@ import { QueueModule } from './queue/queue.module';
 import { MediaModule } from './media/media.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { OrchestratorModule } from './orchestrator/orchestrator.module';
+import { WebSearchModule } from './agents/web-search/web-search.module';
 import { ImportsModule } from './imports/imports.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -56,6 +57,7 @@ import { AppService } from './app.service';
     MediaModule,
     KnowledgeModule,
     OrchestratorModule,
+    WebSearchModule,
     ImportsModule,
   ],
   controllers: [AppController],

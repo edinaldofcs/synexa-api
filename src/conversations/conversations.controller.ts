@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -25,6 +26,29 @@ export class ConversationsController {
   @Get(':id')
   get(@Param('id', ParseUUIDPipe) id: string) {
     return this.conversationsService.getConversation(id);
+  }
+
+  @Get(':id/messages')
+  getMessages(@Param('id', ParseUUIDPipe) id: string) {
+    return this.conversationsService.getMessages(id);
+  }
+
+  @Post(':id/messages')
+  sendMessage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: { content: string; sender_type?: string },
+    @CurrentUser() user: any,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.sendMessage(id, dto, ctx.companyId);
+  }
+
+  @Patch(':id')
+  updateConversation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: { status?: string; mode?: string },
+  ) {
+    return this.conversationsService.updateConversation(id, dto);
   }
 
   @Post(':id/handoff')

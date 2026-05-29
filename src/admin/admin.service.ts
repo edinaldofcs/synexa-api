@@ -129,4 +129,52 @@ export class AdminService {
       throw new InternalServerErrorException('Internal server error');
     }
   }
+
+  async listCompanies() {
+    return this.prisma.companies.findMany({
+      include: {
+        _count: {
+          select: {
+            users: true,
+            painel_clients: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+  }
+
+  async updateCompany(id: string, data: { name?: string; cnpj?: string; plan?: string; status?: string }) {
+    return this.prisma.companies.update({
+      where: { id },
+      data: {
+        ...data,
+        updated_at: new Date(),
+      },
+    });
+  }
+
+  async deleteCompany(id: string) {
+    // Clean up restricted child relations manually to avoid FK constraint errors in Postgres
+    await this.prisma.users.deleteMany({
+      where: { company_id: id },
+    });
+
+    await this.prisma.channel_connections.deleteMany({
+      where: { company_id: id },
+    });
+
+    await this.prisma.end_users.deleteMany({
+      where: { company_id: id },
+    });
+
+    await this.prisma.inbound_events.deleteMany({
+      where: { company_id: id },
+    });
+
+    return this.prisma.companies.delete({
+      where: { id },
+    });
+  }
 }
+

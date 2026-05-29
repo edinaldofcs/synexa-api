@@ -118,6 +118,72 @@ export class ConversationsService {
     return conversation;
   }
 
+  async getMessages(conversationId: string) {
+    return this.prisma.messages.findMany({
+      where: { conversation_id: conversationId },
+      orderBy: { created_at: 'asc' },
+    });
+  }
+
+  async sendMessage(
+    conversationId: string,
+    dto: { content: string; sender_type?: string },
+    companyId: string,
+  ) {
+    const conversation = await this.prisma.conversations.findUnique({
+      where: { id: conversationId },
+      select: { company_id: true, origin_channel: true, status: true },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+    if (conversation.status === 'closed') {
+      throw new BadRequestException('Conversation is closed');
+    }
+
+    const message = await this.prisma.messages.create({
+      data: {
+        company_id: companyId,
+        conversation_id: conversationId,
+        content: dto.content,
+        sender_type: dto.sender_type || 'human',
+        channel: conversation.origin_channel || 'api',
+        direction: 'outbound',
+        delivery_status: 'sent',
+      },
+    });
+
+    await this.prisma.conversations.update({
+      where: { id: conversationId },
+      data: {
+        last_message_at: new Date(),
+        last_outbound_at: new Date(),
+      },
+    });
+
+    return message;
+  }
+
+  async updateConversation(
+    conversationId: string,
+    dto: { status?: string; mode?: string },
+  ) {
+    const conversation = await this.prisma.conversations.findUnique({
+      where: { id: conversationId },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+
+    const data: any = {};
+    if (dto.status) data.status = dto.status;
+    if (dto.mode) data.mode = dto.mode;
+    if (dto.status === 'closed') {
+      data.closed_at = new Date();
+    }
+
+    return this.prisma.conversations.update({
+      where: { id: conversationId },
+      data,
+    });
+  }
+
   async updateState(conversationId: string, state: Record<string, unknown>) {
     await this.prisma.conversation_state.upsert({
       where: { conversation_id: conversationId },

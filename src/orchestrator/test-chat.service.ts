@@ -3,6 +3,11 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import type { ClearTestChatDto, TestChatDto } from './dto/test-chat.dto';
+import {
+  evaluateConditions,
+  type ActivationConditionGroup,
+} from './utils/condition-evaluator.util';
+import { WebSearchService } from '../agents/web-search/web-search.service';
 
 interface MemoryMessage {
   role: 'user' | 'assistant';
@@ -54,6 +59,7 @@ export class TestChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
+    private readonly webSearchService: WebSearchService,
   ) {}
 
   async listModels(provider: string, apiKey: string): Promise<string[]> {
@@ -119,12 +125,48 @@ export class TestChatService {
     let availableTools: string[] = [];
     let apiTools: ApiTool[] = [];
     let allClientApiNames: string[] = [];
+    let resolvedAgentId: string | undefined = agentId;
+    let resolvedAgentName: string | undefined;
 
     if (agentId && clientId) {
+      const client = await this.prisma.painel_clients.findUnique({
+        where: { id: clientId },
+      });
+      if (!client) throw new Error('Cliente nao encontrado');
+      companyId = client.company_id;
+
+      const metadata = (client.metadata as any) || {};
+      contextVariables = this.sanitizeContextVariables(metadata);
+
+      if (externalUserId) {
+        conversationId = await this.resolveConversation({
+          clientId,
+          companyId,
+          originChannel,
+          externalUserId,
+        });
+        const persistedContext =
+          await this.loadConversationContext(conversationId);
+        contextVariables = {
+          ...contextVariables,
+          ...persistedContext,
+        };
+
+        const state = await this.loadState(conversationId);
+        resolvedAgentId = await this.resolveAgentId(
+          clientId,
+          state,
+          agentId,
+          persistedContext,
+        );
+      }
+
       const agent = await this.prisma.painel_agents.findUnique({
-        where: { id: agentId },
+        where: { id: resolvedAgentId },
       });
       if (!agent) throw new Error('Agente nao encontrado');
+
+      resolvedAgentName = agent.service_step || agent.id;
 
       const transitions = (agent.transitions as any) || {};
       provider = transitions.llm_provider || provider;
@@ -137,18 +179,18 @@ export class TestChatService {
         : [];
       allClientApiNames = await this.loadAllClientApiNames(clientId);
       apiTools = await this.loadApiTools(clientId, agent.id, availableTools);
+
+      const capabilities =
+        (transitions.capabilities as Record<string, boolean>) || {};
+      const webSearch = (transitions.web_search as Record<string, unknown>) || {};
+      if (capabilities.web_search !== false && webSearch.enabled !== false) {
+        apiTools.push(this.buildNativeWebSearchApiTool());
+      }
+
       availableTools = [
         ...new Set([...availableTools, ...apiTools.map((tool) => tool.name)]),
       ];
 
-      const client = await this.prisma.painel_clients.findUnique({
-        where: { id: clientId },
-      });
-      if (!client) throw new Error('Cliente nao encontrado');
-
-      companyId = client.company_id;
-      const metadata = (client.metadata as any) || {};
-      contextVariables = this.sanitizeContextVariables(metadata);
       const providerName = provider || '';
       const providerCfg = metadata.llm_providers?.[providerName];
       if (!providerCfg?.apiKey) {
@@ -157,19 +199,6 @@ export class TestChatService {
         );
       }
       apiKey = providerCfg.apiKey;
-
-      if (externalUserId) {
-        conversationId = await this.resolveConversation({
-          clientId,
-          companyId,
-          originChannel,
-          externalUserId,
-        });
-        contextVariables = {
-          ...contextVariables,
-          ...(await this.loadConversationContext(conversationId)),
-        };
-      }
     }
 
     if (!provider || !model || !apiKey) {
@@ -204,7 +233,7 @@ export class TestChatService {
           originChannel,
           provider,
           model,
-          agentId,
+          agentId: resolvedAgentId || agentId,
           memory: { source: 'none', messagesUsed: 0 },
           contextVariables,
           availableTools,
@@ -269,15 +298,92 @@ export class TestChatService {
         allClientApiNames,
       );
       await this.saveConversationContext(conversationId, contextVariables);
+
+      if (resolvedAgentId) {
+        await this.saveState(conversationId, {
+          current_agent_id: resolvedAgentId,
+        });
+      }
+
+      if (resolvedAgentId && clientId && companyId) {
+        const immediateAgent = await this.checkImmediateActivation(
+          clientId,
+          resolvedAgentId,
+          contextVariables,
+        );
+        if (immediateAgent) {
+          const immediateResult = await this.processWithAgent(
+            immediateAgent,
+            clientId,
+            companyId,
+            conversationId,
+            originChannel,
+            message,
+            contextVariables,
+            history,
+            memory,
+          );
+          if (immediateResult) {
+            await this.saveMessage({
+              conversationId,
+              companyId,
+              clientId,
+              senderType: 'ai',
+              direction: 'outbound',
+              channel: originChannel,
+              content: immediateResult.result.text,
+            });
+            await this.saveMemory(conversationId, [
+              ...history,
+              { role: 'user', content: message },
+              { role: 'assistant', content: immediateResult.result.text },
+            ]);
+            immediateResult.contextVariables = this.mergeToolResults(
+              immediateResult.contextVariables,
+              immediateResult.result.toolCalls || [],
+              immediateResult.apiTools,
+              allClientApiNames,
+            );
+            await this.saveConversationContext(
+              conversationId,
+              immediateResult.contextVariables,
+            );
+            await this.saveState(conversationId, {
+              current_agent_id: immediateAgent.id,
+            });
+            return {
+              ...immediateResult.result,
+              agentName: immediateAgent.service_step || immediateAgent.id,
+              debug: {
+                conversationId,
+                externalUserId,
+                originChannel,
+                provider,
+                model,
+                agentId: immediateAgent.id,
+                memory: {
+                  source: memory.source,
+                  messagesUsed: history.length,
+                },
+                contextVariables: immediateResult.contextVariables,
+                availableTools: immediateResult.availableTools,
+                toolCalls: immediateResult.result.toolCalls || [],
+              },
+            };
+          }
+        }
+      }
+
       return {
         ...result,
+        agentName: resolvedAgentName,
         debug: {
           conversationId,
           externalUserId,
           originChannel,
           provider,
           model,
-          agentId,
+          agentId: resolvedAgentId || agentId,
           memory: {
             source: memory.source,
             messagesUsed: history.length,
@@ -460,6 +566,193 @@ export class TestChatService {
     });
   }
 
+  private async loadState(
+    conversationId: string,
+  ): Promise<Record<string, unknown>> {
+    const cs = await this.prisma.conversation_state.findUnique({
+      where: { conversation_id: conversationId },
+    });
+    return (cs?.state as Record<string, unknown>) || {};
+  }
+
+  private async saveState(
+    conversationId: string,
+    partialState: Record<string, unknown>,
+  ) {
+    const existing = await this.prisma.conversation_state.findUnique({
+      where: { conversation_id: conversationId },
+    });
+    const merged = {
+      ...((existing?.state as Record<string, unknown>) || {}),
+      ...partialState,
+    };
+    await this.prisma.conversation_state.upsert({
+      where: { conversation_id: conversationId },
+      update: { state: merged as any, version: { increment: 1 } },
+      create: {
+        conversation_id: conversationId,
+        state: merged as any,
+      },
+    });
+  }
+
+  private async resolveAgentId(
+    clientId: string,
+    state: Record<string, unknown>,
+    defaultAgentId: string,
+    contextVariables: Record<string, unknown>,
+  ): Promise<string> {
+    const mergedState = { ...contextVariables, ...state };
+
+    const agents = await this.prisma.painel_agents.findMany({
+      where: { client_id: clientId, is_active: true },
+      select: {
+        id: true,
+        service_step: true,
+        is_initial: true,
+        activation_conditions: true,
+        activation_mode: true,
+      },
+      orderBy: { execution_order: 'asc' },
+    });
+
+    if (agents.length === 0) return defaultAgentId;
+
+    const currentAgentId =
+      (mergedState.current_agent_id as string) || defaultAgentId;
+
+    const pendingAgentId = mergedState.pending_agent_id as string | undefined;
+    if (pendingAgentId) {
+      const target = agents.find((a) => a.id === pendingAgentId);
+      if (target) return target.id;
+    }
+
+    for (const agent of agents) {
+      if (agent.id === currentAgentId) continue;
+      const conditions =
+        agent.activation_conditions as ActivationConditionGroup | null;
+      if (!conditions) continue;
+      if (evaluateConditions(conditions, mergedState)) {
+        return agent.id;
+      }
+    }
+
+    const currentAgent = agents.find((a) => a.id === currentAgentId);
+    if (currentAgent) return currentAgent.id;
+
+    return agents[0].id;
+  }
+
+  private async checkImmediateActivation(
+    clientId: string,
+    currentAgentId: string,
+    contextVariables: Record<string, unknown>,
+  ): Promise<any | null> {
+    const agents = await this.prisma.painel_agents.findMany({
+      where: { client_id: clientId, is_active: true },
+      select: {
+        id: true,
+        service_step: true,
+        model: true,
+        system_prompt: true,
+        transitions: true,
+        allowed_tool_names: true,
+        activation_conditions: true,
+        activation_mode: true,
+      },
+      orderBy: { execution_order: 'asc' },
+    });
+
+    for (const agent of agents) {
+      if (agent.id === currentAgentId) continue;
+      if (agent.activation_mode !== 'immediate') continue;
+      const conditions =
+        agent.activation_conditions as ActivationConditionGroup | null;
+      if (!conditions) continue;
+      if (evaluateConditions(conditions, contextVariables)) {
+        return agent;
+      }
+    }
+
+    return null;
+  }
+
+  private async processWithAgent(
+    agent: any,
+    clientId: string,
+    companyId: string,
+    conversationId: string,
+    originChannel: string,
+    message: string,
+    contextVariables: Record<string, unknown>,
+    history: MemoryMessage[],
+    memory: any,
+  ) {
+    const client = await this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+    });
+    const metadata = (client?.metadata as any) || {};
+
+    const transitions = agent.transitions || {};
+    const provider =
+      transitions.llm_provider || process.env.LLM_PROVIDER || 'groq';
+    const model = agent.model || 'openai/gpt-oss-120b';
+
+    const providerCfg = metadata.llm_providers?.[provider];
+    if (!providerCfg?.apiKey) {
+      this.logger.warn(
+        { provider },
+        'processWithAgent: API Key nao encontrada para provider',
+      );
+      return null;
+    }
+    const apiKey = providerCfg.apiKey;
+
+    const allowedToolNames = Array.isArray(agent.allowed_tool_names)
+      ? agent.allowed_tool_names.filter(
+          (tool: unknown): tool is string => typeof tool === 'string',
+        )
+      : [];
+    const apiTools = await this.loadApiTools(
+      clientId,
+      agent.id,
+      allowedToolNames,
+    );
+
+    const capabilities =
+      (transitions.capabilities as Record<string, boolean>) || {};
+    const webSearch = (transitions.web_search as Record<string, unknown>) || {};
+    if (capabilities.web_search !== false && webSearch.enabled !== false) {
+      apiTools.push(this.buildNativeWebSearchApiTool());
+    }
+
+    const availableTools = [
+      ...new Set([...allowedToolNames, ...apiTools.map((t) => t.name)]),
+    ];
+
+    const result = await this.callProvider(
+      provider,
+      message,
+      model,
+      apiKey,
+      undefined,
+      this.buildContextualSystemPrompt(
+        agent.system_prompt || undefined,
+        contextVariables,
+      ),
+      history,
+      apiTools,
+      [],
+    );
+
+    return {
+      result,
+      apiTools,
+      availableTools,
+      contextVariables,
+    };
+  }
+
   private buildContextualSystemPrompt(
     systemPrompt: string | undefined,
     contextVariables: Record<string, unknown>,
@@ -553,16 +846,17 @@ export class TestChatService {
     allowedToolNames: string[],
   ): Promise<ApiTool[]> {
     const allowedNames = new Set(allowedToolNames);
-    const orFilters: Array<Record<string, unknown>> = [{ agent_id: agentId }];
-    if (allowedNames.size) {
-      orFilters.push({ name: { in: [...allowedNames] } });
-    }
+    const filter =
+      allowedNames.size > 0
+        ? { name: { in: [...allowedNames] } }
+        : { agent_id: agentId };
+
     const apis = await this.prisma.painel_apis.findMany({
       where: {
         client_id: clientId,
         active: true,
         visible_to_agent: true,
-        OR: orFilters as any,
+        ...filter,
       },
       orderBy: { execution_order: 'asc' },
     });
@@ -598,6 +892,23 @@ export class TestChatService {
       .slice(0, 40)
       .toLowerCase();
     return `${slug || 'tool'}_${id.replace(/-/g, '_')}`;
+  }
+
+  private buildNativeWebSearchApiTool(): ApiTool {
+    const def = this.webSearchService.getToolDefinition();
+    const id = this.webSearchService.getNativeToolId();
+    return {
+      id,
+      name: def.name,
+      functionName: id,
+      description: def.description,
+      method: 'NATIVE',
+      url: null,
+      headers: null,
+      body: null,
+      parameters: def.parameters,
+      extract_data: null,
+    };
   }
 
   private buildOpenAiTools(apiTools: ApiTool[]) {
@@ -1080,7 +1391,10 @@ export class TestChatService {
         const functionName = call?.function?.name;
         const tool = toolsByFunctionName.get(functionName);
         const args = this.parseToolArguments(call?.function?.arguments);
-        if (!tool) {
+
+        const isNative = functionName === this.webSearchService.getNativeToolId();
+
+        if (!tool && !isNative) {
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
@@ -1092,19 +1406,34 @@ export class TestChatService {
         }
 
         try {
-          const result = await this.executeApiTool(tool, args);
-          toolCalls.push({ name: tool.name, arguments: args, result });
+          let result;
+          if (isNative) {
+            const nativeArgs = this.withFallbackQuery(args, message);
+            result = await this.webSearchService.execute(nativeArgs);
+            toolCalls.push({
+              name: 'web_search',
+              arguments: nativeArgs,
+              result,
+            });
+          } else if (tool) {
+            result = await this.executeApiTool(tool, args);
+            toolCalls.push({ name: tool.name, arguments: args, result });
+          } else {
+            result = { error: `Tool ${functionName} nao encontrada` };
+            toolCalls.push({ name: functionName, arguments: args, result });
+          }
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
             content: JSON.stringify(result),
           });
         } catch (error) {
+          const toolName = tool?.name || functionName;
           const result = {
             error:
               error instanceof Error ? error.message : 'Erro ao executar tool',
           };
-          toolCalls.push({ name: tool.name, arguments: args, result });
+          toolCalls.push({ name: toolName, arguments: args, result });
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
@@ -1128,6 +1457,16 @@ export class TestChatService {
     } catch {
       return {};
     }
+  }
+
+  private withFallbackQuery(
+    args: Record<string, unknown>,
+    message: string,
+  ): Record<string, unknown> {
+    if (typeof args.query === 'string' && args.query.trim()) return args;
+    if (typeof args.question === 'string' && args.question.trim()) return args;
+    if (typeof args.pergunta === 'string' && args.pergunta.trim()) return args;
+    return { ...args, query: message };
   }
 
   private async listGeminiModels(apiKey: string): Promise<string[]> {

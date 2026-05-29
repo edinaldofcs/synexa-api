@@ -23,15 +23,16 @@ export interface ActivationConditionGroup {
   conditions: ActivationCondition[];
 }
 
-function getNestedValue(
-  obj: Record<string, unknown>,
-  path: string,
-): unknown {
-  return path.split('.').reduce(
-    (acc, key) =>
-      acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[key] : undefined,
-    obj as unknown,
-  );
+function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+  return path
+    .split('.')
+    .reduce(
+      (acc, key) =>
+        acc && typeof acc === 'object'
+          ? (acc as Record<string, unknown>)[key]
+          : undefined,
+      obj as unknown,
+    );
 }
 
 function evaluateSingle(
@@ -64,9 +65,7 @@ function evaluateSingle(
     case 'lte':
       return Number(actual) <= Number(condition.value);
     case 'in':
-      return (
-        Array.isArray(condition.value) && condition.value.includes(actual)
-      );
+      return Array.isArray(condition.value) && condition.value.includes(actual);
     case 'not_in':
       return (
         Array.isArray(condition.value) && !condition.value.includes(actual)

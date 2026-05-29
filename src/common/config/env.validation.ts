@@ -107,6 +107,14 @@ export class EnvironmentVariables {
   @IsOptional()
   OPENROUTER_MODEL?: string;
 
+  @IsString()
+  @IsOptional()
+  OPENROUTER_HTTP_REFERER?: string;
+
+  @IsString()
+  @IsOptional()
+  OPENROUTER_APP_TITLE?: string;
+
   @IsNumber({}, { message: 'LLM_MAX_RETRIES must be a valid number' })
   @IsOptional()
   LLM_MAX_RETRIES?: number = 2;
@@ -127,18 +135,6 @@ export class EnvironmentVariables {
   @IsOptional()
   UPLOAD_MAX_SIZE?: number = 52428800;
 
-  @IsString()
-  @IsOptional()
-  WEB_SEARCH_API_KEY?: string;
-
-  @IsString()
-  @IsOptional()
-  WEB_SEARCH_CX?: string;
-
-  @IsString()
-  @IsOptional()
-  @IsIn(['serpapi', 'google'])
-  WEB_SEARCH_ENGINE?: string = 'google';
 }
 
 export function validateEnv(

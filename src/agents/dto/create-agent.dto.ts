@@ -6,9 +6,13 @@ import {
   IsArray,
   IsIn,
   ValidateNested,
+  IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ActivationCondition, ActivationConditionGroup } from './activation-condition.dto';
+import {
+  ActivationCondition,
+  ActivationConditionGroup,
+} from './activation-condition.dto';
 
 export class CreateAgentDto {
   @IsString()
@@ -52,6 +56,10 @@ export class CreateAgentDto {
   @IsArray()
   @IsOptional()
   allowed_tool_names?: string[];
+
+  @IsObject()
+  @IsOptional()
+  transitions?: Record<string, any>;
 
   @IsString()
   @IsOptional()

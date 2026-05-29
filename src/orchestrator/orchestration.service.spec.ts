@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { ConversationsService } from '../conversations/conversations.service';
+import { WebSearchService } from '../agents/web-search/web-search.service';
 
 jest.mock('./providers/llm-provider.factory', () => ({
   getLLMProvider: () => ({
@@ -83,6 +84,21 @@ describe('OrchestrationService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: RedisService, useValue: mockRedis },
         { provide: ConversationsService, useValue: mockConversationsService },
+        {
+          provide: WebSearchService,
+          useValue: {
+            getToolDefinition: jest.fn().mockReturnValue({
+              name: 'web_search',
+              description: 'Mock web search',
+              parameters: {},
+            }),
+            getNativeToolId: jest.fn().mockReturnValue('web_search'),
+            execute: jest.fn().mockResolvedValue({
+              results: [{ title: 'Mock result', snippet: 'Mock snippet', link: 'https://example.com' }],
+              source: 'OpenRouter',
+            }),
+          },
+        },
       ],
     }).compile();
 

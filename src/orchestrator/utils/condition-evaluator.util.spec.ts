@@ -1,4 +1,7 @@
-import { evaluateConditions, ActivationConditionGroup } from './condition-evaluator.util';
+import {
+  evaluateConditions,
+  ActivationConditionGroup,
+} from './condition-evaluator.util';
 
 describe('evaluateConditions', () => {
   const state = {
@@ -15,7 +18,9 @@ describe('evaluateConditions', () => {
     it('equals', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'intent', operator: 'equals', value: 'suporte' }],
+        conditions: [
+          { variable: 'intent', operator: 'equals', value: 'suporte' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
       group.conditions[0].value = 'vendas';
@@ -25,7 +30,9 @@ describe('evaluateConditions', () => {
     it('not_equals', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'intent', operator: 'not_equals', value: 'vendas' }],
+        conditions: [
+          { variable: 'intent', operator: 'not_equals', value: 'vendas' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -33,7 +40,9 @@ describe('evaluateConditions', () => {
     it('contains', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'intent', operator: 'contains', value: 'sup' }],
+        conditions: [
+          { variable: 'intent', operator: 'contains', value: 'sup' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
       group.conditions[0].value = 'xyz';
@@ -43,7 +52,9 @@ describe('evaluateConditions', () => {
     it('starts_with', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'intent', operator: 'starts_with', value: 'sup' }],
+        conditions: [
+          { variable: 'intent', operator: 'starts_with', value: 'sup' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
       group.conditions[0].value = 'por';
@@ -53,7 +64,9 @@ describe('evaluateConditions', () => {
     it('ends_with', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'intent', operator: 'ends_with', value: 'rte' }],
+        conditions: [
+          { variable: 'intent', operator: 'ends_with', value: 'rte' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -61,7 +74,9 @@ describe('evaluateConditions', () => {
     it('gt', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'sentiment_score', operator: 'gt', value: 0.5 }],
+        conditions: [
+          { variable: 'sentiment_score', operator: 'gt', value: 0.5 },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
       group.conditions[0].value = 0.9;
@@ -71,7 +86,9 @@ describe('evaluateConditions', () => {
     it('lt', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'sentiment_score', operator: 'lt', value: 0.9 }],
+        conditions: [
+          { variable: 'sentiment_score', operator: 'lt', value: 0.9 },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -79,7 +96,9 @@ describe('evaluateConditions', () => {
     it('gte', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'sentiment_score', operator: 'gte', value: 0.8 }],
+        conditions: [
+          { variable: 'sentiment_score', operator: 'gte', value: 0.8 },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -87,7 +106,9 @@ describe('evaluateConditions', () => {
     it('lte', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'sentiment_score', operator: 'lte', value: 0.8 }],
+        conditions: [
+          { variable: 'sentiment_score', operator: 'lte', value: 0.8 },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -103,7 +124,9 @@ describe('evaluateConditions', () => {
     it('not_exists', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'nao_existe', operator: 'not_exists', value: null }],
+        conditions: [
+          { variable: 'nao_existe', operator: 'not_exists', value: null },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -111,7 +134,9 @@ describe('evaluateConditions', () => {
     it('in', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'tier', operator: 'in', value: ['premium', 'vip'] }],
+        conditions: [
+          { variable: 'tier', operator: 'in', value: ['premium', 'vip'] },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
       group.conditions[0].value = ['basic', 'free'];
@@ -121,7 +146,9 @@ describe('evaluateConditions', () => {
     it('not_in', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'tier', operator: 'not_in', value: ['basic', 'free'] }],
+        conditions: [
+          { variable: 'tier', operator: 'not_in', value: ['basic', 'free'] },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -141,7 +168,9 @@ describe('evaluateConditions', () => {
     it('accesses nested values', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'user.name', operator: 'equals', value: 'João' }],
+        conditions: [
+          { variable: 'user.name', operator: 'equals', value: 'João' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -149,7 +178,9 @@ describe('evaluateConditions', () => {
     it('accesses deeply nested values', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'user.plan', operator: 'equals', value: 'enterprise' }],
+        conditions: [
+          { variable: 'user.plan', operator: 'equals', value: 'enterprise' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(true);
     });
@@ -157,7 +188,9 @@ describe('evaluateConditions', () => {
     it('returns false for missing nested paths', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'user.email', operator: 'exists', value: null }],
+        conditions: [
+          { variable: 'user.email', operator: 'exists', value: null },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(false);
     });
@@ -165,7 +198,9 @@ describe('evaluateConditions', () => {
     it('handles null parent in path', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'empty.something', operator: 'exists', value: null }],
+        conditions: [
+          { variable: 'empty.something', operator: 'exists', value: null },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(false);
     });
@@ -234,7 +269,9 @@ describe('evaluateConditions', () => {
     it('contains with null value returns false', () => {
       const group: ActivationConditionGroup = {
         logic: 'AND',
-        conditions: [{ variable: 'empty', operator: 'contains', value: 'test' }],
+        conditions: [
+          { variable: 'empty', operator: 'contains', value: 'test' },
+        ],
       };
       expect(evaluateConditions(group, state)).toBe(false);
     });

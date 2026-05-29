@@ -54,9 +54,11 @@ export class AgentsService {
   private splitLlmProvider(
     payload: Record<string, unknown>,
   ): [Record<string, unknown>, any] {
-    const { llm_provider, ...rest } = payload;
+    const { llm_provider, capabilities, ...rest } = payload;
     const transitions = (rest.transitions as any) || {};
     if (llm_provider) transitions.llm_provider = llm_provider;
+    if (capabilities) transitions.capabilities = capabilities;
+    delete rest.transitions;
     return [rest, transitions];
   }
 
@@ -171,17 +173,10 @@ export class AgentsService {
     }
 
     const transitions = (agent.transitions as Record<string, unknown>) || {};
-    const webSearch =
-      (transitions.web_search as Record<string, unknown>) || {};
+    const webSearch = (transitions.web_search as Record<string, unknown>) || {};
 
     return {
-      enabled: webSearch.enabled === true,
-      domains_allowed: Array.isArray(webSearch.domains_allowed)
-        ? (webSearch.domains_allowed as string[])
-        : [],
-      domains_blocked: Array.isArray(webSearch.domains_blocked)
-        ? (webSearch.domains_blocked as string[])
-        : [],
+      enabled: webSearch.enabled !== false,
     };
   }
 
@@ -201,18 +196,8 @@ export class AgentsService {
     }
 
     const transitions = (agent.transitions as Record<string, unknown>) || {};
-    const existing =
-      (transitions.web_search as Record<string, unknown>) || {};
-
     const updated = {
-      ...existing,
       ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
-      ...(dto.domains_allowed !== undefined
-        ? { domains_allowed: dto.domains_allowed }
-        : {}),
-      ...(dto.domains_blocked !== undefined
-        ? { domains_blocked: dto.domains_blocked }
-        : {}),
     };
 
     transitions.web_search = updated;
@@ -224,13 +209,7 @@ export class AgentsService {
     void this.metadataService.refresh(agent.client_id);
 
     return {
-      enabled: updated.enabled === true,
-      domains_allowed: Array.isArray(updated.domains_allowed)
-        ? (updated.domains_allowed as string[])
-        : [],
-      domains_blocked: Array.isArray(updated.domains_blocked)
-        ? (updated.domains_blocked as string[])
-        : [],
+      enabled: updated.enabled !== false,
     };
   }
 
@@ -238,25 +217,30 @@ export class AgentsService {
     const companyId = await this.getUserCompanyId(userId);
     const agents = await this.prisma.painel_agents.findMany({
       where: { painel_clients: { company_id: companyId } },
-      select: { id: true, service_step: true, transitions: true },
+      select: {
+        id: true,
+        service_step: true,
+        client_id: true,
+        model: true,
+        is_active: true,
+        transitions: true,
+      },
       orderBy: { execution_order: 'asc' },
     });
 
     return agents.map((agent) => {
-      const transitions =
-        (agent.transitions as Record<string, unknown>) || {};
+      const transitions = (agent.transitions as Record<string, unknown>) || {};
       const webSearch =
         (transitions.web_search as Record<string, unknown>) || {};
       return {
         agent_id: agent.id,
         agent_name: agent.service_step,
-        enabled: webSearch.enabled === true,
-        domains_allowed: Array.isArray(webSearch.domains_allowed)
-          ? (webSearch.domains_allowed as string[])
-          : [],
-        domains_blocked: Array.isArray(webSearch.domains_blocked)
-          ? (webSearch.domains_blocked as string[])
-          : [],
+        client_id: agent.client_id,
+        model: agent.model,
+        is_active: agent.is_active,
+        web_search: {
+          enabled: webSearch.enabled !== false,
+        },
       };
     });
   }

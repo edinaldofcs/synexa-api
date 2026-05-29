@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Patch, Delete } from '@nestjs/common';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { CreateKnowledgeDocumentDto } from './dto/create-knowledge-document.dto';
@@ -55,5 +55,31 @@ export class KnowledgeController {
     @CurrentUser() user: { id: string },
   ) {
     return this.knowledgeService.search(baseId, dto, user.id);
+  }
+
+  @Patch('knowledge-bases/:id')
+  updateBase(
+    @Param('id') id: string,
+    @Body() dto: Partial<CreateKnowledgeBaseDto>,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.knowledgeService.updateBase(id, dto, user.id);
+  }
+
+  @Delete('knowledge-bases/:id')
+  deleteBase(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.knowledgeService.deleteBase(id, user.id);
+  }
+
+  @Delete('knowledge-bases/:baseId/documents/:docId')
+  deleteDocument(
+    @Param('baseId') baseId: string,
+    @Param('docId') docId: string,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.knowledgeService.deleteDocument(baseId, docId, user.id);
   }
 }
