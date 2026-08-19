@@ -145,68 +145,128 @@ export class WebSearchService {
     const citations: string[] = [];
     let summary = '';
 
-    // 1. DuckDuckGo Instant Answer API
+    // 1. DuckDuckGo HTML Live Search (Resultados, Notícias e Esportes em Tempo Real)
     try {
-      const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const ddgRes = await fetch(ddgUrl);
-      if (ddgRes.ok) {
-        const ddgJson = (await ddgRes.json()) as any;
-        const abstract =
-          ddgJson.AbstractText ||
-          ddgJson.Answer ||
-          (ddgJson.RelatedTopics && ddgJson.RelatedTopics[0]?.Text);
-        const url =
-          ddgJson.AbstractURL ||
-          (ddgJson.RelatedTopics && ddgJson.RelatedTopics[0]?.FirstURL);
+      const liveRes = await fetch(
+        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            Accept:
+              'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          },
+          signal: AbortSignal.timeout(5000),
+        },
+      );
 
-        if (abstract) {
-          summary = abstract;
-          results.push({
-            title: ddgJson.Heading || query,
-            snippet: abstract,
-            link: url || 'https://duckduckgo.com/?q=' + encodeURIComponent(query),
-          });
-          if (url) citations.push(url);
-        }
-      }
-    } catch {
-      // ignore
-    }
+      if (liveRes.ok) {
+        const html = await liveRes.text();
+        const resultBlocks = html.split('<div class="result results_links');
 
-    // 2. Wikipedia OpenSearch API
-    try {
-      const wikiUrl = `https://pt.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=3&format=json`;
-      const wikiRes = await fetch(wikiUrl);
-      if (wikiRes.ok) {
-        const [searchTerm, titles, snippets, urls] = (await wikiRes.json()) as [
-          string,
-          string[],
-          string[],
-          string[],
-        ];
-        for (let i = 0; i < (titles || []).length; i++) {
-          const title = titles[i];
-          const snippet = snippets[i] || `Artigo enciclopédico sobre ${title}`;
-          const link = urls[i] || '';
-          if (title && link) {
+        for (let i = 1; i < Math.min(resultBlocks.length, 6); i++) {
+          const block = resultBlocks[i];
+          const snippetMatch =
+            /<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i.exec(
+              block,
+            );
+          const linkMatch =
+            /<a[^>]+class="[^"]*result__url[^"]*"[^>]+href="([^"]*)"/i.exec(
+              block,
+            );
+          const headingMatch = /<h2[^>]*>([\s\S]*?)<\/h2>/i.exec(block);
+
+          const title = headingMatch
+            ? headingMatch[1].replace(/<[^>]+>/g, '').trim()
+            : 'Resultado Web';
+          const snippet = snippetMatch
+            ? snippetMatch[1].replace(/<[^>]+>/g, '').trim()
+            : '';
+          let link = linkMatch ? linkMatch[1] : '';
+          if (link.includes('uddg=')) {
+            link = decodeURIComponent(link.split('uddg=')[1].split('&')[0]);
+          }
+
+          if (snippet) {
             results.push({ title, snippet, link });
-            citations.push(link);
-            if (!summary && snippet) summary = `${title}: ${snippet}`;
+            if (link) citations.push(link);
           }
         }
       }
     } catch {
-      // ignore
+      // continua para os próximos fallbacks se timeout
     }
 
-    if (!summary && results.length > 0) {
-      summary = results.map((r) => `${r.title} - ${r.snippet}`).join('\n');
+    // 2. DuckDuckGo Instant Answer API
+    if (results.length === 0) {
+      try {
+        const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        const ddgRes = await fetch(ddgUrl, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (ddgRes.ok) {
+          const ddgJson = (await ddgRes.json()) as any;
+          const abstract =
+            ddgJson.AbstractText ||
+            ddgJson.Answer ||
+            (ddgJson.RelatedTopics && ddgJson.RelatedTopics[0]?.Text);
+          const url =
+            ddgJson.AbstractURL ||
+            (ddgJson.RelatedTopics && ddgJson.RelatedTopics[0]?.FirstURL);
+
+          if (abstract) {
+            results.push({
+              title: ddgJson.Heading || query,
+              snippet: abstract,
+              link:
+                url ||
+                'https://duckduckgo.com/?q=' + encodeURIComponent(query),
+            });
+            if (url) citations.push(url);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 3. Wikipedia OpenSearch API
+    if (results.length < 3) {
+      try {
+        const wikiUrl = `https://pt.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=3&format=json`;
+        const wikiRes = await fetch(wikiUrl, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (wikiRes.ok) {
+          const [searchTerm, titles, snippets, urls] =
+            (await wikiRes.json()) as [string, string[], string[], string[]];
+          for (let i = 0; i < (titles || []).length; i++) {
+            const title = titles[i];
+            const snippet =
+              snippets[i] || `Artigo enciclopédico sobre ${title}`;
+            const link = urls[i] || '';
+            if (title && link) {
+              results.push({ title, snippet, link });
+              citations.push(link);
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (results.length > 0) {
+      summary = results
+        .slice(0, 3)
+        .map((r) => `${r.title}: ${r.snippet}`)
+        .join('\n\n');
     }
 
     return {
       answer: summary || `Resultados encontrados na web para: ${query}`,
       results,
-      source: 'Synexa Public Web Search (DuckDuckGo/Wikipedia)',
+      source: 'Synexa Live Web Search Engine',
       citations: Array.from(new Set(citations)),
     };
   }
