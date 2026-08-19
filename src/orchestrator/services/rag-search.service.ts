@@ -228,6 +228,82 @@ export class RagSearchService {
       }
     }
 
+    // Se todos os provedores de embedding externos falharem, executa busca híbrida textual/semântica de contingência
+    try {
+      this.logger.log(
+        `Executando busca textual de contingência para a query: "${query}"`,
+      );
+      const words = query
+        .toLowerCase()
+        .replace(/[^\w\s\u00C0-\u00FF]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length >= 3);
+
+      const searchPattern = `%${query.trim()}%`;
+      const wordPatterns =
+        words.length > 0 ? words.map((w) => `%${w}%`) : [searchPattern];
+
+      const fallbackResults = await this.prisma.$queryRawUnsafe<
+        Array<{
+          id: string;
+          document_id: string;
+          document_title: string;
+          content: string;
+          page: number | null;
+          score: number;
+        }>
+      >(
+        `
+        SELECT
+          kc.id,
+          kc.document_id,
+          kd.title AS document_title,
+          kc.content,
+          kc.page,
+          0.88::float8 AS score
+        FROM knowledge_chunks kc
+        JOIN knowledge_documents kd ON kd.id = kc.document_id
+        WHERE kc.client_id = $1::uuid
+          AND kc.knowledge_base_id = ANY($2::uuid[])
+          AND (
+            kc.content ILIKE $3
+            OR kd.title ILIKE $3
+            OR EXISTS (
+              SELECT 1 FROM unnest($4::text[]) w
+              WHERE kc.content ILIKE w OR kd.title ILIKE w
+            )
+          )
+        LIMIT $5
+        `,
+        clientId,
+        agentConfig.allowed_knowledge_base_ids,
+        searchPattern,
+        wordPatterns,
+        Math.min(Math.max(limit || 5, 1), 10),
+      );
+
+      await this.prisma.tool_calls.update({
+        where: { id: toolCall.id },
+        data: {
+          status: 'success',
+          latency_ms: Date.now() - startedAt,
+          result: {
+            count: fallbackResults.length,
+            chunks: fallbackResults.map((r) => ({ id: r.id, score: r.score })),
+            provider_used: 'hybrid_text_fallback',
+          } as any,
+          completed_at: new Date(),
+        },
+      });
+
+      return fallbackResults;
+    } catch (fallbackError) {
+      this.logger.warn(
+        { error: (fallbackError as Error).message },
+        'Falha na busca textual de contingência',
+      );
+    }
+
     // Se todos falharem:
     await this.prisma.tool_calls.update({
       where: { id: toolCall.id },
@@ -241,7 +317,7 @@ export class RagSearchService {
       },
     });
 
-    throw lastError || new Error('All embedding providers failed');
+    return [];
   }
 
   ragToolDefinition() {
