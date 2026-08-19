@@ -341,7 +341,12 @@ export class TestChatService {
     }
 
     const lockKey = `lock:test-chat:${conversationId}`;
-    const acquired = await this.redisService.acquireLock(lockKey, 120);
+    let acquired = await this.redisService.acquireLock(lockKey, 15);
+    if (!acquired) {
+      // Pequena espera e retry para evitar bloqueios transitórios
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      acquired = await this.redisService.acquireLock(lockKey, 15);
+    }
     if (!acquired) {
       throw new Error(
         'Conversa em processamento. Tente novamente em instantes.',
