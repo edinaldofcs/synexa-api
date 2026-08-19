@@ -22,6 +22,7 @@ import { KnowledgeModule } from './knowledge/knowledge.module';
 import { OrchestratorModule } from './orchestrator/orchestrator.module';
 import { WebSearchModule } from './agents/web-search/web-search.module';
 import { ImportsModule } from './imports/imports.module';
+import { VoiceModule } from './voice/voice.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -59,6 +60,7 @@ import { AppService } from './app.service';
     OrchestratorModule,
     WebSearchModule,
     ImportsModule,
+    VoiceModule,
   ],
   controllers: [AppController],
   providers: [AppService],

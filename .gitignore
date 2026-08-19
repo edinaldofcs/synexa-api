@@ -62,6 +62,9 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Scratch / dev scripts
 _dev/
+check_agents.js
+test_media.js
+trigger_deliver.js
 
 # Runtime media files
 /uploads/

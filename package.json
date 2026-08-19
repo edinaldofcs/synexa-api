@@ -29,7 +29,9 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.1.23",
+    "@nestjs/platform-ws": "^11.2.1",
     "@nestjs/throttler": "^6.5.0",
+    "@nestjs/websockets": "^11.2.1",
     "@prisma/client": "5.22.0",
     "@supabase/supabase-js": "^2.95.3",
     "@types/passport-jwt": "^4.0.1",
@@ -49,7 +51,8 @@
     "prisma": "5.22.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -63,6 +66,7 @@
     "@types/node": "^22.10.7",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^6.0.2",
+    "@types/ws": "^8.18.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
