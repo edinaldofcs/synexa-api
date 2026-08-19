@@ -240,8 +240,8 @@ export class TestChatService {
         resolvedAgentConfig = this.buildAgentConfigFromRecord(agent);
 
         const transitions = agent.transitions || {};
-        provider = transitions.llm_provider || provider;
-        model = agent.model || model;
+        provider = provider || transitions.llm_provider;
+        model = model || agent.model;
         systemPrompt = systemPrompt || agent.system_prompt || undefined;
         availableTools = Array.isArray(agent.allowed_tool_names)
           ? agent.allowed_tool_names.filter(
@@ -277,6 +277,17 @@ export class TestChatService {
           model.toLowerCase().startsWith('llama')
         ) {
           provider = 'groq';
+        }
+      }
+
+      // Model fallback caso provider exista mas model esteja vazio
+      if (!model && provider) {
+        if (provider.toLowerCase() === 'gemini') {
+          model = 'gemini-2.5-flash';
+        } else if (provider.toLowerCase() === 'groq') {
+          model = 'llama-3.3-70b-versatile';
+        } else if (provider.toLowerCase() === 'openrouter') {
+          model = 'google/gemini-2.5-flash';
         }
       }
 
