@@ -12,11 +12,10 @@ import type {
   AgentOutput,
   MessagePart,
 } from './types/agent-message.types';
-import type {
-  AgentConfig,
-} from './types/capabilities.types';
+import type { AgentConfig } from './types/capabilities.types';
 import { sanitize } from '../common/utils/sanitize-log.util';
 import { AgentConfigResolver } from './services/agent-config-resolver.service';
+import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
 import { RagSearchService } from './services/rag-search.service';
 import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
 
@@ -32,6 +31,11 @@ export interface ProcessMessageResult {
   calledTools: string[];
 }
 
+import { ModelPricingService } from './services/model-pricing.service';
+import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
+import { FallbackProviderService } from './services/fallback-provider.service';
+import { retryWithBackoff } from './utils/retry-with-backoff.util';
+
 @Injectable()
 export class OrchestrationService {
   private readonly logger = new Logger(OrchestrationService.name);
@@ -40,8 +44,12 @@ export class OrchestrationService {
     private readonly prisma: PrismaService,
     private readonly conversationsService: ConversationsService,
     private readonly agentConfigResolver: AgentConfigResolver,
+    private readonly providerKeyResolver: ProviderKeyResolverService,
     private readonly ragSearchService: RagSearchService,
     private readonly toolCallDispatcher: ToolCallDispatcher,
+    private readonly modelPricingService: ModelPricingService,
+    private readonly circuitBreaker: ProviderCircuitBreakerService,
+    private readonly fallbackProviderService: FallbackProviderService,
   ) {}
 
   async processMessage(
@@ -54,14 +62,22 @@ export class OrchestrationService {
   ): Promise<ProcessMessageResult> {
     const state = await this.conversationsService.getState(conversationId);
 
-    const agentConfig = await this.agentConfigResolver.resolveAgentConfig(clientId, state);
+    const agentConfig = await this.agentConfigResolver.resolveAgentConfig(
+      clientId,
+      state,
+    );
 
     await this.conversationsService.updateState(conversationId, {
       ...state,
       current_agent_id: agentConfig.agentId,
     });
 
-    const provider = getLLMProvider();
+    const llmProvider = (agentConfig as any).llmProvider || llmConfig.provider;
+    const apiKey = await this.providerKeyResolver.resolveApiKey(
+      clientId,
+      llmProvider,
+    );
+    const provider = getLLMProvider(llmProvider, apiKey);
     const providerCapabilities = provider.getCapabilities?.() || {
       text: true,
       vision: false,
@@ -77,7 +93,10 @@ export class OrchestrationService {
         inbound_message_id: messageId,
         request_id: requestId || null,
         agent_id: agentConfig.id === 'default' ? null : agentConfig.id,
-        provider: process.env.LLM_PROVIDER || 'gemini',
+        provider:
+          (agentConfig as any).llmProvider ||
+          process.env.LLM_PROVIDER ||
+          'gemini',
         model: agentConfig.model || llmConfig.models.gemini,
         status: 'running',
       },
@@ -91,32 +110,67 @@ export class OrchestrationService {
       },
     });
 
+    await this.waitForMediaProcessing(messageId);
+
+    const updatedMessage =
+      (await this.prisma.messages.findUnique({
+        where: { id: messageId },
+        include: {
+          message_parts: { orderBy: { order_index: 'asc' } },
+          media_assets: true,
+        },
+      })) || inboundMessage;
+
     const inputParts = await this.buildInputParts(
-      inboundMessage,
+      updatedMessage,
       agentConfig,
       providerCapabilities,
     );
 
     const history = await this.buildHistory(
       conversationId,
+      messageId,
       agentConfig,
       providerCapabilities,
     );
 
-    const ragContext = await this.ragSearchService.buildRagContext(
-      agentConfig,
-      text,
-      clientId,
-      agentRun.id,
-      conversationId,
-      messageId,
-      companyId,
-      requestId,
+    let ragContext: string | undefined;
+    try {
+      ragContext = await this.ragSearchService.buildRagContext(
+        agentConfig,
+        text,
+        clientId,
+        agentRun.id,
+        conversationId,
+        messageId,
+        companyId,
+        requestId,
+      );
+    } catch (ragError) {
+      this.logger.warn(
+        { error: (ragError as Error).message },
+        'RAG search failed, continuing without context',
+      );
+    }
+
+    const hasMedia = inputParts.some(
+      (p) =>
+        p.type === 'text' &&
+        (p.text?.includes('<transcricao_imagem>') ||
+          p.text?.includes('<transcricao_audio>')),
     );
 
-    const systemPrompt = ragContext
-      ? `${agentConfig.system_prompt}\n\nContexto RAG disponivel:\n${ragContext}\n\nUse o contexto apenas quando ele for relevante.`
-      : agentConfig.system_prompt;
+    const mediaInstruction = hasMedia
+      ? `\n\nO usuario enviou uma imagem ou audio. A transcricao esta disponivel nos formatos abaixo. Responda como se estivesse vendo/ouvindo o conteudo:\n- Imagem: <transcricao_imagem>descricao</transcricao_imagem>\n- Audio: <transcricao_audio>transcricao</transcricao_audio>`
+      : '';
+
+    const systemPrompt = await this.resolvePromptVariables(
+      ragContext
+        ? `${agentConfig.system_prompt}\n\nContexto RAG disponivel:\n${ragContext}\n\nUse o contexto apenas quando ele for relevante.${mediaInstruction}`
+        : agentConfig.system_prompt + mediaInstruction,
+      clientId,
+      state,
+    );
 
     const tools = this.buildToolDefinitions(agentConfig);
 
@@ -135,7 +189,7 @@ export class OrchestrationService {
       onToolCall: async (toolName, args) => {
         return this.toolCallDispatcher.dispatch(
           String(toolName),
-          (args as Record<string, unknown>) || {},
+          args || {},
           agentConfig,
           agentRun.id,
           conversationId,
@@ -161,16 +215,67 @@ export class OrchestrationService {
       },
     };
 
+    let activeProvider = provider;
+    let activeProviderName = llmProvider;
+    let activeModel = agentConfig.model || llmConfig.models.gemini;
+    let fallbackUsed = false;
+
+    // 1. Verifica se o circuito do provedor primário está aberto
+    const canUsePrimary = await this.circuitBreaker.canExecute(
+      llmProvider,
+      clientId,
+    );
+    if (!canUsePrimary) {
+      this.logger.warn(
+        { provider: llmProvider, clientId },
+        'Circuito aberto para provedor primário. Tentando fallback imediato',
+      );
+      const fallback = await this.fallbackProviderService.resolveFallback(
+        clientId,
+        llmProvider,
+        activeModel,
+      );
+      if (fallback.hasFallback && fallback.target) {
+        activeProviderName = fallback.target.provider;
+        activeModel = fallback.target.model;
+        activeProvider = getLLMProvider(
+          fallback.target.provider,
+          fallback.target.apiKey,
+        );
+        params.agentConfig.model = activeModel;
+        fallbackUsed = true;
+      }
+    }
+
     try {
-      if (provider.chatWithParts) {
+      if (activeProvider.chatWithParts) {
         this.logger.log(
           {
             conversationId: sanitize(conversationId),
             companyId: sanitize(companyId),
+            provider: activeProviderName,
+            model: activeModel,
+            fallbackUsed,
           },
           'Processing with chatWithParts',
         );
-        const output = await provider.chatWithParts(params);
+
+        const output = await retryWithBackoff(
+          async () => activeProvider.chatWithParts!(params),
+          {
+            maxRetries: 2,
+            initialDelayMs: 300,
+            onRetry: (err, attempt) => {
+              this.logger.warn(
+                { attempt, error: (err as Error).message },
+                'Retry na chamada de LLM',
+              );
+            },
+          },
+        );
+
+        await this.circuitBreaker.recordSuccess(activeProviderName, clientId);
+
         const result = await this.handleOutput(
           conversationId,
           companyId,
@@ -182,18 +287,46 @@ export class OrchestrationService {
           agentRun.id,
           'success',
           result.responseMessageId,
+          output.usage,
+          activeModel,
+          activeProviderName,
         );
         return { ...result, agentId: agentConfig.agentId };
       }
 
-      const legacyOutput = await provider.chat({
-        systemPrompt: agentConfig.system_prompt,
-        userMessage: text,
-        history: [{ role: 'user', content: text }],
-        publicTools: [],
-        allToolsList: [],
-        executeExternalApiCallback: async () => ({}),
+      const legacyHistory = history.map((msg) => {
+        let content = '';
+        if (msg.parts && Array.isArray(msg.parts)) {
+          content = msg.parts
+            .filter((p) => p.type === 'text')
+            .map((p) => p.text)
+            .join('\n');
+        }
+        return {
+          role: msg.role === 'assistant' ? 'assistant' : 'user',
+          content,
+        };
       });
+
+      const legacyOutput = await retryWithBackoff(
+        async () =>
+          activeProvider.chat({
+            systemPrompt: agentConfig.system_prompt + mediaInstruction,
+            userMessage: [
+              text,
+              ...inputParts.filter((p) => p.type === 'text').map((p) => p.text),
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            history: legacyHistory,
+            publicTools: [],
+            allToolsList: [],
+            executeExternalApiCallback: async () => ({}),
+          }),
+        { maxRetries: 2, initialDelayMs: 300 },
+      );
+
+      await this.circuitBreaker.recordSuccess(activeProviderName, clientId);
 
       const responseMessage = await this.conversationsService.addMessage({
         conversation_id: conversationId,
@@ -206,7 +339,14 @@ export class OrchestrationService {
         request_id: requestId,
       });
 
-      await this.completeAgentRun(agentRun.id, 'success', responseMessage.id);
+      await this.completeAgentRun(
+        agentRun.id,
+        'success',
+        responseMessage.id,
+        legacyOutput.usage,
+        activeModel,
+        activeProviderName,
+      );
 
       return {
         responseText: legacyOutput.text,
@@ -215,10 +355,91 @@ export class OrchestrationService {
         hadTools: false,
         calledTools: [],
       };
-    } catch (error) {
-      await this.failAgentRun(agentRun.id, error);
-      throw error;
+    } catch (primaryError) {
+      await this.circuitBreaker.recordFailure(
+        activeProviderName,
+        primaryError,
+        clientId,
+      );
+
+      // Se ainda não tiver usado fallback, tenta recuperar no provedor de fallback
+      if (!fallbackUsed) {
+        const fallback = await this.fallbackProviderService.resolveFallback(
+          clientId,
+          activeProviderName,
+          activeModel,
+        );
+
+        if (fallback.hasFallback && fallback.target) {
+          this.logger.log(
+            { from: activeProviderName, to: fallback.target.provider },
+            'Executando fallback automático após falha no provedor primário',
+          );
+
+          try {
+            const fallbackProvider = getLLMProvider(
+              fallback.target.provider,
+              fallback.target.apiKey,
+            );
+            params.agentConfig.model = fallback.target.model;
+
+            if (fallbackProvider.chatWithParts) {
+              const output = await fallbackProvider.chatWithParts(params);
+              await this.circuitBreaker.recordSuccess(
+                fallback.target.provider,
+                clientId,
+              );
+
+              const result = await this.handleOutput(
+                conversationId,
+                companyId,
+                requestId,
+                output,
+                [],
+              );
+              await this.completeAgentRun(
+                agentRun.id,
+                'success',
+                result.responseMessageId,
+                output.usage,
+                fallback.target.model,
+                fallback.target.provider,
+              );
+              return { ...result, agentId: agentConfig.agentId };
+            }
+          } catch (fallbackError) {
+            await this.circuitBreaker.recordFailure(
+              fallback.target.provider,
+              fallbackError,
+              clientId,
+            );
+          }
+        }
+      }
+
+      await this.failAgentRun(agentRun.id, primaryError);
+      throw primaryError;
     }
+  }
+
+  private async waitForMediaProcessing(messageId: string): Promise<void> {
+    const started = Date.now();
+    const timeoutMs = 15_000;
+    const intervalMs = 2_000;
+
+    while (Date.now() - started < timeoutMs) {
+      const pending = await this.prisma.media_assets.findFirst({
+        where: {
+          message_id: messageId,
+          status: { in: ['pending', 'processing'] },
+        },
+      });
+
+      if (!pending) return;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+
+    this.logger.warn({ messageId }, 'Timeout waiting for media processing');
   }
 
   private async buildInputParts(
@@ -251,9 +472,11 @@ export class OrchestrationService {
           const asset = message.media_assets?.find(
             (a: any) => a.id === part.media_asset_id,
           );
-          const description =
-            asset?.ocr_text || '[Imagem sem descricao disponivel]';
-          parts.push({ type: 'text', text: `[Imagem: ${description}]` });
+          const description = asset?.ocr_text || 'sem descricao disponivel';
+          parts.push({
+            type: 'text',
+            text: `<transcricao_imagem>\n${description}\n</transcricao_imagem>`,
+          });
         }
       }
 
@@ -273,11 +496,10 @@ export class OrchestrationService {
           const asset = message.media_assets?.find(
             (a: any) => a.id === part.media_asset_id,
           );
-          const transcript =
-            asset?.transcript || '[Audio sem transcricao disponivel]';
+          const transcript = asset?.transcript || 'sem transcricao disponivel';
           parts.push({
             type: 'text',
-            text: `[Audio transcrito: ${transcript}]`,
+            text: `<transcricao_audio>\n${transcript}\n</transcricao_audio>`,
           });
         }
       }
@@ -295,6 +517,7 @@ export class OrchestrationService {
 
   private async buildHistory(
     conversationId: string,
+    currentMessageId: string,
     agentConfig: AgentConfig,
     providerCapabilities: ProviderCapabilities,
   ): Promise<AgentMessage[]> {
@@ -305,7 +528,7 @@ export class OrchestrationService {
     const history: AgentMessage[] = [];
 
     for (const msg of messages.slice(-20)) {
-      if (msg.id === conversationId) continue;
+      if (msg.id === currentMessageId) continue;
 
       const parts: MessagePart[] = [];
 
@@ -340,7 +563,7 @@ export class OrchestrationService {
             } else {
               parts.push({
                 type: 'text',
-                text: `[Imagem: ${asset?.ocr_text || 'sem descricao'}]`,
+                text: `<transcricao_imagem>\n${asset?.ocr_text || 'sem descricao'}\n</transcricao_imagem>`,
                 order_index: part.order_index,
               });
             }
@@ -363,7 +586,7 @@ export class OrchestrationService {
             } else {
               parts.push({
                 type: 'text',
-                text: `[Audio: ${asset?.transcript || 'sem transcricao'}]`,
+                text: `<transcricao_audio>\n${asset?.transcript || 'sem transcricao'}\n</transcricao_audio>`,
                 order_index: part.order_index,
               });
             }
@@ -402,6 +625,7 @@ export class OrchestrationService {
       tools.push(this.toolCallDispatcher.mediaDescribeImageToolDefinition());
       tools.push(this.toolCallDispatcher.switchAgentToolDefinition());
       tools.push(this.toolCallDispatcher.setVariableToolDefinition());
+      tools.push(this.toolCallDispatcher.transferToHumanToolDefinition());
     }
 
     return tools;
@@ -439,15 +663,38 @@ export class OrchestrationService {
     agentRunId: string,
     status: string,
     responseMessageId?: string,
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+    },
+    model?: string,
+    provider?: string,
   ) {
     const current = await this.prisma.agent_runs.findUnique({
       where: { id: agentRunId },
     });
+
+    const inputTokens = usage?.input_tokens ?? 0;
+    const outputTokens = usage?.output_tokens ?? 0;
+    const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+
+    const cost = this.modelPricingService.calculateTokenCost({
+      provider: provider || current?.provider || undefined,
+      model: model || current?.model || undefined,
+      inputTokens,
+      outputTokens,
+    });
+
     await this.prisma.agent_runs.update({
       where: { id: agentRunId },
       data: {
         status,
         response_message_id: responseMessageId || null,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        total_tokens: totalTokens,
+        cost,
         completed_at: new Date(),
         latency_ms: current?.started_at
           ? Date.now() - current.started_at.getTime()
@@ -464,6 +711,48 @@ export class OrchestrationService {
         error_message:
           error instanceof Error ? error.message : 'Agent run failed',
       },
+    });
+  }
+
+  private async resolvePromptVariables(
+    prompt: string | null,
+    clientId: string,
+    state: Record<string, unknown>,
+  ): Promise<string> {
+    if (!prompt) return '';
+
+    const client = await this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+      select: { agent_name: true },
+    });
+
+    const variables: Record<string, string> = {
+      nome_agente: client?.agent_name || '',
+    };
+
+    for (const [key, value] of Object.entries(state)) {
+      if (value !== null && value !== undefined) {
+        variables[key] =
+          typeof value === 'string' ? value : JSON.stringify(value);
+      }
+    }
+
+    return prompt.replace(/\[\[([^\]]+)]]/g, (match, rawKey: string) => {
+      const key = rawKey.trim();
+
+      if (Object.prototype.hasOwnProperty.call(variables, key)) {
+        return variables[key];
+      }
+
+      const hojeMatch = key.match(/^hoje([+-]\d+)?$/);
+      if (hojeMatch) {
+        const offset = hojeMatch[1] ? parseInt(hojeMatch[1], 10) : 0;
+        const date = new Date();
+        date.setDate(date.getDate() + offset);
+        return date.toLocaleDateString('pt-BR');
+      }
+
+      return match;
     });
   }
 }

@@ -22,6 +22,9 @@ const VALID_CHANNELS = [
 class MessagePartDto {
   @IsString()
   @MaxLength(50)
+  @IsIn(['text', 'image', 'audio', 'file'], {
+    message: 'part type deve ser: text, image, audio ou file',
+  })
   type!: string;
 
   @IsOptional()
@@ -56,6 +59,9 @@ class MessagePartDto {
 class MessageContentDto {
   @IsString()
   @MaxLength(50)
+  @IsIn(['text', 'image', 'audio', 'file', 'mixed'], {
+    message: 'message.type deve ser: text, image, audio, file ou mixed',
+  })
   type!: string;
 
   @IsOptional()

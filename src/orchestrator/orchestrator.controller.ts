@@ -33,8 +33,6 @@ export class OrchestratorController {
     private readonly testChatService: TestChatService,
   ) {}
 
-  @Public()
-  @UseGuards(DevOnlyGuard)
   @Post('test-chat')
   async testChat(@Body() dto: TestChatDto) {
     try {
@@ -58,14 +56,13 @@ export class OrchestratorController {
     }
   }
 
-  @Public()
-  @UseGuards(DevOnlyGuard)
   @Post('list-models')
   async listModels(@Body() body: ListModelsDto) {
     try {
       const models = await this.testChatService.listModels(
         body.provider,
         body.apiKey,
+        body.clientId,
       );
       return { models };
     } catch (error: any) {

@@ -1,18 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { ProviderKeyResolverService } from './provider-key-resolver.service';
 import type { AgentConfig } from '../types/capabilities.types';
 
 @Injectable()
 export class RagSearchService {
   private readonly logger = new Logger(RagSearchService.name);
-  private readonly openai = process.env.OPENAI_API_KEY
-    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    : null;
   private readonly embeddingModel =
     process.env.RAG_EMBEDDING_MODEL || 'text-embedding-3-small';
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly providerKeyResolver: ProviderKeyResolverService,
+  ) {}
 
   async buildRagContext(
     agentConfig: AgentConfig,
@@ -64,7 +66,39 @@ export class RagSearchService {
     companyId: string,
     requestId?: string,
   ) {
-    if (!this.openai || agentConfig.allowed_knowledge_base_ids.length === 0) {
+    if (agentConfig.allowed_knowledge_base_ids.length === 0) {
+      return [];
+    }
+
+    // Resolve todos os provedores viáveis que possuem chaves configuradas
+    const providersToTry: { name: string; apiKey: string }[] = [];
+    const preferred =
+      (agentConfig as any).llmProvider || (agentConfig as any).provider;
+
+    const candidates = [
+      preferred,
+      'openai',
+      'openrouter',
+      'groq',
+      'gemini',
+    ].filter(Boolean) as string[];
+    const uniqueCandidates = Array.from(new Set(candidates));
+
+    for (const provider of uniqueCandidates) {
+      const apiKey = await this.providerKeyResolver.resolveApiKey(
+        clientId,
+        provider,
+      );
+      if (apiKey) {
+        providersToTry.push({ name: provider, apiKey });
+      }
+    }
+
+    if (providersToTry.length === 0) {
+      this.logger.warn(
+        { clientId },
+        'Nenhum provedor de embedding configurado com chave de API.',
+      );
       return [];
     }
 
@@ -84,71 +118,130 @@ export class RagSearchService {
       },
     });
 
-    try {
-      const embeddingResponse = await this.openai.embeddings.create({
-        model: this.embeddingModel,
-        input: query,
-      });
-      const embedding = `[${embeddingResponse.data[0].embedding.join(',')}]`;
+    let lastError: Error | null = null;
 
-      const results = await this.prisma.$queryRawUnsafe<
-        Array<{
-          id: string;
-          document_id: string;
-          document_title: string;
-          content: string;
-          page: number | null;
-          score: number;
-        }>
-      >(
-        `
-        SELECT
-          kc.id,
-          kc.document_id,
-          kd.title AS document_title,
-          kc.content,
-          kc.page,
-          1 - (ke.embedding <=> $1::vector) AS score
-        FROM knowledge_embeddings ke
-        JOIN knowledge_chunks kc ON kc.id = ke.chunk_id
-        JOIN knowledge_documents kd ON kd.id = kc.document_id
-        WHERE ke.client_id = $2::uuid
-          AND ke.knowledge_base_id = ANY($3::uuid[])
-        ORDER BY ke.embedding <=> $1::vector
-        LIMIT $4
-        `,
-        embedding,
-        clientId,
-        agentConfig.allowed_knowledge_base_ids,
-        Math.min(Math.max(limit || 5, 1), 10),
-      );
+    for (const providerConfig of providersToTry) {
+      try {
+        let embedding: string;
 
-      await this.prisma.tool_calls.update({
-        where: { id: toolCall.id },
-        data: {
-          status: 'success',
-          latency_ms: Date.now() - startedAt,
-          result: {
-            count: results.length,
-            chunks: results.map((r) => ({ id: r.id, score: r.score })),
-          } as any,
-          completed_at: new Date(),
-        },
-      });
-      return results;
-    } catch (error) {
-      await this.prisma.tool_calls.update({
-        where: { id: toolCall.id },
-        data: {
-          status: 'failed',
-          latency_ms: Date.now() - startedAt,
-          error_message:
-            error instanceof Error ? error.message : 'RAG search failed',
-          completed_at: new Date(),
-        },
-      });
-      throw error;
+        if (providerConfig.name === 'gemini') {
+          const genAI = new GoogleGenerativeAI(providerConfig.apiKey);
+          const genAIModel = genAI.getGenerativeModel({
+            model: 'text-embedding-004',
+          });
+          this.logger.log(
+            `Tentando obter embedding com o provedor: gemini, modelo: text-embedding-004`,
+          );
+          const embeddingResponse = await genAIModel.embedContent(query);
+          embedding = `[${embeddingResponse.embedding.values.join(',')}]`;
+        } else {
+          let client: OpenAI;
+          let model: string;
+
+          if (providerConfig.name === 'openai') {
+            client = new OpenAI({ apiKey: providerConfig.apiKey });
+            model = this.embeddingModel;
+          } else if (providerConfig.name === 'openrouter') {
+            client = new OpenAI({
+              baseURL: 'https://openrouter.ai/api/v1',
+              apiKey: providerConfig.apiKey,
+              defaultHeaders: {
+                'HTTP-Referer': 'https://github.com/antigravity',
+                'X-Title': 'Synexa',
+              },
+            });
+            model =
+              process.env.RAG_EMBEDDING_MODEL ||
+              'openai/text-embedding-3-small';
+          } else if (providerConfig.name === 'groq') {
+            client = new OpenAI({
+              baseURL: 'https://api.groq.com/openai/v1',
+              apiKey: providerConfig.apiKey,
+            });
+            model = 'nomic-embed-text-v1.5';
+          } else {
+            continue;
+          }
+
+          this.logger.log(
+            `Tentando obter embedding com o provedor: ${providerConfig.name}, modelo: ${model}`,
+          );
+          const embeddingResponse = await client.embeddings.create({
+            model,
+            input: query,
+          });
+          embedding = `[${embeddingResponse.data[0].embedding.join(',')}]`;
+        }
+
+        const results = await this.prisma.$queryRawUnsafe<
+          Array<{
+            id: string;
+            document_id: string;
+            document_title: string;
+            content: string;
+            page: number | null;
+            score: number;
+          }>
+        >(
+          `
+          SELECT
+            kc.id,
+            kc.document_id,
+            kd.title AS document_title,
+            kc.content,
+            kc.page,
+            1 - (ke.embedding <=> $1::vector) AS score
+          FROM knowledge_embeddings ke
+          JOIN knowledge_chunks kc ON kc.id = ke.chunk_id
+          JOIN knowledge_documents kd ON kd.id = kc.document_id
+          WHERE ke.client_id = $2::uuid
+            AND ke.knowledge_base_id = ANY($3::uuid[])
+          ORDER BY ke.embedding <=> $1::vector
+          LIMIT $4
+          `,
+          embedding,
+          clientId,
+          agentConfig.allowed_knowledge_base_ids,
+          Math.min(Math.max(limit || 5, 1), 10),
+        );
+
+        await this.prisma.tool_calls.update({
+          where: { id: toolCall.id },
+          data: {
+            status: 'success',
+            latency_ms: Date.now() - startedAt,
+            result: {
+              count: results.length,
+              chunks: results.map((r) => ({ id: r.id, score: r.score })),
+              provider_used: providerConfig.name,
+            } as any,
+            completed_at: new Date(),
+          },
+        });
+        return results;
+      } catch (error) {
+        this.logger.warn(
+          { provider: providerConfig.name, error: (error as Error).message },
+          'Falha na chamada de embedding do provedor. Tentando próximo...',
+        );
+        lastError = error as Error;
+      }
     }
+
+    // Se todos falharem:
+    await this.prisma.tool_calls.update({
+      where: { id: toolCall.id },
+      data: {
+        status: 'failed',
+        latency_ms: Date.now() - startedAt,
+        error_message: lastError
+          ? lastError.message
+          : 'All embedding providers failed',
+        completed_at: new Date(),
+      },
+    });
+
+    throw lastError || new Error('All embedding providers failed');
   }
 
   ragToolDefinition() {

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, Patch, Delete } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Patch,
+  Delete,
+} from '@nestjs/common';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { CreateKnowledgeDocumentDto } from './dto/create-knowledge-document.dto';
@@ -67,10 +75,7 @@ export class KnowledgeController {
   }
 
   @Delete('knowledge-bases/:id')
-  deleteBase(
-    @Param('id') id: string,
-    @CurrentUser() user: { id: string },
-  ) {
+  deleteBase(@Param('id') id: string, @CurrentUser() user: { id: string }) {
     return this.knowledgeService.deleteBase(id, user.id);
   }
 

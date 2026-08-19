@@ -3,6 +3,13 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { WebSearchService } from '../agents/web-search/web-search.service';
+import { AgentConfigResolver } from './services/agent-config-resolver.service';
+import { RagSearchService } from './services/rag-search.service';
+import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
+import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
+import { ModelPricingService } from './services/model-pricing.service';
+import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
+import { FallbackProviderService } from './services/fallback-provider.service';
 
 jest.mock('./providers/llm-provider.factory', () => ({
   getLLMProvider: () => ({
@@ -54,6 +61,12 @@ describe('OrchestrationService', () => {
     conversations: {
       findMany: jest.fn().mockResolvedValue([]),
     },
+    media_assets: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+    painel_clients: {
+      findUnique: jest.fn().mockResolvedValue({ agent_name: 'Bot' }),
+    },
     message_events: { create: jest.fn().mockResolvedValue({}) },
     knowledge_bases: { findMany: jest.fn().mockResolvedValue([]) },
     knowledge_embeddings: { findMany: jest.fn().mockResolvedValue([]) },
@@ -77,6 +90,90 @@ describe('OrchestrationService', () => {
     del: jest.fn(),
   };
 
+  const mockAgentConfig = {
+    agentId: 'agent-1',
+    id: 'agent-1',
+    name: 'Test Agent',
+    model: 'test-model',
+    system_prompt: 'You are a helpful assistant.',
+    capabilities: {
+      text: true,
+      vision: false,
+      audio_in: false,
+      audio_out: false,
+      rag: false,
+      web_search: false,
+      tools: true,
+    },
+    citation_policy: { policy: 'optional' },
+    allowed_knowledge_base_ids: [],
+    allowed_tool_names: [],
+    web_search_allowed: false,
+    temperature: 0.3,
+  };
+
+  const mockAgentConfigResolver = {
+    resolveAgentConfig: jest.fn().mockResolvedValue(mockAgentConfig),
+  };
+
+  const mockProviderKeyResolver = {
+    resolveApiKey: jest.fn().mockResolvedValue('mock-api-key'),
+    resolveKey: jest.fn().mockResolvedValue('mock-api-key'),
+    resolveEncryptedKey: jest.fn().mockResolvedValue('mock-api-key'),
+  };
+
+  const mockRagSearchService = {
+    buildRagContext: jest.fn().mockResolvedValue(undefined),
+    searchRag: jest.fn().mockResolvedValue([]),
+    ragToolDefinition: jest.fn().mockReturnValue({
+      name: 'rag.search',
+      type: 'native',
+      description: 'Mock RAG search',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    }),
+  };
+
+  const mockToolCallDispatcher = {
+    dispatch: jest.fn().mockResolvedValue({ result: 'tool_executed' }),
+    webSearchToolDefinition: jest.fn().mockReturnValue({
+      name: 'web_search',
+      type: 'native',
+      description: 'Mock web search',
+      parameters: {},
+    }),
+    mediaTranscribeToolDefinition: jest.fn().mockReturnValue({
+      name: 'media.transcribe',
+      type: 'native',
+      description: 'Mock media transcribe',
+      parameters: {},
+    }),
+    mediaDescribeImageToolDefinition: jest.fn().mockReturnValue({
+      name: 'media.describe_image',
+      type: 'native',
+      description: 'Mock media describe',
+      parameters: {},
+    }),
+    switchAgentToolDefinition: jest.fn().mockReturnValue({
+      name: 'switch_agent',
+      description: 'Mock switch agent',
+      parameters: {},
+    }),
+    setVariableToolDefinition: jest.fn().mockReturnValue({
+      name: 'set_variable',
+      description: 'Mock set variable',
+      parameters: {},
+    }),
+    transferToHumanToolDefinition: jest.fn().mockReturnValue({
+      name: 'transfer_to_human',
+      description: 'Mock transfer to human',
+      parameters: {},
+    }),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -84,6 +181,39 @@ describe('OrchestrationService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: RedisService, useValue: mockRedis },
         { provide: ConversationsService, useValue: mockConversationsService },
+        { provide: AgentConfigResolver, useValue: mockAgentConfigResolver },
+        {
+          provide: ProviderKeyResolverService,
+          useValue: mockProviderKeyResolver,
+        },
+        { provide: RagSearchService, useValue: mockRagSearchService },
+        { provide: ToolCallDispatcher, useValue: mockToolCallDispatcher },
+        {
+          provide: ModelPricingService,
+          useValue: {
+            calculateTokenCost: jest.fn().mockReturnValue(0.0001),
+            calculateAudioCost: jest.fn().mockReturnValue(0.0005),
+          },
+        },
+        {
+          provide: ProviderCircuitBreakerService,
+          useValue: {
+            canExecute: jest.fn().mockResolvedValue(true),
+            recordSuccess: jest.fn().mockResolvedValue(undefined),
+            recordFailure: jest.fn().mockResolvedValue(undefined),
+            getState: jest
+              .fn()
+              .mockResolvedValue({ state: 'CLOSED', consecutiveFailures: 0 }),
+          },
+        },
+        {
+          provide: FallbackProviderService,
+          useValue: {
+            resolveFallback: jest
+              .fn()
+              .mockResolvedValue({ hasFallback: false }),
+          },
+        },
         {
           provide: WebSearchService,
           useValue: {
@@ -94,7 +224,13 @@ describe('OrchestrationService', () => {
             }),
             getNativeToolId: jest.fn().mockReturnValue('web_search'),
             execute: jest.fn().mockResolvedValue({
-              results: [{ title: 'Mock result', snippet: 'Mock snippet', link: 'https://example.com' }],
+              results: [
+                {
+                  title: 'Mock result',
+                  snippet: 'Mock snippet',
+                  link: 'https://example.com',
+                },
+              ],
               source: 'OpenRouter',
             }),
           },

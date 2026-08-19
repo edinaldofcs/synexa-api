@@ -144,7 +144,10 @@ export class AdminService {
     });
   }
 
-  async updateCompany(id: string, data: { name?: string; cnpj?: string; plan?: string; status?: string }) {
+  async updateCompany(
+    id: string,
+    data: { name?: string; cnpj?: string; plan?: string; status?: string },
+  ) {
     return this.prisma.companies.update({
       where: { id },
       data: {
@@ -177,4 +180,3 @@ export class AdminService {
     });
   }
 }
-

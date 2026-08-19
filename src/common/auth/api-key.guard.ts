@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { ConfigService } from '@nestjs/config';
 
 export const REQUIRES_API_KEY = 'requires_api_key';
 
@@ -17,6 +18,7 @@ export class ApiKeyGuard implements CanActivate {
     private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
     private readonly reflector: Reflector,
+    private readonly configService: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -26,6 +28,11 @@ export class ApiKeyGuard implements CanActivate {
     );
 
     if (!requiresApiKey) return true;
+
+    const isDev = this.configService.get('ENVIRONMENT') === 'development';
+    if (isDev) {
+      return true;
+    }
 
     const request = context.switchToHttp().getRequest();
     const clientId = request.body?.client_id;

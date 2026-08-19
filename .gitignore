@@ -62,3 +62,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Scratch / dev scripts
 _dev/
+
+# Runtime media files
+/uploads/

@@ -19,6 +19,44 @@ const DEFAULT_LIMIT = 20;
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
+  @Get('summary')
+  getMetricsSummary(
+    @CurrentUser() user: any,
+    @Query('company_id') company_id?: string,
+    @Query('client_id') client_id?: string,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.auditService.getMetricsSummary({
+      company_id: company_id || ctx.companyId,
+      client_id,
+    });
+  }
+
+  @Get('credentials')
+  listCredentialAuditLogs(
+    @CurrentUser() user: any,
+    @Query('company_id') company_id?: string,
+    @Query('client_id') client_id?: string,
+    @Query('provider') provider?: string,
+    @Query('page', new DefaultValuePipe(DEFAULT_PAGE), ParseIntPipe)
+    page?: number,
+    @Query('limit', new DefaultValuePipe(DEFAULT_LIMIT), ParseIntPipe)
+    limit?: number,
+  ) {
+    const ctx = extractTenantContext(user);
+    const clampedLimit = Math.min(
+      Math.max(1, limit ?? DEFAULT_LIMIT),
+      MAX_LIMIT,
+    );
+    return this.auditService.listCredentialAuditLogs({
+      company_id: company_id || ctx.companyId,
+      client_id,
+      provider,
+      page,
+      limit: clampedLimit,
+    });
+  }
+
   @Get('agent-runs')
   listAgentRuns(
     @CurrentUser() user: any,

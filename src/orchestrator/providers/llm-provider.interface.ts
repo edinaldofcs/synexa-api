@@ -52,7 +52,15 @@ export interface ProviderCapabilities {
 }
 
 export interface LLMProvider {
-  chat(params: ChatParams): Promise<{ text: string; action: string }>;
+  chat(params: ChatParams): Promise<{
+    text: string;
+    action: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+    };
+  }>;
   chatWithParts?(params: AgentChatParams): Promise<AgentOutput>;
   getCapabilities?(): ProviderCapabilities;
 }

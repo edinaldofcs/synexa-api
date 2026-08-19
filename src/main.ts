@@ -10,22 +10,43 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
+  const environment = configService.get<string>('ENVIRONMENT', 'development');
   const corsOrigin = configService.get<string>('CORS_ORIGIN');
   const corsOrigins = corsOrigin
     ? corsOrigin.split(',').map((s) => s.trim())
     : ['http://localhost:5173'];
 
   app.enableCors({
-    origin: corsOrigins,
+    origin: (origin, callback) => {
+      // Permite requisições sem origin (como file://, Postman, cURL) ou qualquer origem em dev
+      if (!origin || origin === 'null' || environment === 'development') {
+        return callback(null, true);
+      }
+      if (corsOrigins.includes(origin) || corsOrigins.includes('*')) {
+        return callback(null, true);
+      }
+      return callback(new Error('Bloqueado por CORS'));
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-signature',
+      'x-timestamp',
+      'x-synexa-signature',
+      'idempotency-key',
+    ],
   });
 
-  app.use(helmet());
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
 
   app.setGlobalPrefix('api');
 
-  const environment = configService.get<string>('ENVIRONMENT', 'development');
   if (environment === 'development') {
     app.use('/uploads', express.static('uploads'));
   }

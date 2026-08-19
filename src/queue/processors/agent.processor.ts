@@ -2,6 +2,7 @@ import { Processor, Process } from '@nestjs/bull';
 import type { Job } from 'bull';
 import { Logger, ConflictException } from '@nestjs/common';
 import { RedisService } from '../../common/redis/redis.service';
+import { PrismaService } from '../../common/prisma/prisma.service';
 import { OrchestrationService } from '../../orchestrator/orchestration.service';
 import { QueueService, DispatchJobData } from '../queue.service';
 import { QUEUE_AGENT, JOB_PROCESS_WITH_AGENT } from '../queue.constants';
@@ -25,6 +26,7 @@ export class AgentProcessor {
   private readonly logger = new Logger(AgentProcessor.name);
 
   constructor(
+    private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
     private readonly orchestrationService: OrchestrationService,
     private readonly queueService: QueueService,
@@ -37,6 +39,23 @@ export class AgentProcessor {
       { conversation_id: data.conversation_id, message_id: data.message_id },
       'Processing message with agent',
     );
+
+    // Se a conversa está em modo manual (com operador humano), a IA não deve responder
+    const conversation = await this.prisma.conversations.findUnique({
+      where: { id: data.conversation_id },
+      select: { mode: true, assigned_to: true },
+    });
+
+    if (conversation?.mode === 'manual') {
+      this.logger.log(
+        {
+          conversation_id: data.conversation_id,
+          assigned_to: conversation.assigned_to,
+        },
+        'Conversa está em modo manual (atendimento humano). Ignorando processamento automático da IA.',
+      );
+      return;
+    }
 
     const lockKey = `lock:agent:${data.conversation_id}`;
     const acquired = await this.redisService.acquireLock(lockKey, 60);

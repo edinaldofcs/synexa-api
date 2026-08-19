@@ -123,10 +123,7 @@ export class ChannelsController {
   }
 
   @Post('channels')
-  async createChannel(
-    @CurrentUser() user: any,
-    @Body() body: any,
-  ) {
+  async createChannel(@CurrentUser() user: any, @Body() body: any) {
     const ctx = extractTenantContext(user);
 
     // Validate that the client belongs to the user's company
@@ -150,7 +147,9 @@ export class ChannelsController {
     });
 
     if (existing) {
-      throw new BadRequestException('A connection of this type already exists for this client');
+      throw new BadRequestException(
+        'A connection of this type already exists for this client',
+      );
     }
 
     const secret = 'whsec_' + randomBytes(24).toString('hex');
@@ -172,7 +171,7 @@ export class ChannelsController {
   @Public()
   @UseGuards(ApiKeyGuard)
   @RequiresApiKey()
-  @Post('api/public/messages')
+  @Post('public/messages')
   async receiveMessage(@Body() body: SendMessageDto): Promise<InboundResult> {
     this.logger.log(
       {

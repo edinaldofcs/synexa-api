@@ -80,6 +80,10 @@ export class RedisService implements OnModuleDestroy {
     return items.map((m) => JSON.parse(m) as T);
   }
 
+  getClient(): Redis {
+    return this.client;
+  }
+
   async quit(): Promise<void> {
     await this.client.quit();
   }

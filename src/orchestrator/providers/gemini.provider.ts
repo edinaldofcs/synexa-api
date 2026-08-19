@@ -99,8 +99,8 @@ export class GeminiProvider implements LLMProvider {
   private readonly logger = new Logger(GeminiProvider.name);
   private genAI: GoogleGenerativeAI;
 
-  constructor() {
-    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+  constructor(apiKey?: string) {
+    this.genAI = new GoogleGenerativeAI(apiKey || '');
   }
 
   getCapabilities(): ProviderCapabilities {
@@ -220,7 +220,15 @@ export class GeminiProvider implements LLMProvider {
         cost: totalCost,
       });
 
-      return parseStructuredResponse(finalText);
+      const parsed = parseStructuredResponse(finalText);
+      return {
+        ...parsed,
+        usage: {
+          input_tokens: totalInputTokens,
+          output_tokens: totalOutputTokens,
+          total_tokens: totalInputTokens + totalOutputTokens,
+        },
+      };
     } catch (error) {
       const endTime = new Date();
       logBenchmark({
@@ -338,6 +346,11 @@ export class GeminiProvider implements LLMProvider {
         text: finalText,
         parts: outputParts,
         citations: [],
+        usage: {
+          input_tokens: totalInputTokens,
+          output_tokens: totalOutputTokens,
+          total_tokens: totalInputTokens + totalOutputTokens,
+        },
       };
     } catch (error) {
       this.logger.error({ model: modelName, error }, 'chatWithParts failed');

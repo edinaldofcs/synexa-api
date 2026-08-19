@@ -6,12 +6,18 @@ import { CompatibilityService } from './compatibility.service';
 import { OrchestrationService } from './orchestration.service';
 import { DevOnlyGuard } from '../common/auth/dev-only.guard';
 import { ConversationsModule } from '../conversations/conversations.module';
+import { MediaModule } from '../media/media.module';
 import { AgentConfigResolver } from './services/agent-config-resolver.service';
 import { RagSearchService } from './services/rag-search.service';
 import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
+import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
+
+import { ModelPricingService } from './services/model-pricing.service';
+import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
+import { FallbackProviderService } from './services/fallback-provider.service';
 
 @Module({
-  imports: [ConversationsModule],
+  imports: [ConversationsModule, MediaModule],
   controllers: [OrchestratorController],
   providers: [
     OrchestratorService,
@@ -22,7 +28,18 @@ import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
     AgentConfigResolver,
     RagSearchService,
     ToolCallDispatcher,
+    ProviderKeyResolverService,
+    ModelPricingService,
+    ProviderCircuitBreakerService,
+    FallbackProviderService,
   ],
-  exports: [OrchestratorService, OrchestrationService, TestChatService],
+  exports: [
+    OrchestratorService,
+    OrchestrationService,
+    TestChatService,
+    ModelPricingService,
+    ProviderCircuitBreakerService,
+    FallbackProviderService,
+  ],
 })
 export class OrchestratorModule {}

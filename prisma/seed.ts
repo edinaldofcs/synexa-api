@@ -104,7 +104,7 @@ async function main() {
       company_id: COMPANY_ID,
       company_name: 'Cliente Teste',
       status: 'active',
-      phone_number: '5511999999999',
+      agent_name: 'Assistente Synexa',
     },
   });
   console.log(`[painel_clients] ${CLIENT_ID} (Cliente Teste)`);
@@ -160,7 +160,9 @@ async function main() {
       model: defaultModel,
       service_step: 'reception',
       execution_order: 1,
-      system_prompt: `Você é o assistente de recepção da Synexa.
+      system_prompt: `Seu nome é [[nome_agente]].
+
+Você é o assistente de recepção da Synexa.
 Seu papel é receber o cliente, identificar o motivo do contato e resolver problemas simples.
 Se o cliente precisar de suporte técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"
 Se o cliente quiser consultar produtos ou preços, responda exatamente: "TRANSFERIR:vendas"
@@ -184,7 +186,9 @@ Responda de forma educada e profissional.`,
       model: defaultModel,
       service_step: 'suporte_tecnico',
       execution_order: 2,
-      system_prompt: `Você é o agente de suporte técnico da Synexa.
+      system_prompt: `Seu nome é [[nome_agente]].
+
+Você é o agente de suporte técnico da Synexa.
 Ajude o cliente a resolver problemas técnicos com produtos e serviços.
 Consulte a base de conhecimento e ferramentas disponíveis.
 Se o problema for financeiro, responda exatamente: "TRANSFERIR:financeiro"
@@ -208,7 +212,9 @@ Se não conseguir resolver, responda exatamente: "TRANSFERIR:humano"`,
       model: defaultModel,
       service_step: 'vendas',
       execution_order: 3,
-      system_prompt: `Você é o agente de vendas da Synexa.
+      system_prompt: `Seu nome é [[nome_agente]].
+
+Você é o agente de vendas da Synexa.
 Apresente produtos e serviços, tire dúvidas sobre preços e condições.
 Use a ferramenta de consulta de produtos para buscar informações atualizadas.
 Se o cliente quiser fechar negócio, colete os dados e registre o pedido.`,
@@ -228,7 +234,9 @@ Se o cliente quiser fechar negócio, colete os dados e registre o pedido.`,
       model: defaultModel,
       service_step: 'financeiro',
       execution_order: 4,
-      system_prompt: `Você é o agente financeiro da Synexa.
+      system_prompt: `Seu nome é [[nome_agente]].
+
+Você é o agente financeiro da Synexa.
 Ajude com questões de pagamento, boletos, faturas e reembolsos.
 Consulte as ferramentas disponíveis para verificar status de pagamentos.
 Se o problema for técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"`,
@@ -250,7 +258,6 @@ Se o problema for técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"`,
   console.log(`[painel_agents]  ${agentFinance.id} (Financeiro)`);
 
   // ── 8. API Tools ─────────────────────────────────────────────
-  // APIs do agente de Suporte Técnico (reais e gratuitas)
   await prisma.painel_apis.create({
     data: {
       client_id: CLIENT_ID,
@@ -268,38 +275,22 @@ Se o problema for técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"`,
   await prisma.painel_apis.create({
     data: {
       client_id: CLIENT_ID,
-      agent_id: agentSupport.id,
-      name: 'Listar Posts (JSONPlaceholder)',
-      description: 'Retorna lista de posts de exemplo para testes. API REST gratuita.',
-      method: 'GET',
-      url: 'https://jsonplaceholder.typicode.com/posts',
-      headers: { 'Content-Type': 'application/json' } as any,
-      visible_to_agent: true,
-      active: true,
-      execution_order: 2,
-    },
-  });
-  await prisma.painel_apis.create({
-    data: {
-      client_id: CLIENT_ID,
-      agent_id: agentSupport.id,
-      name: 'Buscar Usuário (JSONPlaceholder)',
-      description: 'Busca dados de um usuário específico pelo ID.',
-      method: 'GET',
-      url: 'https://jsonplaceholder.typicode.com/users/{userId}',
-      headers: { 'Content-Type': 'application/json' } as any,
-      visible_to_agent: true,
-      active: true,
-      execution_order: 3,
-    },
-  });
-
-  // APIs do agente de Vendas
-  await prisma.painel_apis.create({
-    data: {
-      client_id: CLIENT_ID,
       agent_id: agentSales.id,
-      name: 'Listar Feriados Nacionais (BrasilAPI)',
+      name: 'Cotações de Moedas (AwesomeAPI)',
+      description: 'Cotação atual do dólar, euro e outras moedas em relação ao real. API gratuita.',
+      method: 'GET',
+      url: 'https://economia.awesomeapi.com.br/json/last/USD-BRL',
+      headers: { 'Content-Type': 'application/json' } as any,
+      visible_to_agent: true,
+      active: true,
+      execution_order: 1,
+    },
+  });
+  await prisma.painel_apis.create({
+    data: {
+      client_id: CLIENT_ID,
+      agent_id: agentMain.id,
+      name: 'Listar Feriados (BrasilAPI)',
       description: 'Lista todos os feriados nacionais do Brasil para um ano. API gratuita sem chave.',
       method: 'GET',
       url: 'https://brasilapi.com.br/api/feriados/v1/{ano}',
@@ -309,66 +300,8 @@ Se o problema for técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"`,
       execution_order: 1,
     },
   });
-  await prisma.painel_apis.create({
-    data: {
-      client_id: CLIENT_ID,
-      agent_id: agentSales.id,
-      name: 'Gerar Usuário Aleatório (RandomUser)',
-      description: 'Gera dados de um usuário aleatório para testes. API gratuita sem chave.',
-      method: 'GET',
-      url: 'https://randomuser.me/api/',
-      headers: { 'Content-Type': 'application/json' } as any,
-      visible_to_agent: true,
-      active: true,
-      execution_order: 2,
-    },
-  });
-  await prisma.painel_apis.create({
-    data: {
-      client_id: CLIENT_ID,
-      agent_id: agentSales.id,
-      name: 'Buscar Pokémon (PokéAPI)',
-      description: 'Busca informações de um Pokémon pelo nome. API gratuita sem chave.',
-      method: 'GET',
-      url: 'https://pokeapi.co/api/v2/pokemon/{nome}',
-      headers: { 'Content-Type': 'application/json' } as any,
-      visible_to_agent: true,
-      active: true,
-      execution_order: 3,
-    },
-  });
 
-  // APIs do agente Financeiro
-  await prisma.painel_apis.create({
-    data: {
-      client_id: CLIENT_ID,
-      agent_id: agentFinance.id,
-      name: 'Consultar IP (ip-api)',
-      description: 'Retorna dados de geolocalização de um endereço IP. API gratuita sem chave.',
-      method: 'GET',
-      url: 'http://ip-api.com/json/{ip}',
-      headers: { 'Content-Type': 'application/json' } as any,
-      visible_to_agent: true,
-      active: true,
-      execution_order: 1,
-    },
-  });
-  await prisma.painel_apis.create({
-    data: {
-      client_id: CLIENT_ID,
-      agent_id: agentFinance.id,
-      name: 'Listar Todos (JSONPlaceholder)',
-      description: 'Lista de tarefas de exemplo para testes. API REST gratuita.',
-      method: 'GET',
-      url: 'https://jsonplaceholder.typicode.com/todos',
-      headers: { 'Content-Type': 'application/json' } as any,
-      visible_to_agent: true,
-      active: true,
-      execution_order: 2,
-    },
-  });
-
-  console.log(`[painel_apis]    8 APIs reais criadas (ViaCEP, JSONPlaceholder Posts, JSONPlaceholder Users, BrasilAPI Feriados, RandomUser, PokéAPI, ip-api, JSONPlaceholder Todos)`);
+  console.log(`[painel_apis]    3 APIs criadas (Buscar CEP, Cotações, Feriados)`);
 
   // ── 9. Intentions ─────────────────────────────────────────────
   await prisma.painel_intentions.create({

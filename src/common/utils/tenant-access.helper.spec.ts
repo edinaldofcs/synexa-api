@@ -111,7 +111,9 @@ describe('tenant-access.helper', () => {
     });
 
     it('should return company_id as undefined when given undefined', () => {
-      expect(applyTenantFilter(undefined as any)).toEqual({ company_id: undefined });
+      expect(applyTenantFilter(undefined as any)).toEqual({
+        company_id: undefined,
+      });
     });
   });
 });

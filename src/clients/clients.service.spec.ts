@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ClientsService } from './clients.service';
+import { encrypt } from '../common/utils/crypto.util';
 
 describe('ClientsService', () => {
   const clientsRepository = {
@@ -24,9 +25,21 @@ describe('ClientsService', () => {
     findAllByClient: jest.fn(),
   };
   const metadata = { refresh: jest.fn() };
+  const configService = {
+    get: jest.fn().mockReturnValue('12345678901234567890123456789012'),
+  };
+  const credentialAuditService = {
+    logAction: jest.fn().mockResolvedValue(undefined),
+  };
   const prisma = {
     users: { findUnique: jest.fn() },
     painel_clients: { findUnique: jest.fn() },
+    provider_credentials: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn().mockResolvedValue(null),
+      upsert: jest.fn().mockResolvedValue({ id: 'cred-1' }),
+      update: jest.fn().mockResolvedValue({ id: 'cred-1' }),
+    },
   };
   const service = new ClientsService(
     clientsRepository as never,
@@ -35,6 +48,8 @@ describe('ClientsService', () => {
     apisRepository as never,
     metadata as never,
     prisma as never,
+    configService as never,
+    credentialAuditService as never,
   );
 
   const userId = 'user-1';
@@ -130,5 +145,77 @@ describe('ClientsService', () => {
     await expect(
       service.duplicate('client-old', userId),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('retorna configuração de LLM mascarada e grava auditoria de visualização', async () => {
+    const rawKey = 'gsk_1234567890abcdef';
+    const encKey = `enc:${encrypt(rawKey, '12345678901234567890123456789012')}`;
+
+    prisma.provider_credentials.findMany.mockResolvedValue([
+      {
+        provider: 'groq',
+        api_key_enc: encKey,
+        enabled_models: ['llama-3.3-70b-versatile'],
+        health_status: 'healthy',
+        last_tested_at: new Date('2026-08-16T12:00:00Z'),
+        last_used_at: new Date('2026-08-16T12:30:00Z'),
+      },
+    ]);
+    clientsRepository.findOne.mockResolvedValue({
+      id: 'client-1',
+      metadata: {},
+    });
+
+    const result = await service.getLlmConfig('client-1', userId);
+
+    expect(result.providers.groq).toBeDefined();
+    expect(result.providers.groq.hasStoredKey).toBe(true);
+    expect(result.providers.groq.apiKey).toBe('gsk_...cdef');
+    expect(credentialAuditService.logAction).toHaveBeenCalledWith({
+      companyId,
+      clientId: 'client-1',
+      userId,
+      provider: 'all',
+      action: 'viewed',
+    });
+  });
+
+  it('salva nova chave em provider_credentials e registra auditoria created', async () => {
+    clientsRepository.findOne.mockResolvedValue({
+      id: 'client-1',
+      metadata: {},
+    });
+    prisma.provider_credentials.findFirst.mockResolvedValue(null);
+
+    await service.saveLlmConfig(
+      'client-1',
+      {
+        providers: {
+          gemini: {
+            apiKey: 'AIzaSySampleKey12345',
+            enabledModels: ['gemini-2.5-flash'],
+          },
+        },
+      } as any,
+      userId,
+    );
+
+    expect(prisma.provider_credentials.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          client_id_provider_label: {
+            client_id: 'client-1',
+            provider: 'gemini',
+            label: 'default',
+          },
+        },
+      }),
+    );
+    expect(credentialAuditService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'gemini',
+        action: 'created',
+      }),
+    );
   });
 });

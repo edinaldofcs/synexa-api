@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { llmConfig } from '../providers/llm-config';
-import type { AgentCapabilities, AgentConfig } from '../types/capabilities.types';
+import type {
+  AgentCapabilities,
+  AgentConfig,
+} from '../types/capabilities.types';
 import { DEFAULT_CAPABILITIES } from '../types/capabilities.types';
 import { evaluateConditions } from '../utils/condition-evaluator.util';
 import type { ActivationConditionGroup } from '../utils/condition-evaluator.util';
@@ -64,7 +67,7 @@ export class AgentConfigResolver {
     for (const agent of agents) {
       if (agent.id === currentAgentId) continue;
       const conditions =
-        agent.activation_conditions as unknown as ActivationConditionGroup | null;
+        agent.activation_conditions as ActivationConditionGroup | null;
       if (!conditions) continue;
 
       if (evaluateConditions(conditions, state)) {
@@ -98,7 +101,7 @@ export class AgentConfigResolver {
 
   private agentRecordToConfig(
     painelAgent: SelectAgentResult,
-  ): AgentConfig & { agentId: string } {
+  ): AgentConfig & { agentId: string; llmProvider?: string } {
     const transitions =
       (painelAgent?.transitions as Record<string, unknown>) || {};
     const ws = (transitions.web_search as Record<string, unknown>) || {};
@@ -108,6 +111,7 @@ export class AgentConfigResolver {
       id: painelAgent?.id || 'default',
       name: painelAgent?.service_step || 'default',
       model: painelAgent?.model || llmConfig.models.gemini,
+      llmProvider: (transitions.llm_provider as string) || undefined,
       system_prompt:
         painelAgent?.system_prompt || 'You are a helpful assistant.',
       capabilities: {

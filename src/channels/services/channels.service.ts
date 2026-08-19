@@ -146,20 +146,17 @@ export class ChannelsService {
     }
 
     if (connection.channel_type === 'api') {
-      const returnUrl = metadata?.return_webhook_url as string;
-      if (returnUrl) {
-        await this.webhooksService.deliver(connection.client_id, {
-          event: 'message.completed',
-          conversation_id: (metadata?.conversation_id as string) || '',
-          inbound_message_id: (metadata?.inbound_message_id as string) || '',
-          response_message_id: (metadata?.response_message_id as string) || '',
-          origin_channel: 'api',
-          external_user_id: to,
-          response: { type: 'text', text },
-          status: 'completed',
-          metadata,
-        });
-      }
+      await this.webhooksService.deliver(connection.client_id, {
+        event: 'message.completed',
+        conversation_id: (metadata?.conversation_id as string) || '',
+        inbound_message_id: (metadata?.inbound_message_id as string) || '',
+        response_message_id: (metadata?.response_message_id as string) || '',
+        origin_channel: 'api',
+        external_user_id: to,
+        response: { type: 'text', text },
+        status: 'completed',
+        metadata,
+      });
       return;
     }
 

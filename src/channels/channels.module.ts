@@ -21,4 +21,3 @@ import { ApiAdapter } from './adapters/api.adapter';
   exports: [ChannelsService],
 })
 export class ChannelsModule {}
-

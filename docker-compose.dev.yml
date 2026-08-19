@@ -20,6 +20,11 @@ services:
       - "6379:6379"
     networks:
       - synexa-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
 
   api:
     build:
@@ -38,8 +43,12 @@ services:
       - DATABASE_URL=postgresql://postgres:synexapassword@db:5432/synexa_db?schema=public
       - DIRECT_URL=postgresql://postgres:synexapassword@db:5432/synexa_db?schema=public
       - REDIS_URL=redis://redis:6379
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - synexa-network

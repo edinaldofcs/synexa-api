@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Put,
+  Req,
 } from '@nestjs/common';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -77,7 +78,20 @@ export class ClientsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: LlmConfigDto,
     @CurrentUser() user: { id: string },
+    @Req() req: any,
   ) {
-    return this.clientsService.saveLlmConfig(id, body, user.id);
+    const rawIp =
+      (req?.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      req?.socket?.remoteAddress ||
+      req?.ip ||
+      '127.0.0.1';
+    const userAgent = (req?.headers?.['user-agent'] as string) || undefined;
+    return this.clientsService.saveLlmConfig(
+      id,
+      body,
+      user.id,
+      rawIp,
+      userAgent,
+    );
   }
 }

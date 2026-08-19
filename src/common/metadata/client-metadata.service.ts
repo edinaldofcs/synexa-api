@@ -41,13 +41,13 @@ api_base AS (
 api_cumulative AS (
   SELECT
     s.client_id,
-    s.agent_id,
+    s.id AS agent_id,
     jsonb_agg(DISTINCT b.name ORDER BY b.name) AS api_list
   FROM agent_list s
   JOIN api_base b
     ON b.client_id = s.client_id
    AND b.execution_order <= s.execution_order
-  GROUP BY s.client_id, s.agent_id
+  GROUP BY s.client_id, s.id
 ),
 regras AS (
   SELECT
@@ -81,9 +81,9 @@ api_flags AS (
 SELECT
   jsonb_build_object(
     'sessionId', NULL,
-    'phone_number', a.phone_number,
+    'phone_number', NULL,
     'company_name', a.company_name,
-    'strategy', LOWER(a.strategy),
+    'strategy', NULL,
     'tentativas', 0,
     'ofertas_disponiveis', NULL
   )

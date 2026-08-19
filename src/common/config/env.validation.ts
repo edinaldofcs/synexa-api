@@ -134,7 +134,6 @@ export class EnvironmentVariables {
   @IsNumber({}, { message: 'UPLOAD_MAX_SIZE must be a valid number' })
   @IsOptional()
   UPLOAD_MAX_SIZE?: number = 52428800;
-
 }
 
 export function validateEnv(

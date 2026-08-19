@@ -72,6 +72,8 @@ describe('WebSearchService', () => {
   });
 
   it('rejects direct empty questions', async () => {
-    await expect(service.ask('   ')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.ask('   ')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
   });
 });

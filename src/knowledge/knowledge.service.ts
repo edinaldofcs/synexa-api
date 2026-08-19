@@ -4,8 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { decrypt } from '../common/utils/crypto.util';
 import { QueueService } from '../queue/queue.service';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { CreateKnowledgeDocumentDto } from './dto/create-knowledge-document.dto';
@@ -16,18 +18,14 @@ const DEFAULT_CHUNK_OVERLAP = 180;
 
 @Injectable()
 export class KnowledgeService {
-  private readonly openai: OpenAI | null;
   private readonly embeddingModel =
     process.env.RAG_EMBEDDING_MODEL || 'text-embedding-3-small';
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly queueService: QueueService,
-  ) {
-    this.openai = process.env.OPENAI_API_KEY
-      ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-      : null;
-  }
+    private readonly configService: ConfigService,
+  ) {}
 
   async createBase(
     clientId: string,
@@ -106,7 +104,7 @@ export class KnowledgeService {
 
   async search(baseId: string, dto: SearchKnowledgeDto, userId: string) {
     const base = await this.getAuthorizedBase(baseId, userId);
-    const embedding = await this.createEmbedding(dto.query);
+    const embedding = await this.createEmbedding(dto.query, base.client_id);
     const limit = dto.limit || 5;
 
     return this.prisma.$queryRawUnsafe(
@@ -167,7 +165,7 @@ export class KnowledgeService {
           },
         });
 
-        const embedding = await this.createEmbedding(chunk);
+        const embedding = await this.createEmbedding(chunk, document.client_id);
         await this.prisma.$executeRawUnsafe(
           `
           INSERT INTO knowledge_embeddings
@@ -238,19 +236,55 @@ export class KnowledgeService {
     return base;
   }
 
-  private async createEmbedding(input: string) {
-    if (!this.openai) {
+  private async createEmbedding(input: string, clientId: string) {
+    const openai = await this.getOpenAIForClient(clientId);
+    if (!openai) {
       throw new BadRequestException(
-        'OPENAI_API_KEY is required for RAG embeddings',
+        'API Key para openai/openrouter nao configurada. Configure em Configuracoes > Provedores.',
       );
     }
 
-    const response = await this.openai.embeddings.create({
+    const response = await openai.embeddings.create({
       model: this.embeddingModel,
       input,
     });
 
     return response.data[0].embedding;
+  }
+
+  private async getOpenAIForClient(clientId: string): Promise<OpenAI | null> {
+    const apiKey =
+      (await this.resolveClientApiKey(clientId, 'openai')) ||
+      (await this.resolveClientApiKey(clientId, 'openrouter'));
+    if (!apiKey) return null;
+    return new OpenAI({ apiKey });
+  }
+
+  private async resolveClientApiKey(
+    clientId: string,
+    provider: string,
+  ): Promise<string> {
+    const client = await this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+      select: { metadata: true },
+    });
+
+    const providers = (client?.metadata as any)?.llm_providers || {};
+    const config = providers[provider];
+    let apiKey = config?.apiKey || '';
+
+    if (apiKey && typeof apiKey === 'string' && apiKey.startsWith('enc:')) {
+      const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+      if (encryptionKey) {
+        try {
+          apiKey = decrypt(apiKey.slice(4), encryptionKey);
+        } catch {
+          apiKey = '';
+        }
+      }
+    }
+
+    return apiKey;
   }
 
   private chunkText(text: string) {

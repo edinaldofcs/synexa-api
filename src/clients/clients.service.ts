@@ -16,6 +16,7 @@ import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
 import { ClientsRepository } from './repositories/clients.repository';
 import { encrypt, decrypt } from '../common/utils/crypto.util';
+import { CredentialAuditService } from '../common/services/credential-audit.service';
 
 @Injectable()
 export class ClientsService {
@@ -29,6 +30,7 @@ export class ClientsService {
     private readonly metadataService: ClientMetadataService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly credentialAuditService: CredentialAuditService,
   ) {}
 
   private async getUserCompanyId(userId: string): Promise<string> {
@@ -211,10 +213,78 @@ export class ClientsService {
   async getLlmConfig(clientId: string, userId: string) {
     const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
-    const client = await this.clientsRepository.findOne(clientId);
-    const providers = (client.metadata as any)?.llm_providers || {};
 
-    return { providers: this.decryptLlmProviders(providers) };
+    // 1. Busca credenciais da tabela dedicada provider_credentials
+    const dbCredentials = await this.prisma.provider_credentials.findMany({
+      where: { client_id: clientId },
+    });
+
+    const client = await this.clientsRepository.findOne(clientId);
+    const legacyProviders = (client.metadata as any)?.llm_providers || {};
+    const decryptedLegacy = this.decryptLlmProviders(legacyProviders);
+
+    const masked: Record<string, any> = {};
+
+    // Prioriza registros da tabela provider_credentials
+    for (const cred of dbCredentials) {
+      let rawKey = cred.api_key_enc;
+      if (rawKey && rawKey.startsWith('enc:')) {
+        const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+        if (encryptionKey) {
+          try {
+            rawKey = decrypt(rawKey.slice(4), encryptionKey);
+          } catch {
+            rawKey = '';
+          }
+        }
+      }
+
+      const hasStoredKey = Boolean(rawKey && rawKey.trim().length > 0);
+      masked[cred.provider] = {
+        hasStoredKey,
+        apiKey: hasStoredKey ? this.maskApiKey(rawKey) : '',
+        enabledModels: Array.isArray(cred.enabled_models)
+          ? cred.enabled_models
+          : [],
+        healthStatus: cred.health_status || 'unknown',
+        lastTestedAt: cred.last_tested_at || null,
+        lastUsedAt: cred.last_used_at || null,
+      };
+    }
+
+    // Complementa com provedores do metadata que possam não estar ainda no provider_credentials
+    for (const [key, config] of Object.entries(decryptedLegacy)) {
+      if (!masked[key]) {
+        const rawKey = config?.apiKey || '';
+        const hasStoredKey = Boolean(rawKey && rawKey.length > 0);
+        masked[key] = {
+          hasStoredKey,
+          apiKey: hasStoredKey ? this.maskApiKey(rawKey) : '',
+          enabledModels: config?.enabledModels || [],
+          healthStatus: 'unknown',
+          lastTestedAt: null,
+          lastUsedAt: null,
+        };
+      }
+    }
+
+    // Registra trilha de auditoria não-bloqueante
+    void this.credentialAuditService.logAction({
+      companyId,
+      clientId,
+      userId,
+      provider: 'all',
+      action: 'viewed',
+    });
+
+    return { providers: masked };
+  }
+
+  private maskApiKey(key?: string): string {
+    if (!key || typeof key !== 'string') return '';
+    const clean = key.trim();
+    if (clean.length <= 8) return '********';
+    return `${clean.slice(0, 4)}...${clean.slice(-4)}`;
   }
 
   private decryptLlmProviders(
@@ -250,21 +320,30 @@ export class ClientsService {
 
   private encryptLlmProviders(
     providers: Record<string, any>,
+    existingProviders: Record<string, any> = {},
   ): Record<string, any> {
     const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
-    if (!encryptionKey) return providers;
 
     try {
       const encrypted: Record<string, any> = {};
       for (const [key, config] of Object.entries(providers)) {
         encrypted[key] = { ...config };
-        if (
-          config?.apiKey &&
-          typeof config.apiKey === 'string' &&
-          !config.apiKey.startsWith('enc:')
-        ) {
-          encrypted[key].apiKey =
-            `enc:${encrypt(config.apiKey, encryptionKey)}`;
+        const newKey = config?.apiKey ? String(config.apiKey).trim() : '';
+
+        // Se a chave enviada for uma máscara (ex: 'AIza...1234' ou '********') ou vazia, mantém a existente
+        if (!newKey || newKey.includes('...') || newKey === '********') {
+          if (existingProviders[key]?.apiKey) {
+            encrypted[key].apiKey = existingProviders[key].apiKey;
+          } else {
+            encrypted[key].apiKey = '';
+          }
+          continue;
+        }
+
+        if (encryptionKey && !newKey.startsWith('enc:')) {
+          encrypted[key].apiKey = `enc:${encrypt(newKey, encryptionKey)}`;
+        } else {
+          encrypted[key].apiKey = newKey;
         }
       }
       return encrypted;
@@ -294,7 +373,13 @@ export class ClientsService {
     );
   }
 
-  async saveLlmConfig(clientId: string, body: LlmConfigDto, userId: string) {
+  async saveLlmConfig(
+    clientId: string,
+    body: LlmConfigDto,
+    userId: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
     const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
     const client = await this.clientsRepository.findOne(clientId);
@@ -302,8 +387,136 @@ export class ClientsService {
       typeof client.metadata === 'object' && client.metadata !== null
         ? { ...(client.metadata as Record<string, unknown>) }
         : {};
+
+    const existingProviders =
+      (metadata.llm_providers as Record<string, any>) || {};
+    const normalized = this.normalizeLlmProviders(body?.providers);
+
+    const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+
+    // 1. Sincroniza cada provedor com a tabela provider_credentials e registra auditoria
+    for (const [providerName, config] of Object.entries(normalized)) {
+      const pKey = providerName.toLowerCase();
+      const inputApiKey = config.apiKey ? String(config.apiKey).trim() : '';
+      const enabledModels = config.enabledModels || [];
+
+      // Consulta credencial existente no banco
+      const existingCred = await this.prisma.provider_credentials.findFirst({
+        where: {
+          client_id: clientId,
+          provider: pKey,
+          label: 'default',
+        },
+      });
+
+      const isMasked =
+        inputApiKey.includes('...') || inputApiKey === '********';
+      const isUnchanged =
+        isMasked || (!inputApiKey && existingCred?.api_key_enc);
+
+      if (isUnchanged) {
+        // Se a chave não mudou, verifica se os modelos habilitados mudaram
+        if (existingCred) {
+          const prevModels = Array.isArray(existingCred.enabled_models)
+            ? (existingCred.enabled_models as string[]).slice().sort().join(',')
+            : '';
+          const nextModels = enabledModels.slice().sort().join(',');
+          const modelsChanged = prevModels !== nextModels;
+
+          if (modelsChanged) {
+            await this.prisma.provider_credentials.update({
+              where: { id: existingCred.id },
+              data: {
+                enabled_models: enabledModels,
+                updated_at: new Date(),
+              },
+            });
+            void this.credentialAuditService.logAction({
+              companyId,
+              clientId,
+              userId,
+              provider: pKey,
+              action: 'updated',
+              ipAddress,
+              userAgent,
+              metadata: { enabled_models_count: enabledModels.length },
+            });
+          }
+        }
+      } else if (inputApiKey && inputApiKey !== '') {
+        // Nova chave enviada -> criptografa
+        const finalEncKey =
+          encryptionKey && !inputApiKey.startsWith('enc:')
+            ? `enc:${encrypt(inputApiKey, encryptionKey)}`
+            : inputApiKey;
+
+        const action = existingCred ? 'rotated' : 'created';
+
+        await this.prisma.provider_credentials.upsert({
+          where: {
+            client_id_provider_label: {
+              client_id: clientId,
+              provider: pKey,
+              label: 'default',
+            },
+          },
+          update: {
+            api_key_enc: finalEncKey,
+            enabled_models: enabledModels,
+            status: 'active',
+            updated_at: new Date(),
+          },
+          create: {
+            company_id: companyId,
+            client_id: clientId,
+            provider: pKey,
+            api_key_enc: finalEncKey,
+            label: 'default',
+            status: 'active',
+            enabled_models: enabledModels,
+            created_by: userId,
+          },
+        });
+
+        void this.credentialAuditService.logAction({
+          companyId,
+          clientId,
+          userId,
+          provider: pKey,
+          action,
+          ipAddress,
+          userAgent,
+          metadata: {
+            key_fingerprint: this.maskApiKey(inputApiKey),
+            enabled_models_count: enabledModels.length,
+          },
+        });
+      } else if (!inputApiKey && existingCred) {
+        // Chave foi limpa -> revoga
+        await this.prisma.provider_credentials.update({
+          where: { id: existingCred.id },
+          data: {
+            status: 'revoked',
+            updated_at: new Date(),
+          },
+        });
+
+        void this.credentialAuditService.logAction({
+          companyId,
+          clientId,
+          userId,
+          provider: pKey,
+          action: 'revoked',
+          ipAddress,
+          userAgent,
+        });
+      }
+    }
+
+    // 2. Mantém compatibilidade com metadata.llm_providers
     metadata.llm_providers = this.encryptLlmProviders(
-      this.normalizeLlmProviders(body?.providers),
+      normalized,
+      existingProviders,
     );
     metadata.llm_providers_updated_at = new Date().toISOString();
     return this.clientsRepository.update(clientId, { metadata });

@@ -25,6 +25,31 @@ const SENSITIVE_KEYS = new Set([
   'contract_number',
 ]);
 
+const SAFE_KEYS = new Set([
+  'input_tokens',
+  'output_tokens',
+  'total_tokens',
+  'tokens',
+  'token_count',
+  'cost',
+  'latency_ms',
+  'duration_ms',
+  'status',
+  'model',
+  'provider',
+  'started_at',
+  'completed_at',
+  'created_at',
+  'updated_at',
+  'request_id',
+  'conversation_id',
+  'message_id',
+  'client_id',
+  'company_id',
+  'agent_run_id',
+  'id',
+]);
+
 const SENSITIVE_VALUE_PATTERNS = [
   /^\d{3}\.\d{3}\.\d{3}-\d{2}$/, // CPF
   /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/, // CNPJ
@@ -41,6 +66,10 @@ function isSensitiveValue(value: unknown): boolean {
 export function sanitize(obj: unknown, depth = 3): unknown {
   if (depth <= 0) return '[REDACTED]';
 
+  if (obj instanceof Date) {
+    return obj.toISOString();
+  }
+
   if (Array.isArray(obj)) {
     return obj.map((item) => sanitize(item, depth - 1));
   }
@@ -49,6 +78,12 @@ export function sanitize(obj: unknown, depth = 3): unknown {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
       const lowerKey = key.toLowerCase();
+
+      if (SAFE_KEYS.has(lowerKey) || lowerKey.endsWith('_tokens')) {
+        result[key] = sanitize(value, depth - 1);
+        continue;
+      }
+
       if (
         SENSITIVE_KEYS.has(lowerKey) ||
         lowerKey.includes('password') ||

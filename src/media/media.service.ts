@@ -211,6 +211,72 @@ export class MediaService {
     return asset;
   }
 
+  async storeInlineAsset(params: {
+    companyId: string;
+    clientId: string;
+    messageId: string;
+    mimeType: string;
+    data: string;
+    transcript?: string | null;
+  }) {
+    const mimeType = params.mimeType.split(';', 1)[0].trim().toLowerCase();
+    if (!this.isAllowedMime(mimeType)) {
+      throw new BadRequestException(`Unsupported media type: ${mimeType}`);
+    }
+
+    const buffer = Buffer.from(params.data, 'base64');
+    if (!buffer.length) {
+      throw new BadRequestException('Inline media data is empty');
+    }
+    this.validateFileSize(buffer.length);
+
+    await this.ensureBucket();
+    const storagePath = this.buildStoragePath(
+      params.companyId,
+      params.clientId,
+      `inline.${this.extensionForMime(mimeType)}`,
+    );
+
+    if (this.isDevelopment && this.storageProvider) {
+      const { error } = await this.storageProvider.upload(
+        this.bucketName,
+        storagePath,
+        buffer,
+        { contentType: mimeType, cacheControl: '3600' },
+      );
+      if (error)
+        throw new BadRequestException(`Storage upload failed: ${error}`);
+    } else {
+      this.ensureSupabaseConfigured();
+      const { error } = await this.supabase!.storage.from(
+        this.bucketName,
+      ).upload(storagePath, buffer, {
+        cacheControl: '3600',
+        contentType: mimeType,
+        upsert: false,
+      });
+      if (error)
+        throw new BadRequestException(
+          `Storage upload failed: ${error.message}`,
+        );
+    }
+
+    return this.prisma.media_assets.create({
+      data: {
+        company_id: params.companyId,
+        client_id: params.clientId,
+        message_id: params.messageId,
+        storage_bucket: this.bucketName,
+        storage_path: storagePath,
+        mime_type: mimeType,
+        file_size: buffer.length,
+        transcript: params.transcript || null,
+        status: 'ready',
+        metadata: { source: 'enterprise_chat_test', inline: true } as any,
+      },
+    });
+  }
+
   async createSignedUrl(
     assetId: string,
     userId: string,
@@ -400,5 +466,15 @@ export class MediaService {
     if (mimeType.startsWith('audio/') || mimeType.startsWith('image/')) {
       await this.queueService.addMediaJob({ media_asset_id: assetId });
     }
+  }
+
+  private extensionForMime(mimeType: string) {
+    if (mimeType === 'audio/mpeg') return 'mp3';
+    if (mimeType === 'audio/ogg') return 'ogg';
+    if (mimeType === 'audio/wav' || mimeType === 'audio/x-wav') return 'wav';
+    if (mimeType === 'audio/webm') return 'webm';
+    if (mimeType === 'image/jpeg') return 'jpg';
+    if (mimeType === 'image/svg+xml') return 'svg';
+    return mimeType.split('/')[1] || 'bin';
   }
 }

@@ -52,4 +52,9 @@ export interface AgentOutput {
   parts?: MessagePart[];
   action?: string;
   citations?: CitationSource[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
 }

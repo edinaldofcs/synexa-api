@@ -39,10 +39,7 @@ export class ToolCallDispatcher {
     switch (toolName) {
       case 'rag.search':
         if (onSearchRag) {
-          return onSearchRag(
-            String(args.query || ''),
-            Number(args.limit || 5),
-          );
+          return onSearchRag(String(args.query || ''), Number(args.limit || 5));
         }
         return { error: 'RAG search handler not registered' };
       case 'web_search':
@@ -87,6 +84,12 @@ export class ToolCallDispatcher {
         return this.handleSetVariable(
           (args.variables as Record<string, unknown>) || {},
           conversationId,
+        );
+      case 'transfer_to_human':
+      case 'request_handoff':
+        return this.handleTransferToHuman(
+          conversationId,
+          String(args.reason || 'solicitação do usuário'),
         );
       default:
         return { result: 'tool_executed', toolName };
@@ -453,5 +456,50 @@ export class ToolCallDispatcher {
         required: ['variables'],
       },
     };
+  }
+
+  transferToHumanToolDefinition() {
+    return {
+      name: 'transfer_to_human',
+      description:
+        'Transfere o atendimento para um atendente humano / operador. Use SEMPRE que o cliente pedir para falar com um humano, atendente, suporte humano ou quando o problema não puder ser resolvido pela IA.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: {
+            type: 'string',
+            description:
+              'Motivo da transferência para o atendente humano (ex: "solicitação do cliente", "dúvida complexa").',
+          },
+        },
+        required: [],
+      },
+    };
+  }
+
+  async handleTransferToHuman(
+    conversationId: string,
+    reason: string,
+  ): Promise<{ status: string; message: string }> {
+    this.logger.log(
+      { conversation_id: conversationId, reason },
+      'Tool transfer_to_human executada pela IA',
+    );
+    try {
+      await this.conversationsService.requestHandoff(conversationId, {
+        reason,
+        requested_by: 'ai_tool',
+      });
+      return {
+        status: 'transferred',
+        message:
+          'Atendimento transferido para a equipe de atendentes humanos com sucesso. Avise o usuário cordialmente que um operador irá atendê-lo a seguir.',
+      };
+    } catch (err: any) {
+      return {
+        status: 'error',
+        message: `Não foi possível transferir: ${err.message}`,
+      };
+    }
   }
 }

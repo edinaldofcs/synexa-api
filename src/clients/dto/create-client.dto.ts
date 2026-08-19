@@ -14,27 +14,12 @@ export class CreateClientDto {
   @IsString()
   @IsOptional()
   @MaxLength(50)
-  strategy?: string;
-
-  @IsString()
-  @IsOptional()
-  @MaxLength(50)
   status?: string;
-
-  @IsString()
-  @IsOptional()
-  @MaxLength(50)
-  color?: string;
 
   @IsString()
   @IsOptional()
   @MaxLength(255)
   agent_name?: string;
-
-  @IsString()
-  @IsOptional()
-  @MaxLength(50)
-  phone_number?: string;
 
   @IsString()
   @IsOptional()
@@ -50,4 +35,9 @@ export class CreateClientDto {
   @IsOptional()
   @MaxLength(2000)
   logo_url?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  logo_icon?: string;
 }

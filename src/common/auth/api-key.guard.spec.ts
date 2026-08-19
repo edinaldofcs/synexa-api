@@ -37,7 +37,16 @@ describe('ApiKeyGuard', () => {
       set: jest.fn(),
     };
 
-    guard = new ApiKeyGuard(prismaService, redisService, reflector);
+    const configService = {
+      get: jest.fn().mockReturnValue('production'),
+    } as any;
+
+    guard = new ApiKeyGuard(
+      prismaService,
+      redisService,
+      reflector,
+      configService,
+    );
   });
 
   describe('when API key is not required', () => {

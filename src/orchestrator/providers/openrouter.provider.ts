@@ -51,16 +51,16 @@ function buildOpenAIToolDefinition(toolsArray: any[]) {
 }
 
 const SYSTEM_SUFFIX =
-  '\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números.';
+  '\n\nIMPORTANTE: Ao chamar ferramentas, respeite rigorosamente os tipos do schema. Campos do tipo string (como CEP, códigos, CPF, telefone e identificadores) DEVEM SEMPRE ser passados entre aspas como strings (ex: "81450718").';
 
 export class OpenRouterProvider implements LLMProvider {
   private readonly logger = new Logger(OpenRouterProvider.name);
   private openai: OpenAI;
 
-  constructor() {
+  constructor(apiKey?: string) {
     this.openai = new OpenAI({
       baseURL: 'https://openrouter.ai/api/v1',
-      apiKey: process.env.OPENROUTER_API_KEY || '',
+      apiKey: apiKey || '',
       defaultHeaders: {
         'HTTP-Referer': 'https://github.com/antigravity',
         'X-Title': 'Synexa Orchestrator',
@@ -202,7 +202,15 @@ export class OpenRouterProvider implements LLMProvider {
         cost: totalCost,
       });
 
-      return parseStructuredResponse(responseMessage!.content);
+      const parsed = parseStructuredResponse(responseMessage!.content);
+      return {
+        ...parsed,
+        usage: {
+          input_tokens: totalInputTokens,
+          output_tokens: totalOutputTokens,
+          total_tokens: totalInputTokens + totalOutputTokens,
+        },
+      };
     } catch (error) {
       const endTime = new Date();
       logBenchmark({

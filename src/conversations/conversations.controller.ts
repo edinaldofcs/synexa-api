@@ -18,9 +18,70 @@ export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}
 
   @Get()
-  list(@CurrentUser() user: any, @Query('client_id') clientId?: string) {
+  list(
+    @CurrentUser() user: any,
+    @Query('client_id') clientId?: string,
+    @Query('mode') mode?: string,
+    @Query('assigned_to') assignedTo?: string,
+    @Query('unassigned') unassigned?: string,
+    @Query('status') status?: string,
+  ) {
     const ctx = extractTenantContext(user);
-    return this.conversationsService.listByClient(clientId, ctx.companyId);
+    return this.conversationsService.listByClient({
+      clientId,
+      companyId: ctx.companyId,
+      mode,
+      assigned_to: assignedTo,
+      unassigned: unassigned === 'true',
+      status,
+    });
+  }
+
+  @Post('operator/heartbeat')
+  operatorHeartbeat(
+    @CurrentUser() user: any,
+    @Body('status') status?: 'available' | 'finishing',
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.operatorHeartbeat(
+      user.id,
+      ctx.companyId,
+      status,
+    );
+  }
+
+  @Post('operator/status')
+  setOperatorStatus(
+    @CurrentUser() user: any,
+    @Body('status') status: 'available' | 'finishing',
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.setOperatorStatus(
+      user.id,
+      ctx.companyId,
+      status,
+    );
+  }
+
+  @Post('operator/go-offline')
+  operatorGoOffline(@CurrentUser() user: any) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.operatorGoOffline(user.id, ctx.companyId);
+  }
+
+  @Get('operator/online')
+  listOnlineOperators(@CurrentUser() user: any) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.listOnlineOperators(ctx.companyId);
+  }
+
+  @Get('handoff/queue')
+  handoffQueue(
+    @CurrentUser() user: any,
+    @Query('client_id') clientId?: string,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.listHandoffQueue(clientId, ctx.companyId);
   }
 
   @Get(':id')
@@ -64,12 +125,17 @@ export class ConversationsController {
     return this.conversationsService.releaseHandoff(id);
   }
 
-  @Get('handoff/queue')
-  handoffQueue(
+  @Post(':id/reassign')
+  reassign(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body('operator_id') operatorId: string,
     @CurrentUser() user: any,
-    @Query('client_id') clientId?: string,
   ) {
     const ctx = extractTenantContext(user);
-    return this.conversationsService.listHandoffQueue(clientId, ctx.companyId);
+    return this.conversationsService.reassignConversation(
+      id,
+      operatorId,
+      ctx.companyId,
+    );
   }
 }

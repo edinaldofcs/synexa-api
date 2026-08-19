@@ -34,6 +34,8 @@ model companies {
   knowledge_documents knowledge_documents[]
   knowledge_chunks    knowledge_chunks[]
   knowledge_embeddings knowledge_embeddings[]
+  provider_credentials provider_credentials[]
+  credential_audit_logs credential_audit_logs[]
 }
 
 model users {
@@ -204,14 +206,12 @@ model painel_clients {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id   String    @db.Uuid
   company_name String?
-  strategy     String?
   status       String?
-  color        String?
   agent_name   String?
-  phone_number String?
   account_id   String?
   inbox_id     String?
   logo_url     String?
+  logo_icon    String?
 
   companies           companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_agents       painel_agents[]
@@ -232,6 +232,8 @@ model painel_clients {
   knowledge_documents knowledge_documents[]
   knowledge_chunks    knowledge_chunks[]
   knowledge_embeddings knowledge_embeddings[]
+  provider_credentials provider_credentials[]
+  credential_audit_logs credential_audit_logs[]
   metadata            Json?           @default("{}") @db.JsonB
 }
 
@@ -652,4 +654,52 @@ model knowledge_embeddings {
   @@index([client_id])
   @@index([knowledge_base_id])
   @@index([chunk_id])
+}
+
+model provider_credentials {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id     String    @db.Uuid
+  client_id      String    @db.Uuid
+  provider       String    // 'gemini', 'groq', 'openrouter', 'openai'
+  api_key_enc    String    // AES-256-GCM criptografado
+  label          String?   @default("default")
+  status         String    @default("active") // active, revoked, expired
+  enabled_models Json?     @default("[]") @db.JsonB
+  last_used_at   DateTime? @db.Timestamptz(6)
+  last_tested_at DateTime? @db.Timestamptz(6)
+  health_status  String?   @default("unknown") // healthy, invalid_key, quota_exceeded, error
+  created_by     String?   @db.Uuid
+  created_at     DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+
+  @@unique([client_id, provider, label])
+  @@index([company_id])
+  @@index([client_id])
+  @@index([provider])
+  @@index([status])
+}
+
+model credential_audit_logs {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id String    @db.Uuid
+  client_id  String    @db.Uuid
+  user_id    String?   @db.Uuid
+  provider   String
+  action     String    // 'created', 'updated', 'rotated', 'revoked', 'viewed', 'tested'
+  ip_address String?
+  user_agent String?
+  metadata   Json?     @default("{}") @db.JsonB
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([provider])
+  @@index([action])
+  @@index([created_at])
 }

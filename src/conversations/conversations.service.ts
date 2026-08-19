@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ConversationsRepository } from './repositories/conversations.repository';
+import { OperatorPresenceService } from './operator-presence.service';
+import { HandoffDistributorService } from './handoff-distributor.service';
 import {
   FindOrCreateConversationDto,
   AddMessageDto,
@@ -20,6 +22,8 @@ export class ConversationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly conversationsRepo: ConversationsRepository,
+    private readonly presenceService: OperatorPresenceService,
+    private readonly distributorService: HandoffDistributorService,
   ) {}
 
   async findOrCreate(
@@ -122,6 +126,26 @@ export class ConversationsService {
     return this.prisma.messages.findMany({
       where: { conversation_id: conversationId },
       orderBy: { created_at: 'asc' },
+      include: {
+        message_parts: {
+          orderBy: { order_index: 'asc' },
+          include: {
+            media_assets: {
+              select: {
+                id: true,
+                mime_type: true,
+                file_size: true,
+                storage_bucket: true,
+                storage_path: true,
+                source_url: true,
+                transcript: true,
+                ocr_text: true,
+                status: true,
+              },
+            },
+          },
+        },
+      },
     });
   }
 
@@ -198,17 +222,47 @@ export class ConversationsService {
     });
   }
 
-  async listByClient(clientId?: string, companyId?: string | null) {
+  async listByClient(options?: {
+    clientId?: string;
+    companyId?: string | null;
+    mode?: string;
+    assigned_to?: string;
+    unassigned?: boolean;
+    status?: string;
+  }) {
+    const { clientId, companyId, mode, assigned_to, unassigned, status } =
+      options || {};
+
+    // Verifica e redistribui atendimentos órfãos de operadores offline > 5min
+    if (companyId) {
+      try {
+        await this.distributorService.checkAndRedistributeAbandoned(companyId);
+      } catch (err) {
+        this.logger.error(
+          `Erro ao verificar atendimentos abandonados: ${err?.message}`,
+        );
+      }
+    }
+
     const where: any = {};
     if (clientId) where.client_id = clientId;
     if (companyId) where.company_id = companyId;
+    if (status) where.status = status;
+    if (mode) where.mode = mode;
+
+    if (unassigned) {
+      where.assigned_to = null;
+    } else if (assigned_to) {
+      where.assigned_to = assigned_to;
+    }
 
     return this.prisma.conversations.findMany({
       where,
       orderBy: { last_message_at: 'desc' },
-      take: 100,
+      take: 150,
       include: {
-        end_users: { select: { name: true } },
+        end_users: { select: { id: true, name: true } },
+        users: { select: { id: true, name: true, email: true } },
         messages: {
           take: 1,
           orderBy: { created_at: 'desc' },
@@ -240,17 +294,24 @@ export class ConversationsService {
     const conversation = await this.conversationsRepo.findById(conversationId);
     if (!conversation) throw new NotFoundException('Conversation not found');
 
-    if (conversation.mode === 'manual') {
-      throw new BadRequestException('Conversation is already in manual mode');
-    }
+    let targetOperatorId = dto.assigned_to || conversation.assigned_to;
 
     const updated = await this.prisma.conversations.update({
       where: { id: conversationId },
       data: {
         mode: 'manual',
-        assigned_to: dto.assigned_to || conversation.assigned_to,
+        assigned_to: targetOperatorId || null,
       },
     });
+
+    // Se nenhum operador foi fixado explicitamente, executa distribuição automática
+    if (!targetOperatorId) {
+      targetOperatorId = await this.distributorService.distribute(
+        conversationId,
+        updated.company_id,
+        updated.client_id,
+      );
+    }
 
     await this.prisma.message_events.create({
       data: {
@@ -260,7 +321,7 @@ export class ConversationsService {
         event_type: 'handoff.requested',
         status: 'manual',
         payload: {
-          assigned_to: dto.assigned_to,
+          assigned_to: targetOperatorId || null,
           reason: dto.reason || null,
           requested_by: dto.requested_by || 'system',
         } as any,
@@ -268,10 +329,17 @@ export class ConversationsService {
     });
 
     this.logger.log(
-      { conversation_id: conversationId, assigned_to: dto.assigned_to },
-      'Handoff requested',
+      { conversation_id: conversationId, assigned_to: targetOperatorId },
+      'Handoff requested e distribuído',
     );
-    return updated;
+
+    return this.prisma.conversations.findUnique({
+      where: { id: conversationId },
+      include: {
+        end_users: { select: { id: true, name: true } },
+        users: { select: { id: true, name: true, email: true } },
+      },
+    });
   }
 
   async releaseHandoff(conversationId: string) {
@@ -305,10 +373,120 @@ export class ConversationsService {
     return updated;
   }
 
+  async reassignConversation(
+    conversationId: string,
+    newOperatorId: string,
+    companyId: string,
+  ) {
+    const conversation = await this.conversationsRepo.findById(conversationId);
+    if (!conversation) throw new NotFoundException('Conversation not found');
+
+    const operator = await this.prisma.users.findFirst({
+      where: { id: newOperatorId, company_id: companyId },
+      select: { id: true, name: true },
+    });
+    if (!operator) throw new NotFoundException('Operador não encontrado');
+
+    const updated = await this.prisma.conversations.update({
+      where: { id: conversationId },
+      data: {
+        mode: 'manual',
+        assigned_to: newOperatorId,
+      },
+      include: {
+        end_users: { select: { id: true, name: true } },
+        users: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    await this.prisma.message_events.create({
+      data: {
+        company_id: companyId,
+        client_id: conversation.client_id,
+        conversation_id: conversationId,
+        event_type: 'handoff.reassigned',
+        status: 'manual',
+        payload: {
+          previous_operator_id: conversation.assigned_to,
+          new_operator_id: newOperatorId,
+          operator_name: operator.name,
+        } as any,
+      },
+    });
+
+    return updated;
+  }
+
+  async operatorHeartbeat(
+    userId: string,
+    companyId: string,
+    status: 'available' | 'finishing' = 'available',
+  ) {
+    await this.presenceService.heartbeat(userId, companyId, status);
+    // Se o operador está disponível, tenta escoar conversas sem operador na fila
+    if (status === 'available') {
+      await this.distributorService.redistributeQueue(companyId);
+    }
+    return { status, timestamp: new Date().toISOString() };
+  }
+
+  async setOperatorStatus(
+    userId: string,
+    companyId: string,
+    status: 'available' | 'finishing',
+  ) {
+    await this.presenceService.setStatus(userId, companyId, status);
+    if (status === 'available') {
+      await this.distributorService.redistributeQueue(companyId);
+    }
+    return { status, timestamp: new Date().toISOString() };
+  }
+
+  async operatorGoOffline(userId: string, companyId: string) {
+    await this.presenceService.setOffline(userId, companyId);
+    return { status: 'offline', timestamp: new Date().toISOString() };
+  }
+
+  async listOnlineOperators(companyId: string) {
+    const onlineIds = await this.presenceService.listOnline(companyId);
+    if (!onlineIds || onlineIds.length === 0) return [];
+
+    const statusMap =
+      await this.presenceService.listOnlineWithStatus(companyId);
+
+    const operators = await this.prisma.users.findMany({
+      where: { id: { in: onlineIds }, company_id: companyId },
+      select: { id: true, name: true, email: true, role: true },
+    });
+
+    const withLoads = await Promise.all(
+      operators.map(async (op) => {
+        const activeChats = await this.prisma.conversations.count({
+          where: {
+            company_id: companyId,
+            mode: 'manual',
+            status: 'active',
+            assigned_to: op.id,
+          },
+        });
+        const presenceStatus = statusMap.get(op.id) || 'available';
+        return {
+          ...op,
+          active_chats: activeChats,
+          is_online: true,
+          presence_status: presenceStatus,
+        };
+      }),
+    );
+
+    return withLoads;
+  }
+
   async listHandoffQueue(clientId?: string, companyId?: string | null) {
     const where: any = {
       mode: 'manual',
       status: 'active',
+      assigned_to: null,
     };
     if (clientId) where.client_id = clientId;
     if (companyId) where.company_id = companyId;
@@ -317,7 +495,7 @@ export class ConversationsService {
       where,
       orderBy: { last_inbound_at: 'asc' },
       include: {
-        end_users: { select: { name: true } },
+        end_users: { select: { id: true, name: true } },
         messages: {
           take: 1,
           orderBy: { created_at: 'desc' },

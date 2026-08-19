@@ -35,7 +35,7 @@ export class PrismaService
         async $allOperations({ model, operation, args, query }) {
           const store = tenantLocalStorage.getStore();
           const anyArgs = args as any;
-          
+
           if (store?.companyId && TENANT_SUPPORTED_MODELS.includes(model)) {
             // Em operações que usam cláusula 'where', injeta o tenant ID
             if (
@@ -88,7 +88,9 @@ export class PrismaService
       get: (target, prop, receiver) => {
         if (prop in target.extendedClient) {
           const value = Reflect.get(target.extendedClient, prop);
-          return typeof value === 'function' ? value.bind(target.extendedClient) : value;
+          return typeof value === 'function'
+            ? value.bind(target.extendedClient)
+            : value;
         }
         return Reflect.get(target, prop, receiver);
       },

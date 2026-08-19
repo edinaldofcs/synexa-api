@@ -67,7 +67,7 @@ export class CompatibilityService {
       };
     }
 
-    const companyPhone = painelClient.phone_number || phone;
+    const companyPhone = phone;
 
     const connection = await this.prisma.channel_connections.findFirst({
       where: { client_id: clientId, channel_type: 'whatsapp' },
@@ -150,15 +150,9 @@ export class CompatibilityService {
     let connection;
 
     if (channelType === 'whatsapp') {
-      const painelClient = await this.prisma.painel_clients.findFirst({
-        where: { phone_number: companyPhone },
+      connection = await this.prisma.channel_connections.findFirst({
+        where: { channel_type: 'whatsapp', status: 'active' },
       });
-
-      if (painelClient) {
-        connection = await this.prisma.channel_connections.findFirst({
-          where: { client_id: painelClient.id, channel_type: 'whatsapp' },
-        });
-      }
     }
 
     if (!connection) {

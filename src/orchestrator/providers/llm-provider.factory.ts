@@ -7,13 +7,15 @@ import type { LLMProvider } from './llm-provider.interface';
 
 const logger = new Logger('LLMProviderFactory');
 
-export function getLLMProvider(): LLMProvider {
-  const providerName = llmConfig.provider.toLowerCase();
-  logger.log(`Inicializando LLM Provider: ${providerName}`);
+export function getLLMProvider(
+  providerName?: string,
+  apiKey?: string,
+): LLMProvider {
+  const name = (providerName || llmConfig.provider).toLowerCase();
+  logger.log(`Inicializando LLM Provider: ${name}`);
 
-  if (providerName === 'groq' || providerName === 'openai')
-    return new GroqProvider();
-  if (providerName === 'openrouter') return new OpenRouterProvider();
+  if (name === 'groq' || name === 'openai') return new GroqProvider(apiKey);
+  if (name === 'openrouter') return new OpenRouterProvider(apiKey);
 
-  return new GeminiProvider();
+  return new GeminiProvider(apiKey);
 }
