@@ -47,6 +47,19 @@ export class ApisController {
     return this.apisService.update(apiId, payload, user.id);
   }
 
+  @Post('apis/test-proxy')
+  testProxy(
+    @Body()
+    payload: {
+      url: string;
+      method?: string;
+      headers?: Record<string, string>;
+      body?: any;
+    },
+  ) {
+    return this.apisService.testProxy(payload);
+  }
+
   @Delete('apis/:apiId')
   remove(@Param('apiId') apiId: string, @CurrentUser() user: { id: string }) {
     return this.apisService.remove(apiId, user.id);

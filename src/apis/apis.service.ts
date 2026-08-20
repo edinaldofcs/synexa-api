@@ -2,6 +2,7 @@ import {
   Injectable,
   ForbiddenException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClientMetadataService } from '../common/metadata/client-metadata.service';
@@ -95,5 +96,68 @@ export class ApisService {
     const clientId = api?.client_id;
     if (clientId) void this.metadataService.refresh(clientId);
     return result;
+  }
+
+  async testProxy(payload: {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: any;
+  }) {
+    if (!payload.url || !payload.url.startsWith('http')) {
+      throw new BadRequestException('URL inválida. Deve iniciar com http:// ou https://');
+    }
+
+    const startTime = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const isPostOrPut = payload.method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(payload.method.toUpperCase());
+      const bodyToSend = isPostOrPut && payload.body
+        ? typeof payload.body === 'string'
+          ? payload.body
+          : JSON.stringify(payload.body)
+        : undefined;
+
+      const response = await fetch(payload.url, {
+        method: payload.method || 'GET',
+        headers: {
+          'User-Agent': 'Synexa-Api-Tester/1.0',
+          ...(payload.headers || {}),
+        },
+        body: bodyToSend,
+        signal: controller.signal,
+      });
+
+      const latency = Date.now() - startTime;
+      const text = await response.text();
+      let rawData: any;
+      try {
+        rawData = JSON.parse(text);
+      } catch {
+        rawData = text;
+      }
+
+      return {
+        success: true,
+        status: response.status,
+        statusText: response.statusText,
+        latency,
+        rawData,
+      };
+    } catch (err: any) {
+      const latency = Date.now() - startTime;
+      return {
+        success: false,
+        status: 0,
+        statusText: 'Network / Connection Error',
+        latency,
+        error: err.name === 'AbortError' ? 'Tempo limite esgotado (15s)' : err.message,
+        rawData: null,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }
