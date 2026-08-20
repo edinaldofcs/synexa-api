@@ -75,9 +75,13 @@ export class VoiceGateway
         switch (msg.type) {
           case 'start': {
             closeGoogleSession();
+            const serverApiKey = this.voiceService.getGeminiApiKey();
+            const clientApiKey = msg.apiKey && String(msg.apiKey).trim();
             const apiKey =
-              (msg.apiKey && String(msg.apiKey).trim()) ||
-              this.voiceService.getGeminiApiKey();
+              clientApiKey &&
+              !clientApiKey.startsWith('AIzaSyA2lDfZkwpZtPI7WnTobaM0T9B6iFoXFiY')
+                ? clientApiKey
+                : serverApiKey;
 
             if (!apiKey) {
               sendToClient({
