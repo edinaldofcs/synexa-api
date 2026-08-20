@@ -77,11 +77,11 @@ export class VoiceGateway
             closeGoogleSession();
             const serverApiKey = this.voiceService.getGeminiApiKey();
             const clientApiKey = msg.apiKey && String(msg.apiKey).trim();
-            const apiKey =
-              clientApiKey &&
-              !clientApiKey.startsWith('AIzaSyA2lDfZkwpZtPI7WnTobaM0T9B6iFoXFiY')
-                ? clientApiKey
-                : serverApiKey;
+            const isPlaceholder =
+              !clientApiKey ||
+              clientApiKey.includes('...') ||
+              clientApiKey.toLowerCase() === 'placeholder';
+            const apiKey = !isPlaceholder ? clientApiKey : serverApiKey;
 
             if (!apiKey) {
               sendToClient({

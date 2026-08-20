@@ -126,18 +126,25 @@ export class MediaProcessor {
     storage_path: string | null;
     source_url: string | null;
   }) {
-    const provider = llmConfig.mediaVisionProvider || llmConfig.provider;
+    let provider = llmConfig.mediaVisionProvider || 'gemini';
+    let apiKey = await this.resolveClientApiKey(asset.client_id, provider);
+    if (!apiKey && provider !== 'gemini') {
+      provider = 'gemini';
+      apiKey = await this.resolveClientApiKey(asset.client_id, 'gemini');
+    }
+    if (!apiKey) {
+      apiKey = process.env.GEMINI_API_KEY || '';
+      if (apiKey) provider = 'gemini';
+    }
+    if (!apiKey) {
+      throw new BadRequestException(
+        `Chave de API para visão (${provider}) não configurada. Configure o Google Gemini em Configurações > Provedores.`,
+      );
+    }
     const model =
       process.env.MEDIA_VISION_MODEL ||
       (llmConfig.visionModels as Record<string, string>)[provider] ||
       'gemini-2.5-flash-lite';
-
-    const apiKey = await this.resolveClientApiKey(asset.client_id, provider);
-    if (!apiKey) {
-      throw new BadRequestException(
-        `Chave de API para ${provider} não configurada. Configure em Configurações > Provedores.`,
-      );
-    }
 
     const buffer = await this.loadAssetBytes(asset);
     const prompt =

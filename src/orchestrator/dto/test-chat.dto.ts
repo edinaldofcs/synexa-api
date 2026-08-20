@@ -19,9 +19,10 @@ export class TestChatFileDto {
 }
 
 export class TestChatDto {
+  @IsOptional()
   @IsString()
   @MaxLength(10000)
-  message: string;
+  message?: string;
 
   @IsOptional()
   @IsString()

@@ -158,8 +158,8 @@ export class TestChatService {
     transcription?: string;
     debug?: TestChatDebug;
   }> {
+    const message = dto.message || '';
     let {
-      message,
       provider,
       model,
       apiKey,
@@ -356,6 +356,15 @@ export class TestChatService {
     try {
       const memory = await this.loadMemory(conversationId);
       const history = memory.messages;
+      const inboundContent =
+        message && message.trim()
+          ? message
+          : files?.some((f) => f.mimeType.startsWith('audio/'))
+            ? '[Áudio]'
+            : files?.some((f) => f.mimeType.startsWith('image/'))
+              ? `[${files.filter((f) => f.mimeType.startsWith('image/')).length} imagem(ns) enviada(s)]`
+              : '[Anexo]';
+
       const inboundMessage = await this.saveMessage({
         conversationId,
         companyId,
@@ -363,7 +372,7 @@ export class TestChatService {
         senderType: 'customer',
         direction: 'inbound',
         channel: originChannel,
-        content: message,
+        content: inboundContent,
       });
       const agentRun = await this.startTestAgentRun({
         companyId,
@@ -464,7 +473,9 @@ export class TestChatService {
 
       const userMemoryContent = audioTranscript
         ? `[Áudio] ${audioTranscript}`
-        : message;
+        : message && message.trim()
+          ? message
+          : '[Imagem/Documento enviado pelo cliente]';
 
       await this.saveMemory(conversationId, [
         ...history,
@@ -525,8 +536,8 @@ export class TestChatService {
             });
             await this.saveMemory(conversationId, [
               ...history,
-              { role: 'user', content: message },
-              { role: 'assistant', content: immediateResult.result.text },
+              { role: 'user', content: userMemoryContent },
+              { role: 'assistant', content: immediateResult.result.text || '' },
             ]);
             immediateResult.contextVariables = this.mergeToolResults(
               immediateResult.contextVariables,
@@ -1832,10 +1843,23 @@ export class TestChatService {
       total_tokens?: number;
     };
   }> {
-    const parts: any[] = [{ text: message }];
+    const imageFiles = (files || []).filter((f) =>
+      f.mimeType.startsWith('image/'),
+    );
     const audioFiles = (files || []).filter((f) =>
       f.mimeType.startsWith('audio/'),
     );
+
+    const userPromptText =
+      message && message.trim() && message !== 'Descreva o arquivo anexado.'
+        ? message
+        : imageFiles.length > 0
+          ? 'O usuário enviou a(s) imagem(ns)/documento(s) anexado(s) para dar andamento ao atendimento. Utilize as informações, dados e textos contidos na imagem como contexto fornecido pelo cliente e dê continuidade ao fluxo de atendimento normalmente, sem apenas descrever a imagem.'
+          : audioFiles.length > 0
+            ? 'O usuário enviou uma mensagem de áudio. Ouça a transcrição e responda ao cliente adequadamente.'
+            : '';
+
+    const parts: any[] = [{ text: userPromptText }];
 
     if (files?.length) {
       for (const file of files) {
@@ -1935,71 +1959,150 @@ export class TestChatService {
     file: { mimeType: string; data: string },
     provider: string,
     apiKey: string,
+    clientId?: string,
   ): Promise<string> {
-    const normalizedProvider = provider.toLowerCase();
-    const baseUrl =
-      normalizedProvider === 'groq'
-        ? 'https://api.groq.com/openai/v1'
-        : normalizedProvider === 'openrouter'
-          ? 'https://openrouter.ai/api/v1'
-          : '';
+    const prompt =
+      'Transcreva todo o texto visível, números, códigos, campos, tabelas e descreva os detalhes e dados relevantes desta imagem em português de forma concisa e factual, para servir estritamente de dados de contexto para um assistente de IA.';
 
-    if (!baseUrl) {
-      throw new Error(`Visão não suportada para o provedor ${provider}`);
+    // 1. Tenta usar Gemini primeiro (ideal e super rápido para OCR/Visão)
+    let geminiApiKey: string | undefined;
+    if (clientId) {
+      try {
+        geminiApiKey = await this.providerKeyResolver.resolveApiKey(
+          clientId,
+          'gemini',
+        );
+      } catch {}
+    }
+    if (!geminiApiKey) {
+      geminiApiKey = process.env.GEMINI_API_KEY;
     }
 
-    const model =
-      process.env.MEDIA_VISION_MODEL ||
-      (normalizedProvider === 'groq' ? 'qwen/qwen3.6-27b' : 'qwen/qwen3.6-27b');
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 500,
-        messages: [
+    if (geminiApiKey) {
+      const geminiModel =
+        process.env.MEDIA_VISION_MODEL || 'gemini-2.5-flash-lite';
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
           {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: 'Descreva esta imagem em português. Retorne apenas uma descrição concisa e o texto visível.',
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:${file.mimeType};base64,${file.data}`,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    { text: prompt },
+                    {
+                      inlineData: {
+                        mimeType: file.mimeType,
+                        data: file.data,
+                      },
+                    },
+                  ],
                 },
-              },
-            ],
+              ],
+            }),
           },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Falha na visão (${model}): ${response.status} ${await response.text()}`,
-      );
+        );
+        if (res.ok) {
+          const json = await res.json();
+          const text =
+            json?.candidates?.[0]?.content?.parts
+              ?.map((p: any) => p.text)
+              .join('')
+              .trim() || '';
+          if (text) return text;
+        } else {
+          this.logger.warn(
+            { status: res.status, detail: await res.text() },
+            'Falha na resposta do Gemini Vision',
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          { error: (err as Error).message },
+          'Falha na visão via Gemini, tentando fallback',
+        );
+      }
     }
 
-    const json = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string | unknown[] } }>;
-    };
-    const content = json.choices?.[0]?.message?.content;
-    if (typeof content === 'string' && content.trim()) return content.trim();
-    if (Array.isArray(content)) {
-      const text = content
-        .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
-        .join('')
-        .trim();
-      if (text) return text;
+    // 2. Tenta usar OpenRouter se configurado
+    let openRouterKey: string | undefined;
+    if (provider.toLowerCase() === 'openrouter') {
+      openRouterKey = apiKey;
+    } else if (clientId) {
+      try {
+        openRouterKey = await this.providerKeyResolver.resolveApiKey(
+          clientId,
+          'openrouter',
+        );
+      } catch {}
+    }
+    if (!openRouterKey) {
+      openRouterKey = process.env.OPENROUTER_API_KEY;
     }
 
-    throw new Error('O provedor visual não retornou uma descrição');
+    if (openRouterKey) {
+      const model =
+        process.env.MEDIA_VISION_MODEL || 'google/gemini-2.5-flash';
+      try {
+        const response = await fetch(
+          'https://openrouter.ai/api/v1/chat/completions',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${openRouterKey}`,
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: 1000,
+              messages: [
+                {
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: prompt },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: `data:${file.mimeType};base64,${file.data}`,
+                      },
+                    },
+                  ],
+                },
+              ],
+            }),
+          },
+        );
+
+        if (response.ok) {
+          const json = (await response.json()) as {
+            choices?: Array<{ message?: { content?: string | unknown[] } }>;
+          };
+          const content = json.choices?.[0]?.message?.content;
+          if (typeof content === 'string' && content.trim()) return content.trim();
+          if (Array.isArray(content)) {
+            const text = content
+              .map((part: any) =>
+                typeof part?.text === 'string' ? part.text : '',
+              )
+              .join('')
+              .trim();
+            if (text) return text;
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          { error: (err as Error).message },
+          'Falha na visão via OpenRouter',
+        );
+      }
+    }
+
+    throw new Error(
+      'Visão/OCR indisponível: Groq não possui modelos de visão ativos. Por favor, configure uma chave do Google Gemini em Configurações > Provedores para processamento de imagens e documentos.',
+    );
   }
 
   private async callOpenAICompatible(
@@ -2079,15 +2182,27 @@ export class TestChatService {
       const descriptions: string[] = [];
       for (const imageFile of imageFiles) {
         descriptions.push(
-          await this.describeImageForChat(imageFile, provider, apiKey),
+          await this.describeImageForChat(
+            imageFile,
+            provider,
+            apiKey,
+            nativeRagContext?.clientId,
+          ),
         );
       }
-      userText = `${userText}\n\n${descriptions
+      const imageContext = descriptions
         .map(
           (description) =>
             `<transcricao_imagem>\n${description}\n</transcricao_imagem>`,
         )
-        .join('\n\n')}`;
+        .join('\n\n');
+
+      const userInstruction =
+        message && message.trim() && message !== 'Descreva o arquivo anexado.'
+          ? message
+          : 'O usuário enviou uma imagem/documento anexado. Considere as informações transcritas na tag <transcricao_imagem> acima como dados e contexto fornecidos pelo usuário e dê andamento ao fluxo de atendimento normalmente, sem apenas descrever a imagem.';
+
+      userText = `${imageContext}\n\n${userInstruction}`;
     }
     messages.push({ role: 'user', content: userText });
     let responseMessage: any = null;
