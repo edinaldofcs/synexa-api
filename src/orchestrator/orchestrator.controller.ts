@@ -44,8 +44,6 @@ export class OrchestratorController {
     }
   }
 
-  @Public()
-  @UseGuards(DevOnlyGuard)
   @Delete('test-chat')
   async clearTestChat(@Body() dto: ClearTestChatDto) {
     try {
