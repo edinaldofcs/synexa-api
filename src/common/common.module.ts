@@ -4,14 +4,25 @@ import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { ClientMetadataService } from './metadata/client-metadata.service';
 import { CredentialAuditService } from './services/credential-audit.service';
+import { CrmDataTransformerService } from './services/crm-data-transformer.service';
 import { TenantInterceptor } from './interceptors/tenant.interceptor';
+import { CorrelationInterceptor } from './interceptors/correlation.interceptor';
+import { HealthController } from './health/health.controller';
+import { HealthService } from './health/health.service';
 
 @Global()
 @Module({
   imports: [PrismaModule, RedisModule],
+  controllers: [HealthController],
   providers: [
     ClientMetadataService,
     CredentialAuditService,
+    CrmDataTransformerService,
+    HealthService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CorrelationInterceptor,
+    },
     {
       provide: APP_INTERCEPTOR,
       useClass: TenantInterceptor,
@@ -22,6 +33,8 @@ import { TenantInterceptor } from './interceptors/tenant.interceptor';
     RedisModule,
     ClientMetadataService,
     CredentialAuditService,
+    CrmDataTransformerService,
+    HealthService,
   ],
 })
 export class CommonModule {}

@@ -1,8 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 export interface ModelPrice {
   inputPerMillion: number; // USD per 1,000,000 input tokens
   outputPerMillion: number; // USD per 1,000,000 output tokens
+}
+
+export interface BillableCalculation {
+  rawCostUsd: number;
+  billableCostUsd: number;
+  billableCostBrl: number;
+  markupPercent: number;
+  exchangeRate: number;
 }
 
 @Injectable()
@@ -20,6 +29,10 @@ export class ModelPricingService {
     'gemini-2.0-flash': { inputPerMillion: 0.1, outputPerMillion: 0.4 },
     'gemini-1.5-flash': { inputPerMillion: 0.075, outputPerMillion: 0.3 },
     'gemini-1.5-pro': { inputPerMillion: 1.25, outputPerMillion: 5.0 },
+    'gemini-3.1-flash-live-preview': {
+      inputPerMillion: 0.15,
+      outputPerMillion: 0.6,
+    },
 
     // Groq (Llama / Mistral)
     'llama-3.3-70b-versatile': {
@@ -52,6 +65,19 @@ export class ModelPricingService {
 
   // Preço por segundo de áudio (Whisper Groq: ~$0.000083/seg ≈ $0.005/minuto)
   private readonly audioTranscriptionPricePerSecond = 0.0000833;
+
+  // Gemini Live Multimodal API: ~$0.0005/segundo (~$0.030/minuto de voz interativa)
+  private readonly geminiLiveAudioPricePerSecond = 0.0005;
+
+  constructor(private readonly configService?: ConfigService) {}
+
+  getMarkupPercent(): number {
+    return this.configService?.get<number>('BILLING_AI_MARKUP_PERCENT', 25) ?? 25;
+  }
+
+  getExchangeRate(): number {
+    return this.configService?.get<number>('USD_BRL_RATE', 5.8) ?? 5.8;
+  }
 
   calculateTokenCost(params: {
     provider?: string;
@@ -86,5 +112,39 @@ export class ModelPricingService {
     return Number(
       (durationSeconds * this.audioTranscriptionPricePerSecond).toFixed(6),
     );
+  }
+
+  calculateVoiceLiveCost(params: {
+    durationSeconds: number;
+    inputTokens?: number;
+    outputTokens?: number;
+  }): number {
+    const durationCost =
+      (params.durationSeconds || 0) * this.geminiLiveAudioPricePerSecond;
+    const tokenCost = this.calculateTokenCost({
+      model: 'gemini-3.1-flash-live-preview',
+      inputTokens: params.inputTokens || 0,
+      outputTokens: params.outputTokens || 0,
+    });
+    return Number((durationCost + tokenCost).toFixed(6));
+  }
+
+  calculateBillable(
+    rawCostUsd: number,
+    isByok = false,
+  ): BillableCalculation {
+    const markupPercent = isByok ? 0 : this.getMarkupPercent();
+    const exchangeRate = this.getExchangeRate();
+    const multiplier = 1 + markupPercent / 100;
+    const billableCostUsd = Number((rawCostUsd * multiplier).toFixed(6));
+    const billableCostBrl = Number((billableCostUsd * exchangeRate).toFixed(4));
+
+    return {
+      rawCostUsd,
+      billableCostUsd,
+      billableCostBrl,
+      markupPercent,
+      exchangeRate,
+    };
   }
 }

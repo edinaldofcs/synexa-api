@@ -10,6 +10,7 @@ import { ProviderKeyResolverService } from './services/provider-key-resolver.ser
 import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
 import { FallbackProviderService } from './services/fallback-provider.service';
+import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
 
 jest.mock('./providers/llm-provider.factory', () => ({
   getLLMProvider: () => ({
@@ -167,6 +168,11 @@ describe('OrchestrationService', () => {
       description: 'Mock set variable',
       parameters: {},
     }),
+    saveCrmDataToolDefinition: jest.fn().mockReturnValue({
+      name: 'save_crm_data',
+      description: 'Mock save crm data',
+      parameters: {},
+    }),
     transferToHumanToolDefinition: jest.fn().mockReturnValue({
       name: 'transfer_to_human',
       description: 'Mock transfer to human',
@@ -212,6 +218,12 @@ describe('OrchestrationService', () => {
             resolveFallback: jest
               .fn()
               .mockResolvedValue({ hasFallback: false }),
+          },
+        },
+        {
+          provide: CrmDataTransformerService,
+          useValue: {
+            transform: jest.fn().mockReturnValue({}),
           },
         },
         {

@@ -196,6 +196,14 @@ export class GeminiProvider implements LLMProvider {
           totalOutputTokens += output;
           totalCost += input * 0.000000075 + output * 0.0000003;
         }
+
+        if (apiResult?.error || apiResult?.ok === false) {
+          this.logger.warn(
+            `⛔ [Fail-Fast] Tool ${functionName} falhou no GeminiProvider. Interrompendo chamadas subsequentes.`,
+          );
+          break;
+        }
+
         functionCalls = response.functionCalls();
       }
 

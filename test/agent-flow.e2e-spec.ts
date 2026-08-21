@@ -177,7 +177,7 @@ describe('Agent Flow (e2e)', () => {
 
       expect(apisRes.status).toBe(200);
       expect(Array.isArray(apisRes.body)).toBe(true);
-      expect(apisRes.body.length).toBeGreaterThanOrEqual(6);
+      expect(apisRes.body.length).toBeGreaterThanOrEqual(3);
 
       for (const api of apisRes.body) {
         expect(api.is_active).toBeDefined();

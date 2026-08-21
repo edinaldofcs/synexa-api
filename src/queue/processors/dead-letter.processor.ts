@@ -34,12 +34,44 @@ export class DeadLetterProcessor {
     );
 
     const sanitizedPayload = sanitize(job.data);
+    const originalData = job.data.data || {};
+    const companyId =
+      typeof originalData.company_id === 'string'
+        ? originalData.company_id
+        : undefined;
+
+    if (!companyId) {
+      this.logger.error(
+        {
+          original_queue: job.data.original_queue,
+          original_job_id: job.data.original_job_id,
+        },
+        'Dead-letter job has no valid company context; acknowledging without persistence',
+      );
+      return;
+    }
+
+    const originalJobId = String(job.data.original_job_id);
+    const aggregateId =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        originalJobId,
+      )
+        ? originalJobId
+        : null;
+    const clientId =
+      typeof originalData.client_id === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        originalData.client_id,
+      )
+        ? originalData.client_id
+        : undefined;
 
     await this.prisma.outbox_events.create({
       data: {
-        company_id: '00000000-0000-0000-0000-000000000000',
+        company_id: companyId,
+        ...(clientId ? { client_id: clientId } : {}),
         aggregate_type: 'dead_letter',
-        aggregate_id: String(job.data.original_job_id),
+        aggregate_id: aggregateId,
         event_type: `${job.data.original_queue}.failed`,
         payload: sanitizedPayload as any,
         status: 'failed',

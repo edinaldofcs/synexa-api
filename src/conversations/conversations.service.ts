@@ -294,6 +294,10 @@ export class ConversationsService {
     const conversation = await this.conversationsRepo.findById(conversationId);
     if (!conversation) throw new NotFoundException('Conversation not found');
 
+    if (conversation.mode === 'manual') {
+      throw new BadRequestException('Conversation is already in manual mode');
+    }
+
     let targetOperatorId = dto.assigned_to || conversation.assigned_to;
 
     const updated = await this.prisma.conversations.update({

@@ -29,10 +29,7 @@ export class VoiceService {
   }
 
   getDefaultVoice(): string {
-    return (
-      this.configService.get<string>('GEMINI_DEFAULT_VOICE') ||
-      'Kore'
-    );
+    return this.configService.get<string>('GEMINI_DEFAULT_VOICE') || 'Kore';
   }
 
   getConfig(): VoiceConfigResponse {

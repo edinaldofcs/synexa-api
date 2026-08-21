@@ -12,5 +12,19 @@ export interface WebhookCallbackPayload {
     citations?: Array<{ document: string; page?: number; text?: string }>;
   };
   status: string;
+  contact?: {
+    id?: string;
+    name?: string;
+    phone?: string;
+    document_number?: string;
+    email?: string;
+    custom_attributes?: Record<string, unknown>;
+  };
+  crm_data?: {
+    operation_type?: string;
+    updated_at?: string;
+    variables?: Record<string, unknown>;
+  };
+  crm_record?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }

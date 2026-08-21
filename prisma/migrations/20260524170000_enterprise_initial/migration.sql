@@ -1,4 +1,4 @@
-﻿-- Enterprise Synexa initial schema
+-- Enterprise Synexa initial schema
 -- Enables UUID helpers and pgvector for RAG embeddings.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -21,6 +21,8 @@ CREATE TABLE "users" (
     "id" UUID NOT NULL,
     "company_id" UUID NOT NULL,
     "name" TEXT,
+    "email" TEXT,
+    "password_hash" TEXT,
     "role" TEXT NOT NULL DEFAULT 'operator',
     "created_at" TIMESTAMPTZ(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(6) DEFAULT CURRENT_TIMESTAMP,
@@ -562,7 +564,7 @@ CREATE TABLE "knowledge_embeddings" (
     "provider" TEXT NOT NULL,
     "model" TEXT NOT NULL,
     "dimensions" INTEGER,
-    "embedding" vector NOT NULL,
+    "embedding" vector(1536) NOT NULL,
     "metadata" JSONB DEFAULT '{}',
     "created_at" TIMESTAMPTZ(6) DEFAULT CURRENT_TIMESTAMP,
 

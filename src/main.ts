@@ -2,16 +2,65 @@ import helmet from 'helmet';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { WsAdapter } from '@nestjs/platform-ws';
-import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import * as express from 'express';
+import { AppModule } from './app.module';
+import { WorkerModule } from './worker.module';
+import { VoiceStandaloneModule } from './voice.module';
+import { ServiceRole } from './common/config/env.validation';
+
+const logger = new Logger('Bootstrap');
 
 async function bootstrap() {
+  const serviceRole = (
+    process.env.SERVICE_ROLE || ServiceRole.API
+  ).toLowerCase();
+
+  logger.log(`🚀 Iniciando Synexa Runtime com SERVICE_ROLE: "${serviceRole}"`);
+
+  // ── Cenário 1: Workers Assíncronos (Standalone Context sem HTTP) ──
+  if (serviceRole === ServiceRole.WORKER || serviceRole.startsWith('worker-')) {
+    const app = await NestFactory.createApplicationContext(WorkerModule);
+    app.enableShutdownHooks();
+
+    logger.log(
+      `⚙️  Worker Synexa (${serviceRole}) iniciado com sucesso. Aguardando jobs...`,
+    );
+
+    const handleShutdown = async (signal: string) => {
+      logger.log(
+        `🛑 Recebido sinal ${signal}. Encerrando worker de forma controlada...`,
+      );
+      await app.close();
+      logger.log('👋 Worker encerrado com sucesso.');
+      process.exit(0);
+    };
+
+    process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+    process.on('SIGINT', () => handleShutdown('SIGINT'));
+    return;
+  }
+
+  // ── Cenário 2: Voice Gateway Isolado ──
+  if (serviceRole === ServiceRole.VOICE) {
+    const app = await NestFactory.create(VoiceStandaloneModule);
+    app.useWebSocketAdapter(new WsAdapter(app));
+    app.enableShutdownHooks();
+
+    const configService = app.get(ConfigService);
+    const port = configService.get<number>('VOICE_PORT', 3001);
+
+    await app.listen(port, '0.0.0.0');
+    logger.log(`🎙️  Synexa Voice Gateway rodando na porta ${port} (/ws/voice)`);
+    return;
+  }
+
+  // ── Cenário 3: API HTTP Principal (Padrão) ──
   const app = await NestFactory.create(AppModule);
   app.useWebSocketAdapter(new WsAdapter(app));
+  app.enableShutdownHooks();
 
   const configService = app.get(ConfigService);
-
   const environment = configService.get<string>('ENVIRONMENT', 'development');
   const corsOrigin = configService.get<string>('CORS_ORIGIN');
   const corsOrigins = corsOrigin
@@ -20,7 +69,6 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin, callback) => {
-      // Permite requisições sem origin (como file://, Postman, cURL) ou qualquer origem em dev
       if (!origin || origin === 'null' || environment === 'development') {
         return callback(null, true);
       }
@@ -38,6 +86,7 @@ async function bootstrap() {
       'x-timestamp',
       'x-synexa-signature',
       'idempotency-key',
+      'x-request-id',
     ],
   });
 
@@ -53,7 +102,7 @@ async function bootstrap() {
     app.use('/uploads', express.static('uploads'));
   }
 
-  const bodyLimit = configService.get<string>('BODY_LIMIT', '1mb');
+  const bodyLimit = configService.get<string>('BODY_LIMIT', '5mb');
   app.use(express.json({ limit: bodyLimit }));
   app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
 
@@ -68,6 +117,10 @@ async function bootstrap() {
 
   const port = configService.get<number>('PORT', 3000);
   await app.listen(port, '0.0.0.0');
-  console.log(`Backend NestJS rodando em ${await app.getUrl()}`);
+  logger.log(`🌐 Synexa API rodando em ${await app.getUrl()}`);
 }
-bootstrap().catch((err) => console.error('Bootstrap Error:', err));
+
+bootstrap().catch((err) => {
+  logger.error('Bootstrap Error:', err);
+  process.exit(1);
+});

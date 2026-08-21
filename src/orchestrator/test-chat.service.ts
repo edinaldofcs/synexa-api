@@ -54,6 +54,7 @@ export interface TestChatDebug {
     arguments?: Record<string, unknown>;
     result?: unknown;
   }>;
+  crmRecord?: Record<string, unknown>;
 }
 
 type ToolCallDebug = TestChatDebug['toolCalls'][number];
@@ -62,15 +63,16 @@ interface NativeRagRuntimeContext {
   agentConfig: AgentConfig;
   clientId: string;
   companyId: string;
-  conversationId: string;
-  messageId: string;
-  agentRunId: string;
+  conversationId?: string;
+  messageId?: string;
+  agentRunId?: string;
 }
 
 import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
 import { ModelPricingService } from './services/model-pricing.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { MediaService } from '../media/media.service';
+import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
 
 @Injectable()
 export class TestChatService {
@@ -86,6 +88,7 @@ export class TestChatService {
     private readonly modelPricingService: ModelPricingService,
     private readonly conversationsService: ConversationsService,
     private readonly mediaService: MediaService,
+    private readonly crmDataTransformer: CrmDataTransformerService,
   ) {}
 
   async listModels(
@@ -159,15 +162,8 @@ export class TestChatService {
     debug?: TestChatDebug;
   }> {
     const message = dto.message || '';
-    let {
-      provider,
-      model,
-      apiKey,
-      files,
-      systemPrompt,
-      clientId,
-      agentId,
-    } = dto;
+    let { provider, model, apiKey, files, systemPrompt, clientId, agentId } =
+      dto;
     const originChannel = dto.originChannel || 'webchat_test';
     const externalUserId = dto.externalUserId;
     let companyId: string | undefined;
@@ -190,6 +186,9 @@ export class TestChatService {
       const metadata = (client.metadata as any) || {};
       contextVariables = this.sanitizeContextVariables(metadata);
       contextVariables.nome_agente = client.agent_name || '';
+      if (metadata.variable_schema) {
+        contextVariables._variable_schema = metadata.variable_schema;
+      }
 
       if (!resolvedAgentId) {
         const initialAgent = await this.prisma.painel_agents.findFirst({
@@ -262,6 +261,36 @@ export class TestChatService {
           apiTools.push(this.buildNativeRagApiTool());
         }
         apiTools.push(this.buildNativeHandoffApiTool());
+        apiTools.push(this.buildNativeSetVariableApiTool());
+        apiTools.push(this.buildNativeSaveCrmDataApiTool());
+
+        const allowedSubagents = Array.isArray(transitions.allowed_subagents)
+          ? (transitions.allowed_subagents as string[])
+          : Array.isArray(transitions.allowed_subagent_ids)
+            ? (transitions.allowed_subagent_ids as string[])
+            : [];
+        if (allowedSubagents.length > 0) {
+          const isUuid = (val: string) =>
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+          const uuids = allowedSubagents.filter(isUuid);
+          const names = allowedSubagents.filter((val) => !isUuid(val));
+          const orConditions: Array<{ id?: { in: string[] }; name?: { in: string[] } }> = [];
+          if (uuids.length > 0) orConditions.push({ id: { in: uuids } });
+          if (names.length > 0) orConditions.push({ name: { in: names } });
+
+          if (orConditions.length > 0) {
+            const subagentRecords = await this.prisma.painel_subagents.findMany({
+              where: {
+                client_id: clientId,
+                is_active: true,
+                OR: orConditions,
+              },
+            });
+            for (const sub of subagentRecords) {
+              apiTools.push(this.buildSubagentApiTool(sub));
+            }
+          }
+        }
 
         availableTools = [
           ...new Set([...availableTools, ...apiTools.map((tool) => tool.name)]),
@@ -317,6 +346,11 @@ export class TestChatService {
         [],
         apiTools,
         toolCalls,
+        {
+          agentConfig: {} as any,
+          clientId: clientId || '',
+          companyId: companyId || '',
+        },
       );
       contextVariables = this.mergeToolResults(
         contextVariables,
@@ -575,6 +609,59 @@ export class TestChatService {
         }
       }
 
+      let crmRecord: Record<string, unknown> | undefined;
+      if (conversationId) {
+        try {
+          const freshConv = await this.prisma.conversations.findUnique({
+            where: { id: conversationId },
+            include: { end_users: true },
+          });
+
+          const client = clientId
+            ? await this.prisma.painel_clients.findUnique({
+                where: { id: clientId },
+                select: { metadata: true },
+              })
+            : null;
+          const clientMeta = (client?.metadata as Record<string, unknown>) || {};
+          const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
+
+          const freshState = await this.conversationsService.getState(
+            conversationId,
+          );
+          const combinedState = {
+            ...contextVariables,
+            ...freshState,
+          };
+
+          crmRecord = this.crmDataTransformer.transform({
+            sessionState: combinedState,
+            endUser: freshConv?.end_users,
+            conversation: freshConv,
+            config: crmOutputConfig,
+          });
+
+          if (freshConv) {
+            const existingMeta =
+              (freshConv.metadata as Record<string, unknown>) || {};
+            await this.prisma.conversations.update({
+              where: { id: conversationId },
+              data: {
+                metadata: {
+                  ...existingMeta,
+                  crm_record: crmRecord,
+                } as any,
+              },
+            });
+          }
+        } catch (crmErr) {
+          this.logger.warn(
+            { error: (crmErr as Error).message },
+            'Falha ao transformar crmRecord no test-chat',
+          );
+        }
+      }
+
       return {
         ...result,
         agentName: resolvedAgentName,
@@ -592,6 +679,7 @@ export class TestChatService {
           contextVariables,
           availableTools,
           toolCalls: result.toolCalls || [],
+          crmRecord,
         },
       };
     } finally {
@@ -622,6 +710,20 @@ export class TestChatService {
   }> {
     switch (provider.toLowerCase()) {
       case 'gemini':
+        if (apiTools.length > 0) {
+          return this.callOpenAICompatible(
+            'https://generativelanguage.googleapis.com/v1beta/openai',
+            message,
+            model,
+            apiKey,
+            files,
+            systemPrompt,
+            history,
+            apiTools,
+            toolCalls,
+            nativeRagContext,
+          );
+        }
         return this.callGemini(
           message,
           model,
@@ -945,6 +1047,34 @@ export class TestChatService {
     }
     apiTools.push(this.buildNativeHandoffApiTool());
 
+    const allowedSubagents = Array.isArray(transitions.allowed_subagents)
+      ? (transitions.allowed_subagents as string[])
+      : Array.isArray(transitions.allowed_subagent_ids)
+        ? (transitions.allowed_subagent_ids as string[])
+        : [];
+    if (allowedSubagents.length > 0) {
+      const isUuid = (val: string) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+      const uuids = allowedSubagents.filter(isUuid);
+      const names = allowedSubagents.filter((val) => !isUuid(val));
+      const orConditions: Array<{ id?: { in: string[] }; name?: { in: string[] } }> = [];
+      if (uuids.length > 0) orConditions.push({ id: { in: uuids } });
+      if (names.length > 0) orConditions.push({ name: { in: names } });
+
+      if (orConditions.length > 0) {
+        const subagentRecords = await this.prisma.painel_subagents.findMany({
+          where: {
+            client_id: clientId,
+            is_active: true,
+            OR: orConditions,
+          },
+        });
+        for (const sub of subagentRecords) {
+          apiTools.push(this.buildSubagentApiTool(sub));
+        }
+      }
+    }
+
     const availableTools = [
       ...new Set([...allowedToolNames, ...apiTools.map((t) => t.name)]),
     ];
@@ -1013,12 +1143,25 @@ export class TestChatService {
     systemPrompt: string | undefined,
     contextVariables: Record<string, unknown>,
   ) {
-    const entries = Object.entries(contextVariables).filter(
-      ([, value]) => value !== undefined,
-    );
-    if (!entries.length) return systemPrompt;
+    const schema = (contextVariables._variable_schema as Record<string, unknown>) || null;
+    let crmInstruction = '';
+    if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {
+      const fieldList = schema.fields
+        .map(
+          (f: any) =>
+            `- ${f.key} (${f.label || f.key}, tipo: ${f.type || 'text'}${f.required ? ', OBRIGATÓRIO' : ''})${f.description ? ': ' + f.description : ''}`,
+        )
+        .join('\n');
 
-    const basePrompt = systemPrompt || '';
+      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou atualize os seguintes campos durante o atendimento usando a tool save_crm_data assim que o usuário fornecer os dados:\n${fieldList}\nAo identificar qualquer um desses dados confirmados pelo cliente, chame save_crm_data imediatamente.`;
+    }
+
+    const entries = Object.entries(contextVariables).filter(
+      ([key, value]) => value !== undefined && !key.startsWith('_'),
+    );
+    if (!entries.length && !crmInstruction) return systemPrompt;
+
+    const basePrompt = (systemPrompt || '') + crmInstruction;
     const replacedPrompt = basePrompt.replace(
       /\[\[([^\]]+)]]/g,
       (match, rawKey: string) => {
@@ -1029,6 +1172,8 @@ export class TestChatService {
         return this.formatContextValue(contextVariables[key]);
       },
     );
+
+    if (!entries.length) return replacedPrompt;
 
     const contextBlock = entries
       .map(([key, value]) => `- [[${key}]]: ${this.formatContextValue(value)}`)
@@ -1081,9 +1226,48 @@ export class TestChatService {
     }
 
     for (const toolCall of toolCalls) {
+      // 1. Salva dados extraídos do retorno da API
       const resultData = (toolCall.result as any)?.data;
       if (resultData && typeof resultData === 'object') {
         Object.assign(merged, resultData);
+      }
+
+      // 2. Salva campos enviados no Body / Parâmetros configurados para persistir na sessão
+      const matchedTool = apiTools.find(
+        (t) =>
+          t.name === toolCall.name ||
+          t.functionName === toolCall.name ||
+          normalize(t.name) === normalize(toolCall.name),
+      );
+      if (matchedTool && toolCall.arguments) {
+        const bodyConfig = this.asRecord(matchedTool.body);
+        const paramConfig = this.asRecord(matchedTool.parameters);
+        const allConfigs = { ...paramConfig, ...bodyConfig };
+
+        for (const [key, cfg] of Object.entries(allConfigs)) {
+          const fieldCfg = this.asRecord(cfg);
+          if (
+            fieldCfg.save_to_session === true ||
+            fieldCfg.save_to_session === 'true' ||
+            fieldCfg.save_to_context === true ||
+            fieldCfg.save_to_state === true
+          ) {
+            const sessionVarName =
+              typeof fieldCfg.session_variable === 'string' &&
+              fieldCfg.session_variable.trim()
+                ? fieldCfg.session_variable.trim()
+                : key.replace(/\./g, '_');
+
+            let val = (toolCall.arguments as Record<string, unknown>)[key];
+            if (val === undefined && key.includes('.')) {
+              const leafKey = key.split('.').pop()!;
+              val = (toolCall.arguments as Record<string, unknown>)[leafKey];
+            }
+            if (val !== undefined) {
+              merged[sessionVarName] = val;
+            }
+          }
+        }
       }
     }
 
@@ -1208,6 +1392,223 @@ export class TestChatService {
     };
   }
 
+  private buildNativeSetVariableApiTool(): ApiTool {
+    return {
+      id: 'set_variable',
+      name: 'set_variable',
+      functionName: 'set_variable',
+      description:
+        'Define uma ou mais variáveis no estado da conversa para controle de fluxo e memória contextual.',
+      method: 'NATIVE',
+      url: null,
+      headers: null,
+      body: null,
+      parameters: {
+        type: 'object',
+        properties: {
+          variables: {
+            type: 'object',
+            description:
+              'Objeto com as variáveis a serem definidas (ex: {"valor_negociado": "R$ 500,00"}).',
+            additionalProperties: true,
+          },
+        },
+        required: ['variables'],
+      },
+      extract_data: null,
+    };
+  }
+
+  private buildNativeSaveCrmDataApiTool(): ApiTool {
+    return {
+      id: 'save_crm_data',
+      name: 'save_crm_data',
+      functionName: 'save_crm_data',
+      description:
+        'Salva ou atualiza dados estruturados de CRM, cobrança, FAQ ou vendas coletados durante o atendimento. Use sempre que o cliente confirmar um dado (ex: CPF, valor de acordo, data de pagamento, categoria de dúvida, produto de interesse).',
+      method: 'NATIVE',
+      url: null,
+      headers: null,
+      body: null,
+      parameters: {
+        type: 'object',
+        properties: {
+          operation_type: {
+            type: 'string',
+            description:
+              'Tipo de operação: "cobranca", "faq", "vendas", "suporte" ou "custom".',
+          },
+          variables: {
+            type: 'object',
+            description:
+              'Objeto chave-valor com os dados coletados (ex: {"data_promessa": "2026-09-25", "valor_negociado": "R$ 350,00"}).',
+            additionalProperties: true,
+          },
+          contact_data: {
+            type: 'object',
+            description:
+              'Dados de identificação do contato (ex: {"document_number": "123.456.789-00", "email": "cliente@email.com"}).',
+            additionalProperties: true,
+          },
+        },
+        required: ['variables'],
+      },
+      extract_data: null,
+    };
+  }
+
+  private buildSubagentApiTool(subagent: {
+    id: string;
+    name: string;
+    description: string;
+  }): ApiTool {
+    const fnName = `subagent_${subagent.name.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+    return {
+      id: subagent.id,
+      name: fnName,
+      functionName: fnName,
+      description: `[SUBAGENTE ESPECIALISTA: ${subagent.name.toUpperCase()}] ${subagent.description}. Acione esta ferramenta para delegar subtarefas especializadas a este subagente.`,
+      method: 'NATIVE',
+      url: null,
+      headers: null,
+      body: null,
+      parameters: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description: 'Instrução ou pergunta detalhada a ser resolvida pelo subagente especialista.',
+          },
+          context_data: {
+            type: 'string',
+            description: 'Dados adicionais de contexto do cliente ou da conversa relevantes para a tarefa.',
+          },
+        },
+        required: ['task'],
+      },
+      extract_data: null,
+    };
+  }
+
+  private async executeSubagentTool(
+    subagentFnName: string,
+    args: Record<string, unknown>,
+    clientId: string,
+    companyId: string,
+    conversationId?: string,
+  ): Promise<Record<string, unknown>> {
+    const cleanName = subagentFnName.replace(/^subagent_/, '').toLowerCase();
+    const isUuid = (val: string) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+    const orConditions: Array<{ id?: string; name?: string }> = [{ name: cleanName }];
+    if (isUuid(cleanName)) {
+      orConditions.push({ id: cleanName });
+    }
+
+    const subagent = await this.prisma.painel_subagents.findFirst({
+      where: {
+        ...(clientId ? { client_id: clientId } : {}),
+        is_active: true,
+        OR: orConditions,
+      },
+    });
+
+    if (!subagent) {
+      return {
+        error: `Subagente "${cleanName}" não encontrado ou inativo.`,
+      };
+    }
+
+    const resolvedClientId = clientId || subagent.client_id;
+
+    try {
+      const provider = subagent.llm_provider || 'gemini';
+      let model = subagent.model || '';
+      if (
+        provider.toLowerCase() === 'gemini' &&
+        (!model || model.includes('2.5') || model.includes('2.0'))
+      ) {
+        model = 'gemini-3.6-flash';
+      } else if (!model) {
+        model = 'llama-3.3-70b-versatile';
+      }
+
+      let apiKey = await this.providerKeyResolver.resolveApiKey(
+        resolvedClientId,
+        provider,
+      );
+      if (!apiKey) {
+        apiKey = await this.providerKeyResolver.resolveApiKey('default', provider);
+      }
+      if (!apiKey) {
+        if (provider.toLowerCase() === 'gemini') {
+          apiKey = process.env.GEMINI_API_KEY || '';
+        } else if (provider.toLowerCase() === 'groq') {
+          apiKey = process.env.GROQ_API_KEY || '';
+        } else if (provider.toLowerCase() === 'openrouter') {
+          apiKey = process.env.OPENROUTER_API_KEY || '';
+        }
+      }
+
+      if (!apiKey) {
+        return {
+          error: `Chave de API não configurada para o provedor ${provider} do subagente ${subagent.name}.`,
+        };
+      }
+
+      const allowedToolNames = Array.isArray(subagent.allowed_tool_names)
+        ? (subagent.allowed_tool_names as string[]).filter(
+            (t) => typeof t === 'string',
+          )
+        : [];
+      const subagentApiTools =
+        allowedToolNames.length > 0
+          ? await this.loadApiTools(resolvedClientId, '', allowedToolNames)
+          : [];
+
+      const taskPrompt =
+        typeof args.task === 'string'
+          ? args.task
+          : JSON.stringify(args.task || '');
+      const contextData =
+        typeof args.context_data === 'string'
+          ? args.context_data
+          : args.context_data
+            ? JSON.stringify(args.context_data)
+            : 'Nenhum dado adicional fornecido.';
+
+      const userMessage = `[TAREFA DELEGADA PELO SUPERVISOR]:\n${taskPrompt}\n\n[DADOS DE CONTEXTO]:\n${contextData}`;
+
+      const subToolCalls: ToolCallDebug[] = [];
+      const subResult = await this.callProvider(
+        provider,
+        userMessage,
+        model,
+        apiKey,
+        [],
+        subagent.system_prompt,
+        [],
+        subagentApiTools,
+        subToolCalls,
+      );
+
+      return {
+        status: 'completed',
+        subagent: subagent.name,
+        response: subResult.text,
+        tools_executed: subToolCalls.map((tc) => tc.name),
+      };
+    } catch (error) {
+      this.logger.error(
+        { error: (error as Error).message, subagent: subagent.name },
+        'Erro na execução do subagente',
+      );
+      return {
+        error: `Falha ao executar subagente ${subagent.name}: ${(error as Error).message}`,
+      };
+    }
+  }
+
   private canUseNativeRag(
     agentConfig?: AgentConfig,
   ): agentConfig is AgentConfig {
@@ -1319,28 +1720,90 @@ export class TestChatService {
     const body = this.asRecord(tool.body);
     for (const [key, config] of Object.entries(body)) {
       const cfg = this.asRecord(config);
+      if (cfg.source === 'null' || cfg.type === 'null') {
+        continue; // Campos fixos nulos não exigem preenchimento da IA
+      }
       if (cfg.source !== 'ai') continue;
-      properties[key] = {
-        type: 'string',
-        description:
-          typeof cfg.value === 'string'
-            ? `${cfg.value}. Passe sempre como string entre aspas.`
-            : `Valor de ${key} preenchido pela IA. Passe sempre como string entre aspas.`,
+
+      let paramType = 'string';
+      let description = typeof cfg.value === 'string' && cfg.value.trim()
+        ? cfg.value
+        : `Valor do campo ${key} preenchido pela IA.`;
+
+      if (cfg.type === 'number') {
+        paramType = 'string';
+        description += ' (Deve ser um valor numérico formatado como string, ex: "123")';
+      } else if (cfg.type === 'stringDecimal') {
+        paramType = 'string';
+        description += ' (Deve ser um valor decimal formatado como string, ex: "123.45")';
+      } else if (cfg.type === 'boolean') {
+        paramType = 'boolean';
+      } else if (cfg.type === 'raw' || cfg.type === 'json') {
+        paramType = 'string';
+        description += ' (Enviar valor bruto sem formatação extra / JSON cru)';
+      }
+
+      const propSchema: Record<string, unknown> = {
+        type: paramType,
+        description,
       };
+
+      const rawEnum = cfg.enum || cfg.allowed_values || cfg.allowedValues;
+      if (rawEnum) {
+        const enumList = Array.isArray(rawEnum)
+          ? rawEnum
+          : String(rawEnum)
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+        if (enumList.length) {
+          propSchema.enum = enumList;
+          propSchema.description += ` (Valores permitidos: ${enumList.join(', ')})`;
+        }
+      }
+
+      properties[key] = propSchema;
       required.add(key);
     }
 
     const params = this.asRecord(tool.parameters);
     for (const [key, config] of Object.entries(params)) {
       const cfg = this.asRecord(config);
+      if (cfg.source === 'null' || cfg.type === 'null') continue;
       if (cfg.source && cfg.source !== 'ai') continue;
-      properties[key] = {
-        type: 'string',
-        description:
-          typeof cfg.value === 'string'
-            ? `${cfg.value}. Passe sempre como string entre aspas.`
-            : `Parametro ${key} para executar a API. Passe sempre como string entre aspas.`,
+
+      let paramType = 'string';
+      let description = typeof cfg.value === 'string' && cfg.value.trim()
+        ? cfg.value
+        : `Parametro ${key} para executar a API.`;
+
+      if (cfg.type === 'number' || cfg.type === 'stringDecimal') {
+        paramType = 'string';
+        description += ' (Valor numérico)';
+      } else if (cfg.type === 'boolean') {
+        paramType = 'boolean';
+      }
+
+      const propSchema: Record<string, unknown> = {
+        type: paramType,
+        description,
       };
+
+      const rawEnum = cfg.enum || cfg.allowed_values || cfg.allowedValues;
+      if (rawEnum) {
+        const enumList = Array.isArray(rawEnum)
+          ? rawEnum
+          : String(rawEnum)
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+        if (enumList.length) {
+          propSchema.enum = enumList;
+          propSchema.description += ` (Valores permitidos: ${enumList.join(', ')})`;
+        }
+      }
+
+      properties[key] = propSchema;
       required.add(key);
     }
 
@@ -1605,9 +2068,9 @@ export class TestChatService {
       query,
       context.clientId,
       limit,
-      context.agentRunId,
-      context.conversationId,
-      context.messageId,
+      context.agentRunId || '',
+      context.conversationId || '',
+      context.messageId || '',
       context.companyId,
     );
   }
@@ -1618,21 +2081,232 @@ export class TestChatService {
     return Math.min(Math.max(Math.trunc(numeric), 1), 10);
   }
 
+  private applyFieldFormatter(value: unknown, formatter?: string): unknown {
+    if (value === null || value === undefined) return value;
+    const str = String(value);
+
+    switch (formatter) {
+      case 'clean_digits':
+        return str.replace(/\D/g, '');
+      case 'date_iso': {
+        const ddmmyyyy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (ddmmyyyy) {
+          const day = ddmmyyyy[1].padStart(2, '0');
+          const month = ddmmyyyy[2].padStart(2, '0');
+          const year = ddmmyyyy[3];
+          return `${year}-${month}-${day}`;
+        }
+        return str;
+      }
+      case 'uppercase':
+        return str.toUpperCase();
+      case 'lowercase':
+        return str.toLowerCase();
+      case 'trim':
+        return str.trim();
+      case 'reais_to_cents': {
+        const num = Number(str.replace(',', '.').replace(/[^\d.]/g, ''));
+        return isNaN(num) ? value : Math.round(num * 100);
+      }
+      case 'cents_to_reais': {
+        const num = Number(str);
+        return isNaN(num) ? value : Number((num / 100).toFixed(2));
+      }
+      default:
+        return value;
+    }
+  }
+
+  private applyExtractModifier(value: unknown, modifier?: string): unknown {
+    if (value === null || value === undefined || value === '') return value;
+
+    switch (modifier) {
+      case 'currency_brl': {
+        const num = Number(value);
+        if (isNaN(num)) return value;
+        return num.toLocaleString('pt-BR', {
+          style: 'currency',
+          currency: 'BRL',
+        });
+      }
+      case 'date_format_br': {
+        const d = new Date(String(value));
+        if (isNaN(d.getTime())) return value;
+        return d.toLocaleDateString('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      }
+      case 'mask_cpf': {
+        const digits = String(value).replace(/\D/g, '');
+        if (digits.length === 11) {
+          return digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+        }
+        return value;
+      }
+      case 'mask_cnpj': {
+        const digits = String(value).replace(/\D/g, '');
+        if (digits.length === 14) {
+          return digits.replace(
+            /(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,
+            '$1.$2.$3/$4-$5',
+          );
+        }
+        return value;
+      }
+      case 'mask_phone': {
+        const digits = String(value).replace(/\D/g, '');
+        if (digits.length === 11) {
+          return digits.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+        }
+        if (digits.length === 10) {
+          return digits.replace(/(\d{2})(\d{4})(\d{4})/, '($1) $2-$3');
+        }
+        return value;
+      }
+      case 'uppercase':
+        return String(value).toUpperCase();
+      case 'lowercase':
+        return String(value).toLowerCase();
+      case 'trim':
+        return String(value).trim();
+      default:
+        return value;
+    }
+  }
+
+  private setDeepValue(target: any, path: string, value: unknown) {
+    const parts = path.split('.');
+    let current = target;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      const nextPart = parts[i + 1];
+      const isNextIndex = nextPart !== undefined && /^\d+$/.test(nextPart);
+
+      if (isLast) {
+        if (Array.isArray(current) && /^\d+$/.test(part)) {
+          current[parseInt(part, 10)] = value;
+        } else {
+          current[part] = value;
+        }
+      } else {
+        if (Array.isArray(current) && /^\d+$/.test(part)) {
+          const idx = parseInt(part, 10);
+          if (!current[idx] || typeof current[idx] !== 'object') {
+            current[idx] = isNextIndex ? [] : {};
+          }
+          current = current[idx];
+        } else {
+          if (!current[part] || typeof current[part] !== 'object') {
+            current[part] = isNextIndex ? [] : {};
+          }
+          current = current[part];
+        }
+      }
+    }
+  }
+
   private buildRequestBody(tool: ApiTool, args: Record<string, unknown>) {
     const body = this.asRecord(tool.body);
     if (!Object.keys(body).length) return undefined;
 
     const output: Record<string, unknown> = {};
+    let isRootArray = false;
+
     for (const [key, config] of Object.entries(body)) {
       const cfg = this.asRecord(config);
-      if (cfg.source === 'ai') {
-        output[key] = args[key];
+      let resolvedValue: unknown = undefined;
+
+      if (cfg.source === 'null' || cfg.type === 'null') {
+        resolvedValue = null;
+      } else if (cfg.source === 'ai') {
+        resolvedValue = args[key];
+        if (resolvedValue === undefined && key.includes('.')) {
+          const leafKey = key.split('.').pop()!;
+          if (args[leafKey] !== undefined) {
+            resolvedValue = args[leafKey];
+          }
+        }
+      } else if (cfg.source === 'system') {
+        resolvedValue = cfg.value;
       } else if ('value' in cfg) {
-        output[key] = cfg.value;
+        resolvedValue = cfg.value;
       } else {
-        output[key] = config;
+        resolvedValue = config;
+      }
+
+      // Aplica formatador pré-envio se configurado
+      if (cfg.formatter) {
+        resolvedValue = this.applyFieldFormatter(
+          resolvedValue,
+          String(cfg.formatter),
+        );
+      }
+
+      // Tratamento especial de tipos
+      if (cfg.type === 'null' || resolvedValue === 'null') {
+        resolvedValue = null;
+      } else if (
+        cfg.type === 'raw' ||
+        cfg.type === 'json' ||
+        cfg.type === 'unparsed'
+      ) {
+        if (typeof resolvedValue === 'string') {
+          const trimmed = resolvedValue.trim();
+          if (
+            (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+            (trimmed.startsWith('[') && trimmed.endsWith(']'))
+          ) {
+            try {
+              resolvedValue = JSON.parse(trimmed);
+            } catch {
+              // Mantém valor raw original se não for JSON parseable
+            }
+          }
+        }
+      } else if (cfg.type === 'number') {
+        if (
+          resolvedValue !== null &&
+          resolvedValue !== undefined &&
+          resolvedValue !== ''
+        ) {
+          const num = Number(resolvedValue);
+          if (!isNaN(num)) resolvedValue = num;
+        }
+      } else if (cfg.type === 'boolean') {
+        resolvedValue =
+          resolvedValue === true ||
+          resolvedValue === 'true' ||
+          resolvedValue === 1 ||
+          resolvedValue === '1';
+      } else if (cfg.type === 'stringDecimal') {
+        if (typeof resolvedValue === 'number') {
+          resolvedValue = resolvedValue.toFixed(2);
+        } else if (resolvedValue !== null && resolvedValue !== undefined) {
+          resolvedValue = String(resolvedValue);
+        }
+      }
+
+      if (key.startsWith('0.') || key === '0') {
+        isRootArray = true;
+      }
+
+      if (key.includes('.')) {
+        this.setDeepValue(output, key, resolvedValue);
+      } else {
+        output[key] = resolvedValue;
       }
     }
+
+    if (isRootArray && output['0'] && typeof output['0'] === 'object') {
+      return [output['0']];
+    }
+
     return output;
   }
 
@@ -1653,6 +2327,9 @@ export class TestChatService {
       ) {
         const cfg = config as {
           path?: string;
+          modifier?: string;
+          fallback?: string;
+          max_items?: number;
           rules?: Array<{
             operator: string;
             compare_value: string;
@@ -1663,9 +2340,26 @@ export class TestChatService {
           raw as Record<string, unknown>,
           cfg.path || '',
         );
+
+        if (Array.isArray(value) && cfg.max_items && cfg.max_items > 0) {
+          value = value.slice(0, cfg.max_items);
+        }
+
         if (cfg.rules?.length) {
           value = this.evaluateComparisonRules(value, cfg.rules);
         }
+
+        if (cfg.modifier) {
+          value = this.applyExtractModifier(value, cfg.modifier);
+        }
+
+        if (
+          (value === null || value === undefined || value === '') &&
+          cfg.fallback !== undefined
+        ) {
+          value = cfg.fallback;
+        }
+
         output[key] = value;
       } else {
         output[key] = config;
@@ -1682,10 +2376,54 @@ export class TestChatService {
       return_value: string;
     }>,
   ): unknown {
-    if (value === null || value === undefined || !rules.length) return value;
+    if (!rules || !rules.length) return value;
 
     for (const rule of rules) {
       const { operator, compare_value, return_value } = rule;
+
+      if (operator === 'is_empty_array') {
+        if (Array.isArray(value) && value.length === 0) return return_value;
+        continue;
+      }
+      if (operator === 'is_not_empty_array') {
+        if (Array.isArray(value) && value.length > 0) return return_value;
+        continue;
+      }
+      if (operator === 'is_empty') {
+        if (
+          value === null ||
+          value === undefined ||
+          value === '' ||
+          (Array.isArray(value) && value.length === 0) ||
+          (typeof value === 'object' &&
+            Object.keys(value as object).length === 0)
+        ) {
+          return return_value;
+        }
+        continue;
+      }
+      if (operator === 'is_not_empty') {
+        if (
+          value !== null &&
+          value !== undefined &&
+          value !== '' &&
+          (!Array.isArray(value) || value.length > 0)
+        ) {
+          return return_value;
+        }
+        continue;
+      }
+
+      if (value === null || value === undefined) continue;
+
+      if (operator === '==' && Array.isArray(value) && (compare_value === '[]' || compare_value === '')) {
+        if (value.length === 0) return return_value;
+        continue;
+      }
+      if (operator === '!=' && Array.isArray(value) && (compare_value === '[]' || compare_value === '')) {
+        if (value.length > 0) return return_value;
+        continue;
+      }
 
       const numVal = Number(value);
       const numRule = Number(compare_value);
@@ -1715,6 +2453,9 @@ export class TestChatService {
           case '<':
             return Number(valToCompare) < Number(ruleVal);
           case 'includes':
+            if (Array.isArray(value)) {
+              return value.includes(compare_value);
+            }
             return String(valToCompare).includes(String(ruleVal));
           default:
             return false;
@@ -2044,8 +2785,7 @@ export class TestChatService {
     }
 
     if (openRouterKey) {
-      const model =
-        process.env.MEDIA_VISION_MODEL || 'google/gemini-2.5-flash';
+      const model = process.env.MEDIA_VISION_MODEL || 'google/gemini-2.5-flash';
       try {
         const response = await fetch(
           'https://openrouter.ai/api/v1/chat/completions',
@@ -2081,7 +2821,8 @@ export class TestChatService {
             choices?: Array<{ message?: { content?: string | unknown[] } }>;
           };
           const content = json.choices?.[0]?.message?.content;
-          if (typeof content === 'string' && content.trim()) return content.trim();
+          if (typeof content === 'string' && content.trim())
+            return content.trim();
           if (Array.isArray(content)) {
             const text = content
               .map((part: any) =>
@@ -2126,7 +2867,11 @@ export class TestChatService {
       total_tokens?: number;
     };
   }> {
-    const provider = baseUrl.includes('groq') ? 'groq' : 'openrouter';
+    const provider = baseUrl.includes('groq')
+      ? 'groq'
+      : baseUrl.includes('google')
+        ? 'gemini'
+        : 'openrouter';
     const openAiTools = this.buildOpenAiTools(apiTools);
     const toolsByFunctionName = new Map(
       apiTools.map((tool) => [tool.functionName, tool]),
@@ -2210,14 +2955,16 @@ export class TestChatService {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
 
+    let currentTools = openAiTools.length ? [...openAiTools] : [];
+
     for (let loop = 0; loop < 8; loop++) {
       const payload: Record<string, unknown> = {
         model,
         messages,
         max_tokens: 4096,
       };
-      if (openAiTools.length) {
-        payload.tools = openAiTools;
+      if (currentTools.length) {
+        payload.tools = currentTools;
         payload.tool_choice = 'auto';
       }
 
@@ -2254,8 +3001,22 @@ export class TestChatService {
         const isNativeHandoff =
           functionName === 'transfer_to_human' ||
           functionName === 'request_handoff';
+        const isNativeSetVariable = functionName === 'set_variable';
+        const isNativeSaveCrmData =
+          functionName === 'save_crm_data' ||
+          functionName === 'update_crm_data';
 
-        if (!tool && !isNativeWeb && !isNativeRag && !isNativeHandoff) {
+        const isSubagent = functionName.startsWith('subagent_');
+
+        if (
+          !tool &&
+          !isNativeWeb &&
+          !isNativeRag &&
+          !isNativeHandoff &&
+          !isNativeSetVariable &&
+          !isNativeSaveCrmData &&
+          !isSubagent
+        ) {
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
@@ -2309,6 +3070,133 @@ export class TestChatService {
               arguments: args,
               result,
             });
+          } else if (isNativeSetVariable) {
+            const vars = (args.variables as Record<string, unknown>) || {};
+            const convId = nativeRagContext?.conversationId;
+            if (convId) {
+              const freshState = await this.conversationsService.getState(convId);
+              await this.conversationsService.updateState(convId, {
+                ...freshState,
+                ...vars,
+              });
+            }
+            result = {
+              status: 'success',
+              message: `${Object.keys(vars).length} variável(is) definida(s) com sucesso.`,
+              variables_set: Object.keys(vars),
+            };
+            toolCalls.push({
+              name: 'set_variable',
+              arguments: args,
+              result,
+            });
+          } else if (isNativeSaveCrmData) {
+            const vars = (args.variables as Record<string, unknown>) || {};
+            const opType = String(args.operation_type || 'custom');
+            const contactData = args.contact_data as
+              | Record<string, unknown>
+              | undefined;
+            const convId = nativeRagContext?.conversationId;
+
+            if (convId) {
+              const freshState = await this.conversationsService.getState(convId);
+              await this.conversationsService.updateState(convId, {
+                ...freshState,
+                ...vars,
+                _last_operation_type: opType,
+              });
+
+              const conv = await this.prisma.conversations.findUnique({
+                where: { id: convId },
+                select: { id: true, metadata: true, end_user_id: true },
+              });
+
+              if (conv) {
+                const existingMeta =
+                  (conv.metadata as Record<string, unknown>) || {};
+                const existingCrm =
+                  (existingMeta.crm_data as Record<string, unknown>) || {};
+                const existingVars =
+                  (existingCrm.variables as Record<string, unknown>) || {};
+
+                await this.prisma.conversations.update({
+                  where: { id: convId },
+                  data: {
+                    metadata: {
+                      ...existingMeta,
+                      crm_data: {
+                        operation_type: opType,
+                        updated_at: new Date().toISOString(),
+                        variables: {
+                          ...existingVars,
+                          ...vars,
+                        },
+                      },
+                    } as any,
+                  },
+                });
+
+                if (contactData && conv.end_user_id) {
+                  const endUser = await this.prisma.end_users.findUnique({
+                    where: { id: conv.end_user_id },
+                    select: { id: true, metadata: true, name: true },
+                  });
+
+                  if (endUser) {
+                    const userMeta =
+                      (endUser.metadata as Record<string, unknown>) || {};
+                    const userCustom =
+                      (userMeta.custom_attributes as Record<string, unknown>) ||
+                      {};
+
+                    await this.prisma.end_users.update({
+                      where: { id: conv.end_user_id },
+                      data: {
+                        name: (contactData.name as string) || endUser.name,
+                        metadata: {
+                          ...userMeta,
+                          document_number:
+                            contactData.document_number ||
+                            contactData.cpf ||
+                            contactData.cnpj ||
+                            userMeta.document_number,
+                          email: contactData.email || userMeta.email,
+                          custom_attributes: {
+                            ...userCustom,
+                            ...contactData,
+                          },
+                        } as any,
+                      },
+                    });
+                  }
+                }
+              }
+            }
+
+            result = {
+              status: 'success',
+              result: 'crm_data_saved',
+              message: `Dados da operação "${opType}" salvos com sucesso (${Object.keys(vars).length} variáveis).`,
+              saved_variables: Object.keys(vars),
+            };
+            toolCalls.push({
+              name: 'save_crm_data',
+              arguments: args,
+              result,
+            });
+          } else if (isSubagent) {
+            result = await this.executeSubagentTool(
+              functionName,
+              args,
+              nativeRagContext?.clientId || '',
+              nativeRagContext?.companyId || '',
+              nativeRagContext?.conversationId,
+            );
+            toolCalls.push({
+              name: functionName,
+              arguments: args,
+              result,
+            });
           } else if (tool) {
             result = await this.executeApiTool(tool, args);
             toolCalls.push({ name: tool.name, arguments: args, result });
@@ -2316,11 +3204,34 @@ export class TestChatService {
             result = { error: `Tool ${functionName} nao encontrada` };
             toolCalls.push({ name: functionName, arguments: args, result });
           }
+
+          const hasFailure = Boolean(result?.error || result?.ok === false);
+
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
             content: JSON.stringify(result),
           });
+
+          if (hasFailure) {
+            this.logger.warn(
+              `⛔ [Fail-Fast] Tool ${tool?.name || functionName} falhou. Interrompendo cadeia de execução.`,
+            );
+            // Responde chamadas pendentes no mesmo batch como canceladas
+            const remainingCalls = calls.slice(calls.indexOf(call) + 1);
+            for (const remaining of remainingCalls) {
+              messages.push({
+                role: 'tool',
+                tool_call_id: remaining.id,
+                content: JSON.stringify({
+                  error: 'Execução cancelada: a tool anterior falhou (Fail-Fast).',
+                }),
+              });
+            }
+            // Remove tools nas iterações seguintes para forçar resposta de texto imediata
+            currentTools = [];
+            break;
+          }
         } catch (error) {
           const toolName = tool?.name || functionName;
           const result = {
@@ -2333,6 +3244,22 @@ export class TestChatService {
             tool_call_id: call.id,
             content: JSON.stringify(result),
           });
+
+          this.logger.warn(
+            `⛔ [Fail-Fast] Tool ${toolName} lançou erro. Interrompendo cadeia de execução.`,
+          );
+          const remainingCalls = calls.slice(calls.indexOf(call) + 1);
+          for (const remaining of remainingCalls) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: remaining.id,
+              content: JSON.stringify({
+                error: 'Execução cancelada: a tool anterior falhou (Fail-Fast).',
+              }),
+            });
+          }
+          currentTools = [];
+          break;
         }
       }
     }

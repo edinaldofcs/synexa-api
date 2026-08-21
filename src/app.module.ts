@@ -23,7 +23,9 @@ import { KnowledgeModule } from './knowledge/knowledge.module';
 import { OrchestratorModule } from './orchestrator/orchestrator.module';
 import { WebSearchModule } from './agents/web-search/web-search.module';
 import { ImportsModule } from './imports/imports.module';
-import { VoiceModule } from './voice/voice.module';
+import { BillingModule } from './billing/billing.module';
+import { SubagentsModule } from './subagents/subagents.module';
+import { WorkflowVersionsModule } from './workflow-versions/workflow-versions.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -48,6 +50,8 @@ import { AppService } from './app.service';
     ChatModule,
     ClientsModule,
     AgentsModule,
+    SubagentsModule,
+    WorkflowVersionsModule,
     IntentionsModule,
     ApisModule,
     AuditModule,
@@ -61,7 +65,7 @@ import { AppService } from './app.service';
     OrchestratorModule,
     WebSearchModule,
     ImportsModule,
-    VoiceModule,
+    BillingModule,
   ],
   controllers: [AppController],
   providers: [

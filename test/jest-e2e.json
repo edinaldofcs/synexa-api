@@ -6,6 +6,9 @@
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
+  "moduleNameMapper": {
+    "^file-type$": "<rootDir>/../src/media/__mocks__/file-type.ts"
+  },
   "transformIgnorePatterns": [
     "node_modules/(?!(jose|jwks-rsa|uuid)/)"
   ]

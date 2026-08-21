@@ -36,4 +36,34 @@ describe('ModelPricingService', () => {
     expect(cost).toBeGreaterThan(0);
     expect(cost).toBeCloseTo(0.005, 3);
   });
+
+  it('should calculate Gemini Live voice interactive session cost', () => {
+    const cost = service.calculateVoiceLiveCost({
+      durationSeconds: 120, // 2 minutos
+      inputTokens: 400,
+      outputTokens: 200,
+    });
+
+    // 120 * 0.0005 = 0.060 USD
+    expect(cost).toBeGreaterThanOrEqual(0.06);
+  });
+
+  it('should calculate billable price with 25% default markup and BRL exchange rate', () => {
+    const rawCostUsd = 1.0; // 1 USD
+    const billable = service.calculateBillable(rawCostUsd, false);
+
+    expect(billable.rawCostUsd).toBe(1.0);
+    expect(billable.markupPercent).toBe(25);
+    expect(billable.billableCostUsd).toBe(1.25);
+    expect(billable.billableCostBrl).toBeCloseTo(1.25 * 5.8, 2);
+  });
+
+  it('should calculate billable price with 0% markup for BYOK accounts', () => {
+    const rawCostUsd = 1.0;
+    const billable = service.calculateBillable(rawCostUsd, true);
+
+    expect(billable.markupPercent).toBe(0);
+    expect(billable.billableCostUsd).toBe(1.0);
+    expect(billable.billableCostBrl).toBeCloseTo(1.0 * 5.8, 2);
+  });
 });

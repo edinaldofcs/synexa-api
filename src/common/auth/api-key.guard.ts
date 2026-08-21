@@ -30,7 +30,8 @@ export class ApiKeyGuard implements CanActivate {
     if (!requiresApiKey) return true;
 
     const isDev = this.configService.get('ENVIRONMENT') === 'development';
-    if (isDev) {
+    const bypassDev = this.configService.get('BYPASS_API_KEY_DEV') === 'true';
+    if (isDev && bypassDev) {
       return true;
     }
 

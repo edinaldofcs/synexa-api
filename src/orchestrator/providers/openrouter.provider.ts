@@ -176,6 +176,25 @@ export class OpenRouterProvider implements LLMProvider {
               role: 'tool',
               content: JSON.stringify(apiResult),
             } as OpenAI.Chat.ChatCompletionMessageParam);
+
+            if (apiResult?.error || apiResult?.ok === false) {
+              this.logger.warn(
+                `⛔ [Fail-Fast] Tool ${functionName} falhou no OpenRouterProvider. Interrompendo chamadas subsequentes.`,
+              );
+              const pendingCalls = responseMessage.tool_calls.slice(
+                responseMessage.tool_calls.indexOf(toolCall) + 1,
+              );
+              for (const pending of pendingCalls) {
+                messages.push({
+                  tool_call_id: (pending as any).id,
+                  role: 'tool',
+                  content: JSON.stringify({
+                    error: 'Execução cancelada: a tool anterior falhou (Fail-Fast).',
+                  }),
+                } as OpenAI.Chat.ChatCompletionMessageParam);
+              }
+              break;
+            }
           }
         } else {
           break;

@@ -1,61 +1,125 @@
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ApisService } from './apis.service';
 
 describe('ApisService', () => {
-  const repository = {
+  const mockRepository = {
     create: jest.fn(),
     findAllByClient: jest.fn(),
     findOne: jest.fn(),
     update: jest.fn(),
     remove: jest.fn(),
-    findAgentClientId: jest.fn(),
   };
-  const metadata = { refresh: jest.fn() };
-  const prisma = {
+  const mockMetadata = { refresh: jest.fn() };
+  const mockPrisma = {
     users: { findUnique: jest.fn() },
     painel_clients: { findUnique: jest.fn() },
   };
-  const service = new ApisService(
-    repository as never,
-    metadata as never,
-    prisma as never,
-  );
 
+  let service: ApisService;
   const userId = 'user-1';
   const companyId = 'company-1';
+  const clientId = 'client-1';
 
   beforeEach(() => {
     jest.clearAllMocks();
-    prisma.users.findUnique.mockResolvedValue({ company_id: companyId });
-    prisma.painel_clients.findUnique.mockResolvedValue({
+    service = new ApisService(
+      mockRepository as never,
+      mockMetadata as never,
+      mockPrisma as never,
+    );
+
+    mockPrisma.users.findUnique.mockResolvedValue({ company_id: companyId });
+    mockPrisma.painel_clients.findUnique.mockResolvedValue({
+      id: clientId,
       company_id: companyId,
     });
   });
 
-  it('refreshes owning client metadata after api mutations', async () => {
-    repository.create.mockResolvedValue({ id: 'api-1', client_id: 'client-1' });
-    repository.findOne.mockResolvedValue({
-      id: 'api-1',
-      client_id: 'client-1',
-    });
-    repository.update.mockResolvedValue({ id: 'api-1', client_id: 'client-1' });
-    repository.remove.mockResolvedValue({
-      api: { client_id: 'client-1' },
-      result: { success: true },
+  describe('Tenant security', () => {
+    it('rejeita criação se o usuário não possuir empresa', async () => {
+      mockPrisma.users.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.create(
+          clientId,
+          { name: 'Tool', method: 'GET', url: 'https://example.com' } as any,
+          userId,
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    await service.create(
-      'client-1',
-      {
-        name: 'tool',
-        method: 'GET',
-        url: 'https://example.com',
-      },
-      userId,
-    );
-    await service.update('api-1', { name: 'tool-2' }, userId);
-    await service.remove('api-1', userId);
+    it('rejeita findOne se a API pertencer a cliente de outra empresa', async () => {
+      mockRepository.findOne.mockResolvedValue({
+        id: 'api-1',
+        client_id: 'client-other',
+      });
+      mockPrisma.painel_clients.findUnique.mockResolvedValue({
+        company_id: 'company-other',
+      });
 
-    expect(metadata.refresh).toHaveBeenCalledTimes(3);
-    expect(metadata.refresh).toHaveBeenCalledWith('client-1');
+      await expect(service.findOne('api-1', userId)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('CRUD operations & metadata refresh', () => {
+    it('cria ferramenta e atualiza cache de metadados do cliente', async () => {
+      mockRepository.create.mockResolvedValue({
+        id: 'api-1',
+        client_id: clientId,
+        name: 'Buscar CEP',
+      });
+
+      const result = await service.create(
+        clientId,
+        { name: 'Buscar CEP', method: 'GET', url: 'https://viacep.com.br' } as any,
+        userId,
+      );
+
+      expect(result.id).toBe('api-1');
+      expect(mockRepository.create).toHaveBeenCalledWith(
+        clientId,
+        expect.objectContaining({ name: 'Buscar CEP' }),
+      );
+      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+    });
+
+    it('atualiza ferramenta e atualiza cache de metadados', async () => {
+      mockRepository.findOne.mockResolvedValue({
+        id: 'api-1',
+        client_id: clientId,
+      });
+      mockRepository.update.mockResolvedValue({
+        id: 'api-1',
+        client_id: clientId,
+        name: 'Buscar CEP v2',
+      });
+
+      const result = await service.update(
+        'api-1',
+        { name: 'Buscar CEP v2' } as any,
+        userId,
+      );
+
+      expect(result.name).toBe('Buscar CEP v2');
+      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+    });
+
+    it('remove ferramenta e atualiza cache de metadados', async () => {
+      mockRepository.findOne.mockResolvedValue({
+        id: 'api-1',
+        client_id: clientId,
+      });
+      mockRepository.remove.mockResolvedValue({
+        api: { client_id: clientId },
+        result: { success: true },
+      });
+
+      const result = await service.remove('api-1', userId);
+
+      expect(result).toEqual({ success: true });
+      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+    });
   });
 });

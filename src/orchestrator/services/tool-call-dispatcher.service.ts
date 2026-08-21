@@ -85,6 +85,14 @@ export class ToolCallDispatcher {
           (args.variables as Record<string, unknown>) || {},
           conversationId,
         );
+      case 'save_crm_data':
+      case 'update_crm_data':
+        return this.handleSaveCrmData(
+          (args.variables as Record<string, unknown>) || {},
+          String(args.operation_type || 'custom'),
+          (args.contact_data as Record<string, unknown>) || undefined,
+          conversationId,
+        );
       case 'transfer_to_human':
       case 'request_handoff':
         return this.handleTransferToHuman(
@@ -502,4 +510,138 @@ export class ToolCallDispatcher {
       };
     }
   }
+
+  saveCrmDataToolDefinition() {
+    return {
+      name: 'save_crm_data',
+      description:
+        'Salva ou atualiza os dados estruturados de CRM, cobrança, FAQ ou vendas coletados durante a conversa. Use sempre que o cliente confirmar um dado (ex: CPF, valor de acordo, data de pagamento, categoria de dúvida, produto de interesse).',
+      parameters: {
+        type: 'object',
+        properties: {
+          operation_type: {
+            type: 'string',
+            description:
+              'Tipo de operação: "cobranca", "faq", "vendas", "suporte" ou "custom".',
+          },
+          variables: {
+            type: 'object',
+            description:
+              'Objeto chave-valor com os dados coletados (ex: {"valor_negociado": "R$ 350,00", "data_promessa": "2026-09-25", "status_negociacao": "promessa_firmada"}).',
+            additionalProperties: true,
+          },
+          contact_data: {
+            type: 'object',
+            description:
+              'Dados de identificação e contato do cliente (ex: {"document_number": "123.456.789-00", "email": "cliente@email.com", "phone": "+5511999998888"}).',
+            additionalProperties: true,
+          },
+        },
+        required: ['variables'],
+      },
+    };
+  }
+
+  async handleSaveCrmData(
+    variables: Record<string, unknown>,
+    operationType = 'custom',
+    contactData?: Record<string, unknown>,
+    conversationId?: string,
+  ) {
+    if (!variables || Object.keys(variables).length === 0) {
+      return { result: 'no_data', message: 'Nenhum dado fornecido para salvar.' };
+    }
+
+    if (conversationId) {
+      // 1. Atualiza o conversation_state
+      const freshState = await this.conversationsService.getState(conversationId);
+      await this.conversationsService.updateState(conversationId, {
+        ...freshState,
+        ...variables,
+        _last_operation_type: operationType,
+      });
+
+      // 2. Atualiza os metadados da conversa
+      const conv = await this.prisma.conversations.findUnique({
+        where: { id: conversationId },
+        select: { id: true, metadata: true, end_user_id: true },
+      });
+
+      if (conv) {
+        const existingMeta = (conv.metadata as Record<string, unknown>) || {};
+        const existingCrm =
+          (existingMeta.crm_data as Record<string, unknown>) || {};
+        const existingVars =
+          (existingCrm.variables as Record<string, unknown>) || {};
+
+        const updatedMeta = {
+          ...existingMeta,
+          crm_data: {
+            operation_type: operationType || existingCrm.operation_type || 'custom',
+            updated_at: new Date().toISOString(),
+            variables: {
+              ...existingVars,
+              ...variables,
+            },
+          },
+        };
+
+        await this.prisma.conversations.update({
+          where: { id: conversationId },
+          data: { metadata: updatedMeta as any },
+        });
+
+        // 3. Atualiza os dados de contato em end_users se fornecido
+        if (contactData && conv.end_user_id) {
+          const endUser = await this.prisma.end_users.findUnique({
+            where: { id: conv.end_user_id },
+            select: { id: true, metadata: true, name: true },
+          });
+
+          if (endUser) {
+            const userMeta = (endUser.metadata as Record<string, unknown>) || {};
+            const userCustom =
+              (userMeta.custom_attributes as Record<string, unknown>) || {};
+
+            await this.prisma.end_users.update({
+              where: { id: conv.end_user_id },
+              data: {
+                name: (contactData.name as string) || endUser.name,
+                metadata: {
+                  ...userMeta,
+                  document_number:
+                    contactData.document_number ||
+                    contactData.cpf ||
+                    contactData.cnpj ||
+                    userMeta.document_number,
+                  email: contactData.email || userMeta.email,
+                  custom_attributes: {
+                    ...userCustom,
+                    ...contactData,
+                  },
+                } as any,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    this.logger.log(
+      {
+        conversation_id: conversationId,
+        operation_type: operationType,
+        variables_count: Object.keys(variables).length,
+      },
+      'save_crm_data: dados de CRM e cobrança persistidos com sucesso',
+    );
+
+    return {
+      result: 'crm_data_saved',
+      status: 'success',
+      message: `Dados da operação "${operationType}" salvos com sucesso (${Object.keys(variables).length} variáveis).`,
+      saved_variables: Object.keys(variables),
+    };
+  }
 }
+

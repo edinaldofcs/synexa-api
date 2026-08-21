@@ -206,6 +206,25 @@ export class ClientsService {
       }
     }
 
+    const originalSubagents = await this.prisma.painel_subagents.findMany({
+      where: { client_id: clientId },
+    });
+    for (const subagent of originalSubagents || []) {
+      const subagentData = {
+        ...(subagent as unknown as Record<string, unknown>),
+      };
+      delete subagentData.id;
+      delete subagentData.client_id;
+      delete subagentData.created_at;
+      delete subagentData.updated_at;
+      await this.prisma.painel_subagents.create({
+        data: {
+          ...subagentData,
+          client_id: newClient.id,
+        } as any,
+      });
+    }
+
     void this.metadataService.refresh(newClient.id);
     return newClient;
   }

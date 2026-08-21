@@ -21,6 +21,7 @@ const TENANT_SUPPORTED_MODELS = [
   'knowledge_documents',
   'knowledge_chunks',
   'knowledge_embeddings',
+  'workflow_versions',
 ];
 
 @Injectable()

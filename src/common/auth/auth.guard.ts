@@ -28,7 +28,8 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
     ]);
     if (isPublic) return true;
 
-    if ((process.env.ENVIRONMENT || 'development') !== 'development') {
+    const env = process.env.ENVIRONMENT || 'development';
+    if (env !== 'development' && env !== 'test') {
       return this.validateSupabaseToken(context);
     }
 

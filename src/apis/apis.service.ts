@@ -105,7 +105,9 @@ export class ApisService {
     body?: any;
   }) {
     if (!payload.url || !payload.url.startsWith('http')) {
-      throw new BadRequestException('URL inválida. Deve iniciar com http:// ou https://');
+      throw new BadRequestException(
+        'URL inválida. Deve iniciar com http:// ou https://',
+      );
     }
 
     const startTime = Date.now();
@@ -113,12 +115,17 @@ export class ApisService {
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const isPostOrPut = payload.method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(payload.method.toUpperCase());
-      const bodyToSend = isPostOrPut && payload.body
-        ? typeof payload.body === 'string'
-          ? payload.body
-          : JSON.stringify(payload.body)
-        : undefined;
+      const isPostOrPut =
+        payload.method &&
+        ['POST', 'PUT', 'PATCH', 'DELETE'].includes(
+          payload.method.toUpperCase(),
+        );
+      const bodyToSend =
+        isPostOrPut && payload.body
+          ? typeof payload.body === 'string'
+            ? payload.body
+            : JSON.stringify(payload.body)
+          : undefined;
 
       const response = await fetch(payload.url, {
         method: payload.method || 'GET',
@@ -153,7 +160,10 @@ export class ApisService {
         status: 0,
         statusText: 'Network / Connection Error',
         latency,
-        error: err.name === 'AbortError' ? 'Tempo limite esgotado (15s)' : err.message,
+        error:
+          err.name === 'AbortError'
+            ? 'Tempo limite esgotado (15s)'
+            : err.message,
         rawData: null,
       };
     } finally {

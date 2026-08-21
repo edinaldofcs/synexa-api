@@ -35,6 +35,7 @@ import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
 import { FallbackProviderService } from './services/fallback-provider.service';
 import { retryWithBackoff } from './utils/retry-with-backoff.util';
+import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
 
 @Injectable()
 export class OrchestrationService {
@@ -50,6 +51,7 @@ export class OrchestrationService {
     private readonly modelPricingService: ModelPricingService,
     private readonly circuitBreaker: ProviderCircuitBreakerService,
     private readonly fallbackProviderService: FallbackProviderService,
+    private readonly crmDataTransformer: CrmDataTransformerService,
   ) {}
 
   async processMessage(
@@ -625,6 +627,7 @@ export class OrchestrationService {
       tools.push(this.toolCallDispatcher.mediaDescribeImageToolDefinition());
       tools.push(this.toolCallDispatcher.switchAgentToolDefinition());
       tools.push(this.toolCallDispatcher.setVariableToolDefinition());
+      tools.push(this.toolCallDispatcher.saveCrmDataToolDefinition());
       tools.push(this.toolCallDispatcher.transferToHumanToolDefinition());
     }
 
@@ -648,6 +651,42 @@ export class OrchestrationService {
       content: output.text,
       request_id: requestId,
     });
+
+    try {
+      const conv = await this.prisma.conversations.findUnique({
+        where: { id: conversationId },
+        include: { end_users: true, painel_clients: { select: { metadata: true } } },
+      });
+
+      if (conv) {
+        const clientMeta = (conv.painel_clients?.metadata as Record<string, unknown>) || {};
+        const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
+        const freshState = await this.conversationsService.getState(conversationId);
+
+        const crmRecord = this.crmDataTransformer.transform({
+          sessionState: freshState,
+          endUser: conv.end_users,
+          conversation: conv,
+          config: crmOutputConfig,
+        });
+
+        const existingMeta = (conv.metadata as Record<string, unknown>) || {};
+        await this.prisma.conversations.update({
+          where: { id: conversationId },
+          data: {
+            metadata: {
+              ...existingMeta,
+              crm_record: crmRecord,
+            } as any,
+          },
+        });
+      }
+    } catch (crmErr) {
+      this.logger.warn(
+        { error: (crmErr as Error).message },
+        'Falha ao atualizar crm_record no handleOutput',
+      );
+    }
 
     return {
       responseText: output.text,
@@ -723,8 +762,23 @@ export class OrchestrationService {
 
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
-      select: { agent_name: true },
+      select: { agent_name: true, metadata: true },
     });
+
+    const metadata = (client?.metadata as Record<string, unknown>) || {};
+    const schema = (metadata.variable_schema as Record<string, unknown>) || null;
+
+    let crmInstruction = '';
+    if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {
+      const fieldList = schema.fields
+        .map(
+          (f: any) =>
+            `- ${f.key} (${f.label || f.key}, tipo: ${f.type || 'text'}${f.required ? ', OBRIGATÓRIO' : ''})${f.description ? ': ' + f.description : ''}`,
+        )
+        .join('\n');
+
+      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nVocê deve coletar ou atualizar os seguintes campos durante o atendimento usando a tool save_crm_data assim que o usuário fornecer os dados:\n${fieldList}\nAo identificar qualquer um desses dados confirmados pelo cliente, chame save_crm_data imediatamente.`;
+    }
 
     const variables: Record<string, string> = {
       nome_agente: client?.agent_name || '',
@@ -737,7 +791,9 @@ export class OrchestrationService {
       }
     }
 
-    return prompt.replace(/\[\[([^\]]+)]]/g, (match, rawKey: string) => {
+    const fullPrompt = prompt + crmInstruction;
+
+    return fullPrompt.replace(/\[\[([^\]]+)]]/g, (match, rawKey: string) => {
       const key = rawKey.trim();
 
       if (Object.prototype.hasOwnProperty.call(variables, key)) {

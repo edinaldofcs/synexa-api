@@ -13,6 +13,8 @@ import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { CreateKnowledgeDocumentDto } from './dto/create-knowledge-document.dto';
 import { SearchKnowledgeDto } from './dto/search-knowledge.dto';
 
+import { MockEmbeddingProvider } from './providers/mock-embedding.provider';
+
 const DEFAULT_CHUNK_SIZE = 1200;
 const DEFAULT_CHUNK_OVERLAP = 180;
 
@@ -25,6 +27,7 @@ export class KnowledgeService {
     private readonly prisma: PrismaService,
     private readonly queueService: QueueService,
     private readonly configService: ConfigService,
+    private readonly mockEmbeddingProvider: MockEmbeddingProvider,
   ) {}
 
   async createBase(
@@ -237,19 +240,32 @@ export class KnowledgeService {
   }
 
   private async createEmbedding(input: string, clientId: string) {
+    const isMock =
+      this.configService.get<string>('LLM_PROVIDER') === 'mock' ||
+      this.configService.get<string>('ENVIRONMENT') === 'development';
+
     const openai = await this.getOpenAIForClient(clientId);
     if (!openai) {
+      if (isMock) {
+        return this.mockEmbeddingProvider.generateEmbedding(input);
+      }
       throw new BadRequestException(
         'API Key para openai/openrouter nao configurada. Configure em Configuracoes > Provedores.',
       );
     }
 
-    const response = await openai.embeddings.create({
-      model: this.embeddingModel,
-      input,
-    });
-
-    return response.data[0].embedding;
+    try {
+      const response = await openai.embeddings.create({
+        model: this.embeddingModel,
+        input,
+      });
+      return response.data[0].embedding;
+    } catch (err) {
+      if (isMock) {
+        return this.mockEmbeddingProvider.generateEmbedding(input);
+      }
+      throw err;
+    }
   }
 
   private async getOpenAIForClient(clientId: string): Promise<OpenAI | null> {

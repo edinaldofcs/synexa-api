@@ -40,6 +40,10 @@ describe('ClientsService', () => {
       upsert: jest.fn().mockResolvedValue({ id: 'cred-1' }),
       update: jest.fn().mockResolvedValue({ id: 'cred-1' }),
     },
+    painel_subagents: {
+      findMany: jest.fn().mockResolvedValue([]),
+      create: jest.fn().mockResolvedValue({ id: 'sub-new' }),
+    },
   };
   const service = new ClientsService(
     clientsRepository as never,
@@ -86,7 +90,7 @@ describe('ClientsService', () => {
     );
   });
 
-  it('duplicates agents, intentions, apis and remaps next_api_id', async () => {
+  it('duplicates agents, intentions, apis, subagents and remaps next_api_id', async () => {
     clientsRepository.findOne.mockResolvedValue({
       id: 'client-old',
       company_id: companyId,
@@ -119,6 +123,15 @@ describe('ClientsService', () => {
       .mockResolvedValueOnce({ id: 'api-new' })
       .mockResolvedValueOnce({ id: 'api-next-new' });
 
+    prisma.painel_subagents.findMany.mockResolvedValue([
+      {
+        id: 'sub-1',
+        client_id: 'client-old',
+        name: 'Especialista',
+        system_prompt: 'Prompt',
+      },
+    ]);
+
     await expect(service.duplicate('client-old', userId)).resolves.toEqual({
       id: 'client-new',
     });
@@ -131,6 +144,13 @@ describe('ClientsService', () => {
     });
     expect(apisRepository.update).toHaveBeenCalledWith('api-new', {
       next_api_id: 'api-next-new',
+    });
+    expect(prisma.painel_subagents.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        client_id: 'client-new',
+        name: 'Especialista',
+        system_prompt: 'Prompt',
+      }),
     });
     expect(metadata.refresh).toHaveBeenCalledWith('client-new');
   });

@@ -73,7 +73,11 @@ export class WebSearchService {
 
     // 1. Tentar OpenRouter se a chave estiver configurada
     const openRouterKey = process.env.OPENROUTER_API_KEY;
-    if (openRouterKey && !openRouterKey.startsWith('mock') && openRouterKey !== 'invalid') {
+    if (
+      openRouterKey &&
+      !openRouterKey.startsWith('mock') &&
+      openRouterKey !== 'invalid'
+    ) {
       try {
         const client = this.getClient();
         const completion = await client.chat.completions.create({
@@ -136,7 +140,9 @@ export class WebSearchService {
         },
       ],
       source: 'Synexa Live Web Search',
-      citations: [`https://duckduckgo.com/?q=${encodeURIComponent(normalizedQuestion)}`],
+      citations: [
+        `https://duckduckgo.com/?q=${encodeURIComponent(normalizedQuestion)}`,
+      ],
     };
   }
 
@@ -219,8 +225,7 @@ export class WebSearchService {
               title: ddgJson.Heading || query,
               snippet: abstract,
               link:
-                url ||
-                'https://duckduckgo.com/?q=' + encodeURIComponent(query),
+                url || 'https://duckduckgo.com/?q=' + encodeURIComponent(query),
             });
             if (url) citations.push(url);
           }

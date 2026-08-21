@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ExecutionContext } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { createHmac } from 'crypto';
+import { JwtService } from '@nestjs/jwt';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/common/prisma/prisma.service';
 import { RedisService } from '../src/common/redis/redis.service';
@@ -24,6 +24,7 @@ function signPayload(payload: Record<string, unknown>) {
 describe('Enterprise Synexa (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
+  let authToken: string;
 
   const mockConn = {
     id: 'test-conn-1',
@@ -57,11 +58,12 @@ describe('Enterprise Synexa (e2e)', () => {
   }
 
   beforeAll(async () => {
+    process.env.ENVIRONMENT = 'test';
+    process.env.JWT_SECRET = 'synexa-dev-jwt-secret-nao-usar-em-producao-2026';
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(APP_GUARD)
-      .useValue({ canActivate: async () => true })
       .overrideProvider(RedisService)
       .useValue({
         set: jest.fn(),
@@ -81,7 +83,16 @@ describe('Enterprise Synexa (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api');
     prisma = moduleFixture.get<PrismaService>(PrismaService);
+    const jwtService = moduleFixture.get<JwtService>(JwtService);
+    authToken = jwtService.sign({
+      sub: '00000000-0000-0000-0000-000000000005',
+      email: 'admin@synexa.com.br',
+      role: 'admin',
+      company_id: 'test-company',
+    });
+
     await app.init();
   });
 
@@ -432,7 +443,7 @@ describe('Enterprise Synexa (e2e)', () => {
   });
 
   describe('4. Auditoria', () => {
-    it.skip('#26 Trace completo por request_id', async () => {
+    it('#26 Trace completo por request_id', async () => {
       jest.spyOn(prisma.inbound_events, 'findMany').mockResolvedValue([
         {
           id: 'ie-1',
@@ -463,7 +474,8 @@ describe('Enterprise Synexa (e2e)', () => {
       ]);
 
       const res = await request(app.getHttpServer())
-        .get('/audit/trace/trace-1')
+        .get('/api/audit/trace/trace-1')
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(200);
 
       expect(res.body.request_id).toBe('trace-1');
@@ -473,45 +485,51 @@ describe('Enterprise Synexa (e2e)', () => {
       expect(res.body.message_events).toHaveLength(1);
     });
 
-    it.skip('#28 Filtro agent_runs por status', async () => {
+    it('#28 Filtro agent_runs por status', async () => {
       jest
         .spyOn(prisma.agent_runs, 'findMany')
         .mockResolvedValue([{ id: 'ar-fail', status: 'failed' } as any]);
       jest.spyOn(prisma.agent_runs, 'count').mockResolvedValue(1);
 
       const res = await request(app.getHttpServer())
-        .get('/audit/agent-runs?status=failed')
+        .get('/api/audit/agent-runs?status=failed')
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(200);
 
       expect(res.body.total).toBe(1);
+      expect(res.body.data).toHaveLength(1);
     });
   });
 
   describe('5. Handoff', () => {
-    it.skip('#22 Handoff em conversa já manual → 400', async () => {
+    it('#22 Handoff em conversa já manual → 400', async () => {
+      const validConvId = '00000000-0000-0000-0000-000000000001';
       jest.spyOn(prisma.conversations, 'findUnique').mockResolvedValue({
-        id: 'conv-manual',
+        id: validConvId,
         mode: 'manual',
         status: 'active',
       } as any);
 
       const res = await request(app.getHttpServer())
-        .post('/conversations/conv-manual/handoff')
+        .post(`/api/conversations/${validConvId}/handoff`)
+        .set('Authorization', `Bearer ${authToken}`)
         .send({ reason: 'test' })
         .expect(400);
 
       expect(res.body.message).toMatch(/already in manual/i);
     });
 
-    it.skip('#24 Liberar conversa automática → 400', async () => {
+    it('#24 Liberar conversa automática → 400', async () => {
+      const validConvId = '00000000-0000-0000-0000-000000000001';
       jest.spyOn(prisma.conversations, 'findUnique').mockResolvedValue({
-        id: 'conv-auto',
+        id: validConvId,
         mode: 'auto',
         status: 'active',
       } as any);
 
       const res = await request(app.getHttpServer())
-        .post('/conversations/conv-auto/release-handoff')
+        .post(`/api/conversations/${validConvId}/release-handoff`)
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(400);
 
       expect(res.body.message).toMatch(/not in manual/i);
@@ -519,7 +537,7 @@ describe('Enterprise Synexa (e2e)', () => {
   });
 
   describe('6. Observabilidade', () => {
-    it.skip('#46 Latencia - retorna avg/p95', async () => {
+    it('#46 Latencia - retorna avg/p95', async () => {
       jest.spyOn(prisma.agent_runs, 'findMany').mockResolvedValue([
         {
           latency_ms: 100,
@@ -542,7 +560,8 @@ describe('Enterprise Synexa (e2e)', () => {
       ]);
 
       const res = await request(app.getHttpServer())
-        .get('/observability/latency?hours=24')
+        .get('/api/observability/latency?hours=24')
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(200);
 
       expect(res.body).toHaveProperty('avg_latency_ms');
@@ -550,7 +569,7 @@ describe('Enterprise Synexa (e2e)', () => {
       expect(res.body).toHaveProperty('error_rate_percent');
     });
 
-    it.skip('#48 Erros por tenant', async () => {
+    it('#48 Erros por tenant', async () => {
       jest
         .spyOn(prisma.agent_runs, 'groupBy')
         .mockResolvedValue([
@@ -559,7 +578,8 @@ describe('Enterprise Synexa (e2e)', () => {
       jest.spyOn(prisma.agent_runs, 'count').mockResolvedValue(5);
 
       const res = await request(app.getHttpServer())
-        .get('/observability/errors?hours=24')
+        .get('/api/observability/errors?hours=24')
+        .set('Authorization', `Bearer ${authToken}`)
         .expect(200);
 
       expect(res.body.total_failures).toBe(5);
@@ -600,7 +620,8 @@ describe('Enterprise Synexa (e2e)', () => {
         .mockResolvedValue(null);
 
       const res = await request(app.getHttpServer())
-        .post('/orchestrator/chat')
+        .post('/api/orchestrator/chat')
+        .set('Authorization', `Bearer ${authToken}`)
         .send({ cellPhone: 'test', to: 'test', transcript: 'test' });
 
       expect(res.headers['x-deprecated']).toBe('true');

@@ -3,7 +3,6 @@ import {
   IsString,
   IsNotEmpty,
   IsOptional,
-  IsEnum,
   IsUrl,
   IsNumber,
   IsIn,
@@ -14,17 +13,48 @@ export enum Environment {
   DEVELOPMENT = 'development',
   STAGING = 'staging',
   PRODUCTION = 'production',
+  TEST = 'test',
 }
 
 export enum NodeEnv {
   DEVELOPMENT = 'development',
   PRODUCTION = 'production',
+  TEST = 'test',
+}
+
+export enum ServiceRole {
+  API = 'api',
+  VOICE = 'voice',
+  WORKER = 'worker',
+  WORKER_INGESTION = 'worker-ingestion',
+  WORKER_AGENT = 'worker-agent',
+  WORKER_DISPATCHER = 'worker-dispatcher',
+  WORKER_MEDIA = 'worker-media',
+  WORKER_KNOWLEDGE = 'worker-knowledge',
+  WORKER_DLQ = 'worker-dlq',
+}
+
+export enum StorageProvider {
+  LOCAL = 'local',
+  SUPABASE = 'supabase',
+  S3 = 's3',
+}
+
+export enum AuthProvider {
+  LOCAL = 'local',
+  SUPABASE = 'supabase',
 }
 
 export enum LlmProvider {
   GEMINI = 'gemini',
   GROQ = 'groq',
   OPENROUTER = 'openrouter',
+  MOCK = 'mock',
+}
+
+export enum VoiceProvider {
+  GEMINI = 'gemini',
+  MOCK = 'mock',
 }
 
 export class EnvironmentVariables {
@@ -36,9 +66,25 @@ export class EnvironmentVariables {
   @IsOptional()
   NODE_ENV?: string = NodeEnv.DEVELOPMENT;
 
+  @IsIn(Object.values(ServiceRole))
+  @IsOptional()
+  SERVICE_ROLE?: string = ServiceRole.API;
+
+  @IsIn(Object.values(StorageProvider))
+  @IsOptional()
+  STORAGE_PROVIDER?: string = StorageProvider.LOCAL;
+
+  @IsIn(Object.values(AuthProvider))
+  @IsOptional()
+  AUTH_PROVIDER?: string = AuthProvider.LOCAL;
+
   @IsNumber({}, { message: 'PORT must be a valid number' })
   @IsOptional()
   PORT?: number = 3000;
+
+  @IsNumber({}, { message: 'VOICE_PORT must be a valid number' })
+  @IsOptional()
+  VOICE_PORT?: number = 3001;
 
   @IsString()
   @IsNotEmpty({ message: 'DATABASE_URL is required' })
@@ -81,7 +127,11 @@ export class EnvironmentVariables {
 
   @IsIn(Object.values(LlmProvider))
   @IsOptional()
-  LLM_PROVIDER?: string;
+  LLM_PROVIDER?: string = LlmProvider.MOCK;
+
+  @IsIn(Object.values(VoiceProvider))
+  @IsOptional()
+  VOICE_PROVIDER?: string = VoiceProvider.MOCK;
 
   @IsString()
   @IsOptional()
@@ -123,6 +173,14 @@ export class EnvironmentVariables {
   @IsOptional()
   EXTERNAL_TOOL_TIMEOUT?: number = 30000;
 
+  @IsNumber({}, { message: 'MOCK_LLM_LATENCY_MS must be a valid number' })
+  @IsOptional()
+  MOCK_LLM_LATENCY_MS?: number = 80;
+
+  @IsNumber({}, { message: 'MOCK_VOICE_LATENCY_MS must be a valid number' })
+  @IsOptional()
+  MOCK_VOICE_LATENCY_MS?: number = 40;
+
   @IsString()
   @IsOptional()
   ENCRYPTION_KEY?: string;
@@ -163,7 +221,10 @@ export function validateEnv(
     throw new Error(`Environment validation failed:\n${messages}`);
   }
 
-  if (validatedConfig.ENVIRONMENT !== Environment.DEVELOPMENT) {
+  if (
+    validatedConfig.ENVIRONMENT !== Environment.DEVELOPMENT &&
+    validatedConfig.ENVIRONMENT !== Environment.TEST
+  ) {
     if (!validatedConfig.SUPABASE_URL) {
       throw new Error(
         'SUPABASE_URL is required in production/staging environment',
