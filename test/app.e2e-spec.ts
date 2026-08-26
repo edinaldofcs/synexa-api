@@ -20,6 +20,10 @@ describe('AppController (e2e)', () => {
         set: jest.fn(),
         get: jest.fn().mockResolvedValue(null),
         del: jest.fn(),
+        addToSet: jest.fn(),
+        getSetMembers: jest.fn().mockResolvedValue([]),
+        removeFromSet: jest.fn(),
+        expire: jest.fn(),
         acquireLock: jest.fn().mockResolvedValue(true),
         releaseLock: jest.fn(),
         checkRateLimit: jest.fn().mockResolvedValue({
@@ -58,4 +62,3 @@ describe('AppController (e2e)', () => {
       });
   });
 });
-

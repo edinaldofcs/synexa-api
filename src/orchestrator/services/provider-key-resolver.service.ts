@@ -14,90 +14,133 @@ export class ProviderKeyResolverService {
 
   async resolveApiKey(clientId: string, provider: string): Promise<string> {
     const providerLower = provider.toLowerCase();
+    const encryptionKey = this.getEncryptionKey();
 
-    // 1. Tenta buscar da tabela dedicada provider_credentials (Fase 2)
-    try {
-      const credential = await this.prisma.provider_credentials.findFirst({
-        where: {
-          client_id: clientId,
-          provider: providerLower,
-          status: 'active',
-        },
-      });
+    const decryptSafe = (val?: string | null): string => {
+      if (!val) return '';
+      if (val.startsWith('enc:')) {
+        if (!encryptionKey) {
+          this.logger.error(
+            { provider: providerLower, clientId },
+            'ENCRYPTION_KEY ausente; credencial criptografada recusada',
+          );
+          return '';
+        }
+        try {
+          return decrypt(val.slice(4), encryptionKey);
+        } catch (err) {
+          this.logger.warn(
+            {
+              provider: providerLower,
+              clientId,
+              error: (err as Error).message,
+            },
+            'Falha ao descriptografar chave',
+          );
+          return '';
+        }
+      }
+      return val;
+    };
 
-      if (credential?.api_key_enc) {
-        // Atualiza last_used_at de forma não-bloqueante
-        void this.prisma.provider_credentials
-          .update({
-            where: { id: credential.id },
-            data: { last_used_at: new Date() },
-          })
-          .catch(() => {});
+    // 1. Tenta buscar da tabela dedicada provider_credentials pelo clientId
+    if (clientId) {
+      try {
+        const credential = await this.prisma.provider_credentials.findFirst({
+          where: {
+            client_id: clientId,
+            provider: providerLower,
+            status: 'active',
+          },
+        });
 
-        let rawKey = credential.api_key_enc;
-        if (rawKey.startsWith('enc:')) {
-          const encryptionKey =
-            this.configService.get<string>('ENCRYPTION_KEY');
-          if (encryptionKey) {
-            try {
-              rawKey = decrypt(rawKey.slice(4), encryptionKey);
-            } catch (err) {
-              this.logger.warn(
-                {
-                  provider: providerLower,
-                  clientId,
-                  error: (err as Error).message,
-                },
-                'Falha ao descriptografar API key de provider_credentials',
-              );
-              rawKey = '';
+        if (credential?.api_key_enc) {
+          void this.prisma.provider_credentials
+            .update({
+              where: { id: credential.id },
+              data: { last_used_at: new Date() },
+            })
+            .catch(() => {});
+
+          const rawKey = decryptSafe(credential.api_key_enc);
+          if (
+            rawKey &&
+            rawKey.trim() &&
+            !rawKey.includes('***') &&
+            rawKey !== 'stored'
+          ) {
+            return rawKey.trim();
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          { provider: providerLower, clientId, error: (err as Error).message },
+          'Erro ao consultar provider_credentials, tentando fallback',
+        );
+      }
+
+      // 2. Fallback: metadata.llm_providers do cliente
+      try {
+        const client = await this.prisma.painel_clients.findUnique({
+          where: { id: clientId },
+          select: { metadata: true, company_id: true },
+        });
+
+        const providers = (client?.metadata as any)?.llm_providers || {};
+        const config = providers[provider] || providers[providerLower];
+        const apiKey = decryptSafe(config?.apiKey);
+        if (
+          apiKey &&
+          apiKey.trim() &&
+          !apiKey.includes('***') &&
+          apiKey !== 'stored'
+        ) {
+          return apiKey.trim();
+        }
+
+        // 3. Fallback: busca em outros clientes da mesma empresa
+        if (client?.company_id) {
+          const companyCred = await this.prisma.provider_credentials.findFirst({
+            where: {
+              painel_clients: { company_id: client.company_id },
+              provider: providerLower,
+              status: 'active',
+            },
+          });
+          if (companyCred?.api_key_enc) {
+            const rawCompanyKey = decryptSafe(companyCred.api_key_enc);
+            if (
+              rawCompanyKey &&
+              rawCompanyKey.trim() &&
+              !rawCompanyKey.includes('***')
+            ) {
+              return rawCompanyKey.trim();
             }
           }
         }
-        if (rawKey) return rawKey;
-      }
-    } catch (err) {
-      this.logger.warn(
-        { provider: providerLower, clientId, error: (err as Error).message },
-        'Erro ao consultar provider_credentials, usando fallback metadata',
-      );
-    }
-
-    // 2. Fallback: metadata.llm_providers
-    const client = await this.prisma.painel_clients.findUnique({
-      where: { id: clientId },
-      select: { metadata: true },
-    });
-
-    const providers = (client?.metadata as any)?.llm_providers || {};
-    const config = providers[provider] || providers[providerLower];
-    let apiKey = config?.apiKey || '';
-
-    if (apiKey && typeof apiKey === 'string' && apiKey.startsWith('enc:')) {
-      const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
-      if (encryptionKey) {
-        try {
-          apiKey = decrypt(apiKey.slice(4), encryptionKey);
-        } catch (err) {
-          this.logger.warn(
-            { provider, clientId, error: (err as Error).message },
-            'Falha ao descriptografar API key de metadata',
-          );
-          apiKey = '';
-        }
+      } catch (err) {
+        this.logger.warn(
+          { provider, clientId, error: (err as Error).message },
+          'Falha ao buscar chave no metadata do cliente',
+        );
       }
     }
 
-    // 3. Fallback: Environment Variables
-    if (!apiKey) {
-      const envKeyName = `${provider.toUpperCase()}_API_KEY`;
-      apiKey =
-        this.configService.get<string>(envKeyName) ||
-        process.env[envKeyName] ||
-        '';
-    }
+    // Fallback explícito: variáveis de ambiente do runtime.
+    const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+    const envKey =
+      this.configService.get<string>(envKeyName) ||
+      process.env[envKeyName] ||
+      '';
 
-    return apiKey;
+    return envKey ? envKey.trim() : '';
+  }
+
+  private getEncryptionKey(): string | null {
+    const key =
+      this.configService.get<string>('ENCRYPTION_KEY') ||
+      process.env.ENCRYPTION_KEY;
+    return key?.trim() || null;
   }
 
   async resolveProviderConfig(
@@ -126,14 +169,15 @@ export class ProviderKeyResolverService {
 
         let rawKey = credential.api_key_enc;
         if (rawKey.startsWith('enc:')) {
-          const encryptionKey =
-            this.configService.get<string>('ENCRYPTION_KEY');
+          const encryptionKey = this.getEncryptionKey();
           if (encryptionKey) {
             try {
               rawKey = decrypt(rawKey.slice(4), encryptionKey);
             } catch {
               rawKey = '';
             }
+          } else {
+            rawKey = '';
           }
         }
 
@@ -158,13 +202,15 @@ export class ProviderKeyResolverService {
     let apiKey = config.apiKey || '';
 
     if (apiKey && typeof apiKey === 'string' && apiKey.startsWith('enc:')) {
-      const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+      const encryptionKey = this.getEncryptionKey();
       if (encryptionKey) {
         try {
           apiKey = decrypt(apiKey.slice(4), encryptionKey);
         } catch {
           apiKey = '';
         }
+      } else {
+        apiKey = '';
       }
     }
 

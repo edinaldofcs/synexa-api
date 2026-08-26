@@ -50,8 +50,24 @@ export class ChannelsController {
   }
 
   @Get('channels/:id')
-  async getChannel(@Param('id', ParseUUIDPipe) id: string) {
-    return this.prisma.channel_connections.findUnique({ where: { id } });
+  async getChannel(
+    @CurrentUser() user: any,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const ctx = extractTenantContext(user);
+
+    const connection = await this.prisma.channel_connections.findFirst({
+      where: {
+        id,
+        company_id: ctx.companyId,
+      },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('Channel connection not found');
+    }
+
+    return connection;
   }
 
   @Patch('channels/:id')

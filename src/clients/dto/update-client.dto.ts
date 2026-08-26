@@ -54,7 +54,46 @@ export class UpdateClientDto {
   @MaxLength(50)
   logo_icon?: string | null;
 
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  voice_name?: string | null;
+
+  @Allow()
+  @IsOptional()
+  audio_gate_enabled?: boolean | null;
+
+  @Allow()
+  @IsOptional()
+  audio_gate_threshold?: number | null;
+
+  @Allow()
+  @IsOptional()
+  audio_gate_hangover_margin_ms?: number | null;
+
+  @Allow()
+  @IsOptional()
+  audio_gate_preroll_ms?: number | null;
+
+  @Allow()
+  @IsOptional()
+  hybrid_stt_enabled?: boolean | null;
+
+  @Allow()
+  @IsOptional()
+  gemini_thinking_budget?: number | null;
+
+  @Allow()
+  @IsOptional()
+  gemini_thinking_level?: string | null;
+
+  @Allow()
+  @IsOptional()
+  context_compression_enabled?: boolean | null;
+
   @Allow()
   @IsOptional()
   metadata?: Record<string, unknown> | null;
 }
+

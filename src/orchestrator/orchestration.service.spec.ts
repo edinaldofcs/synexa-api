@@ -11,6 +11,7 @@ import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
 import { FallbackProviderService } from './services/fallback-provider.service';
 import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 
 jest.mock('./providers/llm-provider.factory', () => ({
   getLLMProvider: () => ({
@@ -227,6 +228,12 @@ describe('OrchestrationService', () => {
           },
         },
         {
+          provide: AnalyticsService,
+          useValue: {
+            evaluateAndRecord: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
           provide: WebSearchService,
           useValue: {
             getToolDefinition: jest.fn().mockReturnValue({
@@ -328,6 +335,7 @@ describe('OrchestrationService', () => {
 
       const result = await service['buildHistory'](
         'conv-1',
+        {} as any,
         {} as any,
         {} as any,
       );

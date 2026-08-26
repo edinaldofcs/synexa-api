@@ -4,8 +4,8 @@ Backend NestJS do painel Synexa. Suporta dois modos de execução controlados pe
 
 | Modo | `ENVIRONMENT` | Auth | Storage | Banco |
 |---|---|---|---|---|
-| Desenvolvimento | `development` | JWT local (bcrypt) | Disco local (`./uploads/`) | PostgreSQL local (Docker) |
-| Produção | `production` | Supabase Auth (JWKS) | Supabase Storage | Supabase Pooler |
+| Desenvolvimento | `development` | Sessão local em cookie HttpOnly | Disco local (`./uploads/`) | PostgreSQL local (Docker) |
+| Produção | `production` | Supabase Auth + sessão em cookie HttpOnly | Supabase Storage | Supabase Pooler |
 
 ## Setup Desenvolvimento
 
@@ -72,7 +72,9 @@ A API roda em `http://localhost:3000/api`.
 
 ## Produção (Supabase)
 
-Em produção, a API usa Supabase para Auth (JWKS + Admin API) e Storage. Nenhuma alteração no código é necessária — basta definir `ENVIRONMENT=production` e preencher as variáveis `SUPABASE_*`.
+Em produção, o backend valida o usuário no Supabase e mantém a sessão da aplicação em cookie HttpOnly armazenado no Redis. O frontend não recebe access tokens. Defina `ENVIRONMENT=production`, `AUTH_PROVIDER=supabase`, as variáveis `SUPABASE_*` e configure `AUTH_CALLBACK_URL`/`AUTH_FRONTEND_URL` para o domínio público.
+
+O painel usa cookies com proteção CSRF. Integrações externas não devem reutilizar a sessão do navegador: use API keys ou assinatura HMAC.
 
 ## Testes
 

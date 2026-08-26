@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { validateEnv, EnvironmentVariables } from './env.validation';
 
 const baseConfig = {
+  ENVIRONMENT: 'development',
   DATABASE_URL: 'postgresql://localhost:5432/test',
   REDIS_URL: 'redis://localhost:6379',
   JWT_SECRET: 'this-is-a-very-long-jwt-secret-key!',
@@ -50,9 +51,9 @@ describe('validateEnv', () => {
       expect(result.NODE_ENV).toBe('development');
     });
 
-    it('should default ENVIRONMENT to development', () => {
-      const result = validateEnv(baseConfig);
-      expect(result.ENVIRONMENT).toBe('development');
+    it('should reject a missing ENVIRONMENT', () => {
+      const { ENVIRONMENT: _environment, ...config } = baseConfig;
+      expect(() => validateEnv(config as any)).toThrow(/ENVIRONMENT/);
     });
 
     it('should default PORT to 3000', () => {
@@ -134,7 +135,9 @@ describe('validateEnv', () => {
         ...baseConfig,
         JWT_SECRET: 'short',
         ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
         ENCRYPTION_KEY: 'a-32-character-encryption-key!',
       };
@@ -147,7 +150,9 @@ describe('validateEnv', () => {
       const config = {
         ...baseConfig,
         ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
       };
       expect(() => validateEnv(config)).toThrow(
@@ -159,7 +164,9 @@ describe('validateEnv', () => {
       const config = {
         ...baseConfig,
         ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
         ENCRYPTION_KEY: 'short',
       };
@@ -172,6 +179,7 @@ describe('validateEnv', () => {
       const config = {
         ...baseConfig,
         ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
         ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
       };
@@ -184,7 +192,9 @@ describe('validateEnv', () => {
       const config = {
         ...baseConfig,
         ENVIRONMENT: 'staging',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
       };
       expect(() => validateEnv(config)).toThrow(
         'SUPABASE_SERVICE_ROLE_KEY is required in production/staging environment',
@@ -195,6 +205,7 @@ describe('validateEnv', () => {
       const config = {
         ...baseConfig,
         ENVIRONMENT: 'staging',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
       };
       expect(() => validateEnv(config)).toThrow(
@@ -214,7 +225,9 @@ describe('validateEnv', () => {
       const config = {
         ...baseConfig,
         ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
         ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
       };
@@ -225,7 +238,9 @@ describe('validateEnv', () => {
       const config = {
         ...baseConfig,
         ENVIRONMENT: 'staging',
+        AUTH_PROVIDER: 'supabase',
         SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
       };
       expect(() => validateEnv(config)).not.toThrow();

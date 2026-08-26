@@ -1,0 +1,169 @@
+import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import type { Request, Response } from 'express';
+import { AuthService } from './auth.service';
+import {
+  clearAuthCookies,
+  getSessionId,
+  hasTrustedOrigin,
+  hasValidCsrfToken,
+  setAuthCookies,
+} from './auth-cookie';
+import { CurrentUser } from './current-user.decorator';
+import { Public } from './public.decorator';
+import {
+  SessionService,
+  SESSION_TTL_SECONDS,
+  type SessionUser,
+} from './session.service';
+import { LoginDto } from './dto/login.dto';
+import { MagicLinkDto } from './dto/magic-link.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ConfigService } from '@nestjs/config';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+
+@Controller('auth')
+export class AuthController {
+  constructor(
+    private readonly authService: AuthService,
+    private readonly sessionService: SessionService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('login')
+  async login(
+    @Body() body: LoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const user = await this.authService.login(body.email, body.password);
+    const session = await this.sessionService.create(user);
+    setAuthCookies(
+      response,
+      this.configService,
+      session.id,
+      session.csrfToken,
+      SESSION_TTL_SECONDS * 1000,
+    );
+    return { user };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Post('magic-link')
+  async magicLink(@Body() body: MagicLinkDto, @Req() request: Request) {
+    await this.authService.requestMagicLink(
+      body.email,
+      this.callbackUrl(request),
+    );
+    return { ok: true };
+  }
+
+  @Public()
+  @Get('callback')
+  async callback(
+    @Query('code') code: string,
+    @Req() request: Request,
+    @Res() response: Response,
+  ) {
+    try {
+      if (!code) throw new UnauthorizedException('Código de acesso ausente');
+      const user = await this.authService.completeMagicLink(code);
+      const session = await this.sessionService.create(user);
+      setAuthCookies(
+        response,
+        this.configService,
+        session.id,
+        session.csrfToken,
+        SESSION_TTL_SECONDS * 1000,
+      );
+      return response.redirect(this.frontendUrl('/dashboard'));
+    } catch {
+      return response.redirect(this.frontendUrl('/login?error=magic_link'));
+    }
+  }
+
+  @Get('me')
+  me(@CurrentUser() user: SessionUser) {
+    return { user };
+  }
+
+  @Public()
+  @Post('logout')
+  async logout(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const sessionId = getSessionId(request);
+    if (sessionId) {
+      const session = await this.sessionService.get(sessionId);
+      if (
+        session &&
+        (!hasTrustedOrigin(request, this.configService) ||
+          !hasValidCsrfToken(request, session.csrfToken))
+      ) {
+        throw new ForbiddenException('Proteção CSRF inválida');
+      }
+      await this.sessionService.destroy(sessionId);
+    }
+
+    clearAuthCookies(response, this.configService);
+    return { ok: true };
+  }
+
+  @Post('logout-all')
+  async logoutAll(
+    @CurrentUser() user: SessionUser,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const sessionId = getSessionId(request);
+    const session = sessionId ? await this.sessionService.get(sessionId) : null;
+    if (
+      !session ||
+      !hasTrustedOrigin(request, this.configService) ||
+      !hasValidCsrfToken(request, session.csrfToken)
+    ) {
+      throw new ForbiddenException('Proteção CSRF inválida');
+    }
+
+    await this.sessionService.destroyAllForUser(user.id);
+    clearAuthCookies(response, this.configService);
+    return { ok: true };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Post('forgot-password')
+  async forgotPassword(
+    @Body() body: ForgotPasswordDto,
+    @Req() request: Request,
+  ) {
+    await this.authService.requestPasswordReset(
+      body.email,
+      this.frontendUrl('/reset-password'),
+    );
+    return { ok: true };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('reset-password')
+  async resetPassword(@Body() body: ResetPasswordDto) {
+    await this.authService.resetPassword(body.token, body.password);
+    return { ok: true };
+  }
+
+  private callbackUrl(request: Request) {
+    const configured = this.configService.get<string>('AUTH_CALLBACK_URL');
+    if (configured) return configured;
+    return `${request.protocol}://${request.get('host')}/api/auth/callback`;
+  }
+
+  private frontendUrl(path: string) {
+    const base = this.configService.get<string>('AUTH_FRONTEND_URL', '');
+    return base ? `${base.replace(/\/+$/, '')}${path}` : path;
+  }
+}

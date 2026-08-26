@@ -9,6 +9,7 @@ import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 import { WebSearchConfigDto } from './dto/web-search-config.dto';
 import { AgentsRepository } from './repositories/agents.repository';
+import { buildAgentPromptFromBlocks } from './utils/agent-prompt-builder.util';
 
 @Injectable()
 export class AgentsService {
@@ -77,6 +78,15 @@ export class AgentsService {
     const [data, transitions] = this.splitLlmProvider(
       createAgentDto as Record<string, unknown>,
     );
+    if (
+      data.persona_blocks &&
+      typeof data.persona_blocks === 'object' &&
+      Object.keys(data.persona_blocks as object).length > 0
+    ) {
+      data.system_prompt = buildAgentPromptFromBlocks({
+        persona_blocks: data.persona_blocks as any,
+      });
+    }
     const agent = await this.agentsRepository.create(clientId, {
       ...data,
       transitions,
@@ -132,6 +142,15 @@ export class AgentsService {
     const [data, transitions] = this.splitLlmProvider(
       updateAgentDto as Record<string, unknown>,
     );
+    if (
+      data.persona_blocks &&
+      typeof data.persona_blocks === 'object' &&
+      Object.keys(data.persona_blocks as object).length > 0
+    ) {
+      data.system_prompt = buildAgentPromptFromBlocks({
+        persona_blocks: data.persona_blocks as any,
+      });
+    }
     const mergedTransitions = {
       ...((agent.transitions as any) || {}),
       ...transitions,

@@ -166,7 +166,7 @@ describe('MediaService', () => {
 
       await service.createAsset(
         'client-1',
-        { ...defaultDto, mime_type: 'application/pdf', file_name: 'doc.pdf' },
+        { ...defaultDto, mime_type: 'application/pdf' },
         'user-1',
       );
 
@@ -438,13 +438,20 @@ describe('MediaService', () => {
   // uploadAsset
   // ---------------------------------------------------------------------------
   describe('uploadAsset', () => {
-    const makeFile = (overrides: Partial<Express.Multer.File> = {}) =>
+    interface MulterFile {
+      originalname: string;
+      buffer: Buffer;
+      size: number;
+      mimetype?: string;
+    }
+
+    const makeFile = (overrides: Partial<MulterFile> = {}) =>
       ({
         originalname: 'test.png',
         buffer: Buffer.from('fake-image-data'),
         size: 1024,
         ...overrides,
-      }) as Express.Multer.File;
+      }) as any;
 
     beforeEach(() => {
       mockPrisma.users.findUnique.mockResolvedValue({

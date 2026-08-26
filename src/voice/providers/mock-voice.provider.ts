@@ -8,6 +8,57 @@ export class MockVoiceProvider {
 
   constructor(private readonly configService: ConfigService) {}
 
+  createSession(callbacks: {
+    onAudio: (data: string) => void;
+    onUserTranscript: (text: string) => void;
+    onAiTranscript: (text: string) => void;
+    onTurnComplete: () => void;
+    onError: (err: any) => void;
+  }) {
+    this.logger.log('🎙️ [MockVoiceProvider] Iniciando sessão simulada de voz (createSession)');
+    let audioDebounceTimer: NodeJS.Timeout | null = null;
+    let receivedAudioChunks = 0;
+
+    setTimeout(() => {
+      callbacks.onAiTranscript(
+        'Olá! Sou o assistente no modo simulado local. Para conversar com voz real via IA, configure VOICE_PROVIDER=gemini com uma GEMINI_API_KEY válida.',
+      );
+      callbacks.onTurnComplete();
+    }, 100);
+
+    return {
+      handleClientMessage: (msg: any) => {
+        if (msg.type === 'audio') {
+          receivedAudioChunks++;
+          if (audioDebounceTimer) clearTimeout(audioDebounceTimer);
+          audioDebounceTimer = setTimeout(() => {
+            if (receivedAudioChunks > 2) {
+              callbacks.onUserTranscript('(Áudio captado pelo microfone)');
+              setTimeout(() => {
+                callbacks.onAiTranscript('Recebi sua fala! (Modo Mock ativo: áudio simulado sem chamada de API externa).');
+                callbacks.onTurnComplete();
+              }, 200);
+            }
+            receivedAudioChunks = 0;
+          }, 500);
+        } else if (msg.type === 'text') {
+          callbacks.onUserTranscript(msg.text || '');
+          setTimeout(() => {
+            callbacks.onAiTranscript(`Resposta simulada para: "${msg.text}"`);
+            callbacks.onTurnComplete();
+          }, 100);
+        }
+      },
+      close: () => {
+        if (audioDebounceTimer) {
+          clearTimeout(audioDebounceTimer);
+          audioDebounceTimer = null;
+        }
+        this.logger.log('🎙️ [MockVoiceProvider] Sessão mock encerrada');
+      },
+    };
+  }
+
   handleMockSession(clientWs: WebSocket, sendToClient: (payload: any) => void) {
     this.logger.log('🎙️ [MockVoiceProvider] Iniciando sessão simulada de voz');
 

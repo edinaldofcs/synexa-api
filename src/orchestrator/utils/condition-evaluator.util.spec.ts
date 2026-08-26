@@ -284,4 +284,44 @@ describe('evaluateConditions', () => {
       expect(evaluateConditions(group, state)).toBe(false);
     });
   });
+
+  describe('message aliases and coercion', () => {
+    it('resolves text conditions through message aliases case-insensitively', () => {
+      expect(
+        evaluateConditions(
+          {
+            logic: 'AND',
+            conditions: [
+              { variable: 'mensagem_usuario', operator: 'contains', value: 'FINANCEIRO' },
+              { variable: 'last_message', operator: 'starts_with', value: 'quero' },
+              { variable: 'texto', operator: 'ends_with', value: 'ajuda' },
+              { variable: 'message', operator: 'equals', value: 'Quero financeiro ajuda' },
+            ],
+          },
+          { user_message: 'Quero financeiro ajuda' },
+        ),
+      ).toBe(true);
+    });
+
+    it('coerces numeric and boolean values safely', () => {
+      expect(
+        evaluateConditions(
+          {
+            logic: 'AND',
+            conditions: [
+              { variable: 'debt', operator: 'gt', value: 0 },
+              { variable: 'approved', operator: 'equals', value: true },
+            ],
+          },
+          { debt: '12.50', approved: 'true' },
+        ),
+      ).toBe(true);
+      expect(
+        evaluateConditions(
+          { logic: 'AND', conditions: [{ variable: 'debt', operator: 'gt', value: 0 }] },
+          { debt: 'not-a-number' },
+        ),
+      ).toBe(false);
+    });
+  });
 });

@@ -85,13 +85,18 @@ export class ConversationsController {
   }
 
   @Get(':id')
-  get(@Param('id', ParseUUIDPipe) id: string) {
-    return this.conversationsService.getConversation(id);
+  get(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.getConversation(id, ctx.companyId);
   }
 
   @Get(':id/messages')
-  getMessages(@Param('id', ParseUUIDPipe) id: string) {
-    return this.conversationsService.getMessages(id);
+  getMessages(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.getMessages(id, ctx.companyId);
   }
 
   @Post(':id/messages')
@@ -108,21 +113,29 @@ export class ConversationsController {
   updateConversation(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: { status?: string; mode?: string },
+    @CurrentUser() user: any,
   ) {
-    return this.conversationsService.updateConversation(id, dto);
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.updateConversation(id, dto, ctx.companyId);
   }
 
   @Post(':id/handoff')
   requestHandoff(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: HandoffRequestDto,
+    @CurrentUser() user: any,
   ) {
-    return this.conversationsService.requestHandoff(id, dto);
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.requestHandoff(id, dto, ctx.companyId);
   }
 
   @Post(':id/release-handoff')
-  releaseHandoff(@Param('id', ParseUUIDPipe) id: string) {
-    return this.conversationsService.releaseHandoff(id);
+  releaseHandoff(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.releaseHandoff(id, ctx.companyId);
   }
 
   @Post(':id/reassign')

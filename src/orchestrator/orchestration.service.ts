@@ -14,7 +14,13 @@ import type {
 } from './types/agent-message.types';
 import type { AgentConfig } from './types/capabilities.types';
 import { sanitize } from '../common/utils/sanitize-log.util';
+import { resolvePromptTemplateString } from '../common/utils/prompt-variables.util';
 import { AgentConfigResolver } from './services/agent-config-resolver.service';
+import {
+  evaluateConditionsWithDetails,
+  describeEvaluation,
+  type ActivationConditionGroup,
+} from './utils/condition-evaluator.util';
 import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
 import { RagSearchService } from './services/rag-search.service';
 import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
@@ -36,6 +42,7 @@ import { ProviderCircuitBreakerService } from './services/circuit-breaker.servic
 import { FallbackProviderService } from './services/fallback-provider.service';
 import { retryWithBackoff } from './utils/retry-with-backoff.util';
 import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 
 @Injectable()
 export class OrchestrationService {
@@ -52,6 +59,7 @@ export class OrchestrationService {
     private readonly circuitBreaker: ProviderCircuitBreakerService,
     private readonly fallbackProviderService: FallbackProviderService,
     private readonly crmDataTransformer: CrmDataTransformerService,
+    private readonly analyticsService: AnalyticsService,
   ) {}
 
   async processMessage(
@@ -62,15 +70,28 @@ export class OrchestrationService {
     text: string,
     requestId?: string,
   ): Promise<ProcessMessageResult> {
-    const state = await this.conversationsService.getState(conversationId);
+    const state: Record<string, unknown> = {
+      ...(await this.conversationsService.getState(conversationId)),
+      mensagem_usuario: text,
+      user_message: text,
+      last_message: text,
+      message: text,
+      text,
+      texto: text,
+    };
+    const conversation = await this.conversationsService.getConversation(conversationId);
+
+    const hadPendingAgent = Boolean(state.pending_agent_id);
 
     const agentConfig = await this.agentConfigResolver.resolveAgentConfig(
       clientId,
       state,
+      conversation.origin_channel || undefined,
     );
 
     await this.conversationsService.updateState(conversationId, {
       ...state,
+      ...(hadPendingAgent ? { pending_agent_id: null } : {}),
       current_agent_id: agentConfig.agentId,
     });
 
@@ -189,7 +210,7 @@ export class OrchestrationService {
       },
       ragContext,
       onToolCall: async (toolName, args) => {
-        return this.toolCallDispatcher.dispatch(
+        const result = await this.toolCallDispatcher.dispatch(
           String(toolName),
           args || {},
           agentConfig,
@@ -200,20 +221,53 @@ export class OrchestrationService {
           clientId,
           state,
           requestId,
-          async (query, limit) => {
-            return this.ragSearchService.searchRag(
-              agentConfig,
-              query,
-              clientId,
-              limit,
-              agentRun.id,
-              conversationId,
-              messageId,
-              companyId,
-              requestId,
+           async (query, limit) => {
+             return this.ragSearchService.searchRag(
+               agentConfig,
+               query,
+               clientId,
+               limit,
+               agentRun.id,
+               conversationId,
+               messageId,
+               companyId,
+               requestId,
+              );
+            },
+          );
+
+        if (result && typeof result === 'object') {
+          const resultRecord = result as Record<string, unknown>;
+          const returnedState =
+            resultRecord.data && typeof resultRecord.data === 'object'
+              ? (resultRecord.data as Record<string, unknown>)
+              : resultRecord;
+          Object.assign(state, returnedState);
+
+          // Transição pós-API: avalia as condições de ativação dos outros
+          // agentes sobre o estado enriquecido com o retorno
+          const activation = await this.findActivationAfterApi(
+            clientId,
+            agentConfig.agentId,
+            state,
+          );
+          if (activation) {
+            state.pending_agent_id = null;
+            state.current_agent_id = activation.agent.id;
+            state.switch_reason = `Condição de ativação atendida após retorno de API (modo: ${activation.mode})`;
+            await this.conversationsService.updateState(conversationId, state);
+            this.logger.log(
+              {
+                from: sanitize(agentConfig.agentId),
+                to: sanitize(activation.agent.service_step || activation.agent.id),
+                mode: activation.mode,
+              },
+              'Transição de agente pós-retorno de API',
             );
-          },
-        );
+          }
+        }
+
+        return result;
       },
     };
 
@@ -608,6 +662,50 @@ export class OrchestrationService {
     return history;
   }
 
+  /**
+   * Avalia as condições de ativação dos outros agentes após o retorno de uma
+   * API/tool, sobre o estado enriquecido. Retorna o primeiro agente (por
+   * execution_order) cujas condições foram satisfeitas e seu modo de ativação.
+   */
+  private async findActivationAfterApi(
+    clientId: string,
+    currentAgentId: string,
+    state: Record<string, unknown>,
+  ): Promise<{ agent: any; mode: string } | null> {
+    try {
+      const agents = await this.prisma.painel_agents.findMany({
+        where: { client_id: clientId, is_active: true },
+        select: {
+          id: true,
+          service_step: true,
+          activation_conditions: true,
+          activation_mode: true,
+        },
+        orderBy: { execution_order: 'asc' },
+      });
+
+      for (const agent of agents) {
+        if (agent.id === currentAgentId) continue;
+        const conditions = agent.activation_conditions as ActivationConditionGroup | null;
+        if (!conditions?.conditions?.length) continue;
+        const evaluation = evaluateConditionsWithDetails(conditions, state);
+        if (evaluation.matched) {
+          return { agent, mode: agent.activation_mode || 'on_next_message' };
+        }
+        this.logger.debug(
+          `Condição de ativação não atendida para "${agent.service_step}": ${describeEvaluation(evaluation)}`,
+        );
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        { error: (err as Error).message },
+        'Falha ao avaliar condições de ativação pós-API',
+      );
+      return null;
+    }
+  }
+
   private buildToolDefinitions(agentConfig: AgentConfig) {
     const tools: any[] = [];
 
@@ -625,10 +723,10 @@ export class OrchestrationService {
     if (agentConfig.capabilities.tools) {
       tools.push(this.toolCallDispatcher.mediaTranscribeToolDefinition());
       tools.push(this.toolCallDispatcher.mediaDescribeImageToolDefinition());
-      tools.push(this.toolCallDispatcher.switchAgentToolDefinition());
-      tools.push(this.toolCallDispatcher.setVariableToolDefinition());
-      tools.push(this.toolCallDispatcher.saveCrmDataToolDefinition());
-      tools.push(this.toolCallDispatcher.transferToHumanToolDefinition());
+      // Habilitável por agente: só é injetada se selecionada nas ferramentas
+      if (agentConfig.allowed_tool_names.includes('transfer_to_human')) {
+        tools.push(this.toolCallDispatcher.transferToHumanToolDefinition());
+      }
     }
 
     return tools;
@@ -662,6 +760,19 @@ export class OrchestrationService {
         const clientMeta = (conv.painel_clients?.metadata as Record<string, unknown>) || {};
         const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
         const freshState = await this.conversationsService.getState(conversationId);
+
+        // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
+        if (conv.client_id) {
+          await this.analyticsService.evaluateAndRecord({
+            clientId: conv.client_id,
+            companyId,
+            conversationId,
+            endUserId: conv.end_user_id || null,
+            originChannel: conv.origin_channel || null,
+            toolNames: calledTools,
+            state: freshState as Record<string, unknown>,
+          });
+        }
 
         const crmRecord = this.crmDataTransformer.transform({
           sessionState: freshState,
@@ -777,38 +888,20 @@ export class OrchestrationService {
         )
         .join('\n');
 
-      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nVocê deve coletar ou atualizar os seguintes campos durante o atendimento usando a tool save_crm_data assim que o usuário fornecer os dados:\n${fieldList}\nAo identificar qualquer um desses dados confirmados pelo cliente, chame save_crm_data imediatamente.`;
+      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou confirme os seguintes campos durante o atendimento (eles são persistidos automaticamente no CRM pela plataforma):\n${fieldList}\nSempre que o cliente fornecer um desses dados, confirme-o claramente na conversa e, se houver uma API disponível para registrá-lo, utilize-a.`;
     }
 
-    const variables: Record<string, string> = {
+    const variables: Record<string, unknown> = {
       nome_agente: client?.agent_name || '',
     };
 
     for (const [key, value] of Object.entries(state)) {
       if (value !== null && value !== undefined) {
-        variables[key] =
-          typeof value === 'string' ? value : JSON.stringify(value);
+        variables[key] = value;
       }
     }
 
     const fullPrompt = prompt + crmInstruction;
-
-    return fullPrompt.replace(/\[\[([^\]]+)]]/g, (match, rawKey: string) => {
-      const key = rawKey.trim();
-
-      if (Object.prototype.hasOwnProperty.call(variables, key)) {
-        return variables[key];
-      }
-
-      const hojeMatch = key.match(/^hoje([+-]\d+)?$/);
-      if (hojeMatch) {
-        const offset = hojeMatch[1] ? parseInt(hojeMatch[1], 10) : 0;
-        const date = new Date();
-        date.setDate(date.getDate() + offset);
-        return date.toLocaleDateString('pt-BR');
-      }
-
-      return match;
-    });
+    return resolvePromptTemplateString(fullPrompt, variables);
   }
 }

@@ -72,4 +72,25 @@ export class UpdateAgentDto {
   @IsString()
   @IsOptional()
   llm_provider?: string;
+
+  @IsObject()
+  @IsOptional()
+  persona_blocks?: Record<string, any>;
+
+  @IsBoolean()
+  @IsOptional()
+  allow_interrupted?: boolean;
+
+  @IsString()
+  @IsOptional()
+  voice_name?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  hybrid_audio_enabled?: boolean;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(['text', 'voice', 'both'])
+  interaction_mode?: string;
 }

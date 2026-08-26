@@ -1,31 +1,49 @@
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { CommonModule } from '../common/common.module';
 import { VoiceGateway } from './voice.gateway';
 import { VoiceService } from './voice.service';
 import { VoiceController } from './voice.controller';
-import { MockVoiceProvider } from './providers/mock-voice.provider';
-import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
 import { VoiceAuthService } from './voice-auth.service';
-import { ConfigService } from '@nestjs/config';
+import { MockVoiceProvider } from './providers/mock-voice.provider';
+import { AudioGateService } from './services/audio-gate.service';
+import { HybridSttService } from './services/hybrid-stt.service';
+import { RtpGatewayService } from './telephony/rtp-gateway.service';
+import { AsteriskAmiService } from './telephony/asterisk-ami.service';
+import { FastAgiServerService } from './telephony/fastagi-server.service';
+import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
+import { VoiceToolsService } from './voice-tools.service';
+import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
+import { AnalyticsModule } from '../analytics/analytics.module';
+import { SessionService } from '../common/auth/session.service';
 
 @Module({
-  imports: [
-    JwtModule.registerAsync({
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { issuer: 'synexa-local', algorithm: 'HS256' as const },
-      }),
-    }),
-  ],
+  imports: [CommonModule, AnalyticsModule],
   controllers: [VoiceController],
   providers: [
     VoiceGateway,
     VoiceService,
-    MockVoiceProvider,
-    ModelPricingService,
     VoiceAuthService,
+    SessionService,
+    MockVoiceProvider,
+    AudioGateService,
+    HybridSttService,
+    RtpGatewayService,
+    AsteriskAmiService,
+    FastAgiServerService,
+    ModelPricingService,
+    ProviderKeyResolverService,
+    VoiceToolsService,
   ],
-  exports: [VoiceService, VoiceGateway, MockVoiceProvider, VoiceAuthService],
+  exports: [
+    VoiceService,
+    VoiceGateway,
+    VoiceAuthService,
+    MockVoiceProvider,
+    AudioGateService,
+    HybridSttService,
+    RtpGatewayService,
+    AsteriskAmiService,
+    FastAgiServerService,
+  ],
 })
 export class VoiceModule {}

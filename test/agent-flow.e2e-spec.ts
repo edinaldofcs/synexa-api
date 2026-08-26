@@ -13,15 +13,22 @@ describe('Agent Flow (e2e)', () => {
   beforeAll(async () => {
     process.env.ENVIRONMENT = 'development';
     process.env.JWT_SECRET = 'synexa-dev-jwt-secret-nao-usar-em-producao-2026';
+    const sessionStore = new Map<string, unknown>();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
       .overrideProvider(RedisService)
       .useValue({
-        set: jest.fn(),
-        get: jest.fn().mockResolvedValue(null),
-        del: jest.fn(),
+        set: jest.fn((key: string, value: unknown) =>
+          sessionStore.set(key, value),
+        ),
+        get: jest.fn((key: string) => sessionStore.get(key) ?? null),
+        del: jest.fn((key: string) => sessionStore.delete(key)),
+        addToSet: jest.fn(),
+        getSetMembers: jest.fn().mockResolvedValue([]),
+        removeFromSet: jest.fn(),
+        expire: jest.fn(),
         acquireLock: jest.fn().mockResolvedValue(true),
         releaseLock: jest.fn(),
         checkRateLimit: jest.fn().mockResolvedValue({
@@ -146,10 +153,15 @@ describe('Agent Flow (e2e)', () => {
         .send({ email: 'admin@synexa.com.br', password: 'SynexaAdmin2026!' });
 
       expect(res.status).toBe(201);
-      expect(res.body).toHaveProperty('access_token');
       expect(res.body).toHaveProperty('user');
       expect(res.body.user.email).toBe('admin@synexa.com.br');
       expect(res.body.user.role).toBe('admin');
+      expect(res.headers['set-cookie']).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('synexa_session='),
+          expect.stringContaining('synexa_csrf='),
+        ]),
+      );
     });
 
     it('deve rejeitar credenciais invalidas no login local', async () => {
@@ -161,19 +173,15 @@ describe('Agent Flow (e2e)', () => {
     });
 
     it('deve listar apis do cliente com is_active consistente', async () => {
-      const loginRes = await request(app.getHttpServer())
+      const agent = request.agent(app.getHttpServer());
+      const loginRes = await agent
         .post('/api/auth/login')
         .send({ email: 'admin@synexa.com.br', password: 'SynexaAdmin2026!' });
-
-      const token = loginRes.body.access_token;
-      const clientId = loginRes.body.user.company_id;
 
       const agents = await prisma.painel_agents.findFirst({
         where: { is_active: true },
       });
-      const apisRes = await request(app.getHttpServer())
-        .get(`/api/clients/${agents!.client_id}/apis`)
-        .set('Authorization', `Bearer ${token}`);
+      const apisRes = await agent.get(`/api/clients/${agents!.client_id}/apis`);
 
       expect(apisRes.status).toBe(200);
       expect(Array.isArray(apisRes.body)).toBe(true);
@@ -183,6 +191,30 @@ describe('Agent Flow (e2e)', () => {
         expect(api.is_active).toBeDefined();
         expect(api.visible_to_agent).toBeDefined();
       }
+    });
+
+    it('deve carregar o usuário atual pela sessão HttpOnly', async () => {
+      const agent = request.agent(app.getHttpServer());
+      await agent
+        .post('/api/auth/login')
+        .send({ email: 'admin@synexa.com.br', password: 'SynexaAdmin2026!' });
+
+      const me = await agent.get('/api/auth/me');
+
+      expect(me.status).toBe(200);
+      expect(me.body.user.email).toBe('admin@synexa.com.br');
+      expect(me.body).not.toHaveProperty('access_token');
+    });
+
+    it('deve rejeitar mutação autenticada sem CSRF', async () => {
+      const agent = request.agent(app.getHttpServer());
+      await agent
+        .post('/api/auth/login')
+        .send({ email: 'admin@synexa.com.br', password: 'SynexaAdmin2026!' });
+
+      const response = await agent.post('/api/clients').send({});
+
+      expect(response.status).toBe(403);
     });
   });
 });

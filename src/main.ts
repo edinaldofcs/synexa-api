@@ -1,7 +1,7 @@
 import helmet from 'helmet';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
-import { WsAdapter } from '@nestjs/platform-ws';
+import { CookieWsAdapter } from './common/ws/cookie-ws.adapter';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import * as express from 'express';
 import { AppModule } from './app.module';
@@ -44,7 +44,7 @@ async function bootstrap() {
   // ── Cenário 2: Voice Gateway Isolado ──
   if (serviceRole === ServiceRole.VOICE) {
     const app = await NestFactory.create(VoiceStandaloneModule);
-    app.useWebSocketAdapter(new WsAdapter(app));
+    app.useWebSocketAdapter(new CookieWsAdapter(app));
     app.enableShutdownHooks();
 
     const configService = app.get(ConfigService);
@@ -57,7 +57,7 @@ async function bootstrap() {
 
   // ── Cenário 3: API HTTP Principal (Padrão) ──
   const app = await NestFactory.create(AppModule);
-  app.useWebSocketAdapter(new WsAdapter(app));
+  app.useWebSocketAdapter(new CookieWsAdapter(app));
   app.enableShutdownHooks();
 
   const configService = app.get(ConfigService);
@@ -82,6 +82,7 @@ async function bootstrap() {
     allowedHeaders: [
       'Content-Type',
       'Authorization',
+      'X-CSRF-Token',
       'x-signature',
       'x-timestamp',
       'x-synexa-signature',

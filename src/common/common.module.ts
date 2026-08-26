@@ -5,6 +5,7 @@ import { RedisModule } from './redis/redis.module';
 import { ClientMetadataService } from './metadata/client-metadata.service';
 import { CredentialAuditService } from './services/credential-audit.service';
 import { CrmDataTransformerService } from './services/crm-data-transformer.service';
+import { InboundDataMapperService } from './services/inbound-data-mapper.service';
 import { TenantInterceptor } from './interceptors/tenant.interceptor';
 import { CorrelationInterceptor } from './interceptors/correlation.interceptor';
 import { HealthController } from './health/health.controller';
@@ -18,6 +19,7 @@ import { HealthService } from './health/health.service';
     ClientMetadataService,
     CredentialAuditService,
     CrmDataTransformerService,
+    InboundDataMapperService,
     HealthService,
     {
       provide: APP_INTERCEPTOR,
@@ -34,6 +36,7 @@ import { HealthService } from './health/health.service';
     ClientMetadataService,
     CredentialAuditService,
     CrmDataTransformerService,
+    InboundDataMapperService,
     HealthService,
   ],
 })

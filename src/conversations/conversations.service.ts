@@ -14,6 +14,10 @@ import {
   ConversationResult,
   HandoffRequestDto,
 } from './dto/find-or-create.dto';
+import {
+  InboundDataMapperService,
+  InboundMappingConfig,
+} from '../common/services/inbound-data-mapper.service';
 
 @Injectable()
 export class ConversationsService {
@@ -24,6 +28,7 @@ export class ConversationsService {
     private readonly conversationsRepo: ConversationsRepository,
     private readonly presenceService: OperatorPresenceService,
     private readonly distributorService: HandoffDistributorService,
+    private readonly inboundDataMapper: InboundDataMapperService,
   ) {}
 
   async findOrCreate(
@@ -61,6 +66,43 @@ export class ConversationsService {
       external_conversation_key: dto.conversation_key,
       metadata: dto.metadata,
     });
+
+    // Mapeia variáveis de entrada (CRM, Webhook, API, Discador) para o estado da sessão
+    try {
+      let inboundConfig: InboundMappingConfig | undefined;
+      if (dto.client_id) {
+        const client = await this.prisma.painel_clients.findUnique({
+          where: { id: dto.client_id },
+          select: { metadata: true },
+        });
+        const meta = (client?.metadata as Record<string, unknown>) || {};
+        inboundConfig = meta.inbound_variable_mapping as InboundMappingConfig;
+      }
+
+      const rawMetadata = (dto.metadata as Record<string, unknown>) || {};
+      const mappedInitialState = this.inboundDataMapper.mapInboundData(
+        rawMetadata,
+        inboundConfig,
+        dto.origin_channel || 'webchat',
+      );
+
+      if (Object.keys(mappedInitialState).length > 0) {
+        await this.prisma.conversation_state.upsert({
+          where: { conversation_id: conversation.id },
+          create: {
+            conversation_id: conversation.id,
+            state: mappedInitialState as any,
+          },
+          update: {
+            state: mappedInitialState as any,
+          },
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `Erro ao inicializar estado mapeado da conversa: ${err.message}`,
+      );
+    }
 
     this.logger.log(
       { conversation_id: conversation.id },
@@ -114,7 +156,24 @@ export class ConversationsService {
     return message;
   }
 
-  async getConversation(id: string) {
+  private async assertConversationInTenant(
+    conversationId: string,
+    companyId?: string,
+  ) {
+    if (!companyId) return;
+    const conversation = await this.prisma.conversations.findUnique({
+      where: { id: conversationId },
+      select: { id: true, company_id: true },
+    });
+    // 404 (e não 403) para não revelar existência de conversa de outro tenant
+    if (!conversation || conversation.company_id !== companyId) {
+      throw new NotFoundException(`Conversation ${conversationId} not found`);
+    }
+    return conversation;
+  }
+
+  async getConversation(id: string, companyId?: string) {
+    if (companyId) await this.assertConversationInTenant(id, companyId);
     const conversation = await this.conversationsRepo.findById(id);
     if (!conversation) {
       throw new NotFoundException(`Conversation ${id} not found`);
@@ -122,7 +181,9 @@ export class ConversationsService {
     return conversation;
   }
 
-  async getMessages(conversationId: string) {
+  async getMessages(conversationId: string, companyId?: string) {
+    if (companyId)
+      await this.assertConversationInTenant(conversationId, companyId);
     return this.prisma.messages.findMany({
       where: { conversation_id: conversationId },
       orderBy: { created_at: 'asc' },
@@ -152,20 +213,22 @@ export class ConversationsService {
   async sendMessage(
     conversationId: string,
     dto: { content: string; sender_type?: string },
-    companyId: string,
+    companyId?: string,
   ) {
     const conversation = await this.prisma.conversations.findUnique({
       where: { id: conversationId },
       select: { company_id: true, origin_channel: true, status: true },
     });
-    if (!conversation) throw new NotFoundException('Conversation not found');
+    if (!conversation || (companyId && conversation.company_id !== companyId)) {
+      throw new NotFoundException('Conversation not found');
+    }
     if (conversation.status === 'closed') {
       throw new BadRequestException('Conversation is closed');
     }
 
     const message = await this.prisma.messages.create({
       data: {
-        company_id: companyId,
+        company_id: conversation.company_id,
         conversation_id: conversationId,
         content: dto.content,
         sender_type: dto.sender_type || 'human',
@@ -189,11 +252,14 @@ export class ConversationsService {
   async updateConversation(
     conversationId: string,
     dto: { status?: string; mode?: string },
+    companyId?: string,
   ) {
     const conversation = await this.prisma.conversations.findUnique({
       where: { id: conversationId },
     });
-    if (!conversation) throw new NotFoundException('Conversation not found');
+    if (!conversation || (companyId && conversation.company_id !== companyId)) {
+      throw new NotFoundException('Conversation not found');
+    }
 
     const data: any = {};
     if (dto.status) data.status = dto.status;
@@ -290,7 +356,12 @@ export class ConversationsService {
     });
   }
 
-  async requestHandoff(conversationId: string, dto: HandoffRequestDto) {
+  async requestHandoff(
+    conversationId: string,
+    dto: HandoffRequestDto,
+    companyId?: string,
+  ) {
+    await this.assertConversationInTenant(conversationId, companyId);
     const conversation = await this.conversationsRepo.findById(conversationId);
     if (!conversation) throw new NotFoundException('Conversation not found');
 
@@ -346,7 +417,8 @@ export class ConversationsService {
     });
   }
 
-  async releaseHandoff(conversationId: string) {
+  async releaseHandoff(conversationId: string, companyId?: string) {
+    await this.assertConversationInTenant(conversationId, companyId);
     const conversation = await this.conversationsRepo.findById(conversationId);
     if (!conversation) throw new NotFoundException('Conversation not found');
 
@@ -382,6 +454,7 @@ export class ConversationsService {
     newOperatorId: string,
     companyId: string,
   ) {
+    await this.assertConversationInTenant(conversationId, companyId);
     const conversation = await this.conversationsRepo.findById(conversationId);
     if (!conversation) throw new NotFoundException('Conversation not found');
 

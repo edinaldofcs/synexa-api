@@ -77,6 +77,7 @@ export class OrchestratorController {
 
   @Public()
   @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @UseGuards(DevOnlyGuard)
   @Post('chat')
   async chat(@Body() body: ChatRequestDto, @Res() res: Response) {
     this.logger.warn(
@@ -126,6 +127,7 @@ export class OrchestratorController {
 
   @Public()
   @Throttle({ default: { limit: 15, ttl: 60000 } })
+  @UseGuards(DevOnlyGuard)
   @Post('webhook/painel_message')
   async webhookMessage(@Body() body: WebhookMessageDto, @Res() res: Response) {
     this.logger.warn(

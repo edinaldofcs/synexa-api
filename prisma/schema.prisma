@@ -28,6 +28,7 @@ model companies {
   media_assets        media_assets[]
   outbox_events       outbox_events[]
   message_events      message_events[]
+  business_events     business_events[]
   tool_calls          tool_calls[]
   agent_runs          agent_runs[]
   knowledge_bases     knowledge_bases[]
@@ -37,6 +38,7 @@ model companies {
   provider_credentials provider_credentials[]
   credential_audit_logs credential_audit_logs[]
   workflow_versions   workflow_versions[]
+  voice_session_telemetry voice_session_telemetry[]
 }
 
 model users {
@@ -87,8 +89,10 @@ model conversations {
   messages            messages[]
   conversation_state  conversation_state[]
   message_events      message_events[]
+  business_events     business_events[]
   tool_calls          tool_calls[]
   agent_runs          agent_runs[]
+  voice_session_telemetry voice_session_telemetry?
 
   @@index([company_id])
   @@index([client_id])
@@ -227,6 +231,7 @@ model painel_clients {
   media_assets        media_assets[]
   outbox_events       outbox_events[]
   message_events      message_events[]
+  business_events     business_events[]
   tool_calls          tool_calls[]
   agent_runs          agent_runs[]
   painel_subagents    painel_subagents[]
@@ -237,6 +242,17 @@ model painel_clients {
   provider_credentials provider_credentials[]
   credential_audit_logs credential_audit_logs[]
   workflow_versions   workflow_versions[]
+  voice_session_telemetry voice_session_telemetry[]
+  voice_name                  String?
+  audio_gate_enabled          Boolean?        @default(true)
+  audio_gate_threshold        Int?            @default(500)
+  audio_gate_hangover_margin_ms Int?          @default(500)
+  audio_gate_preroll_ms       Int?            @default(300)
+  hybrid_stt_enabled          Boolean?        @default(false)
+  gemini_thinking_budget      Int?            @default(0)
+  gemini_thinking_level       String?
+  context_compression_enabled Boolean?        @default(false)
+  context_compression_target_tokens Int?
   metadata            Json?           @default("{}") @db.JsonB
 }
 
@@ -254,6 +270,11 @@ model painel_agents {
   activation_mode       String?   @default("on_next_message")
   transitions           Json?     @db.JsonB
   allowed_tool_names    Json?     @db.JsonB
+  persona_blocks        Json?     @db.JsonB
+  allow_interrupted     Boolean?  @default(true)
+  voice_name            String?
+  hybrid_audio_enabled  Boolean?  @default(false)
+  interaction_mode      String    @default("both")
 
   painel_clients      painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
   painel_apis         painel_apis[]
@@ -405,6 +426,7 @@ model end_users {
   painel_clients      painel_clients      @relation(fields: [client_id], references: [id])
   channel_identities  channel_identities[]
   conversations       conversations[]
+  business_events     business_events[]
 
   @@index([company_id])
   @@index([client_id])
@@ -508,6 +530,27 @@ model message_events {
   @@index([conversation_id])
   @@index([message_id])
   @@index([event_type])
+}
+
+model business_events {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id      String    @db.Uuid
+  client_id       String?   @db.Uuid
+  conversation_id String?   @db.Uuid
+  end_user_id     String?   @db.Uuid
+  marker_code     String
+  values          Json?     @default("{}") @db.JsonB
+  origin_channel  String?
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+
+  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  conversations  conversations?  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  end_users      end_users?      @relation(fields: [end_user_id], references: [id])
+
+  @@unique([conversation_id, marker_code])
+  @@index([company_id, marker_code, created_at])
+  @@index([client_id, marker_code, created_at])
 }
 
 model agent_runs {
@@ -749,4 +792,46 @@ model workflow_versions {
   @@index([company_id])
   @@index([client_id])
   @@index([status])
+}
+
+model voice_session_telemetry {
+  id                          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id                  String        @db.Uuid
+  client_id                   String?       @db.Uuid
+  conversation_id             String        @unique @db.Uuid
+  asterisk_unique_id          String?
+  caller_number               String?
+  did_number                  String?
+  hangup_cause                String?
+  duration_sec                Int           @default(0)
+  turns                       Int           @default(0)
+  audio_gate_forwarded_sec    Float         @default(0)
+  audio_gate_suppressed_sec   Float         @default(0)
+  audio_gate_closes           Int           @default(0)
+  interrupted_count           Int           @default(0)
+  hybrid_stt_utterances       Int           @default(0)
+  hybrid_stt_fallback_count   Int           @default(0)
+  total_tokens                Int           @default(0)
+  audio_input_tokens          Int           @default(0)
+  text_input_tokens           Int           @default(0)
+  audio_output_tokens         Int           @default(0)
+  text_output_tokens          Int           @default(0)
+  thoughts_tokens             Int           @default(0)
+  cost_usd                    Float         @default(0)
+  cost_brl                    Float         @default(0)
+  model                       String?
+  voice_name                  String?
+  audio_gate_enabled          Boolean       @default(true)
+  hybrid_stt_enabled          Boolean       @default(false)
+  metadata                    Json?         @default("{}") @db.JsonB
+  created_at                  DateTime      @default(now()) @db.Timestamptz(6)
+
+  companies                   companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients              painel_clients? @relation(fields: [client_id], references: [id], onDelete: SetNull)
+  conversations               conversations  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id])
+  @@index([client_id])
+  @@index([conversation_id])
+  @@index([created_at])
 }

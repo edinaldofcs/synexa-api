@@ -47,7 +47,12 @@ async function main() {
 
   // ── 2. Auth User ─────────────────────────────────────────────
   const email = 'admin@synexa.com.br';
-  const password = process.env.SEED_ADMIN_PASSWORD || 'SynexaAdmin2026!';
+  const password = process.env.SEED_ADMIN_PASSWORD?.trim();
+  if (!password || password.length < 12) {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD is required and must be at least 12 characters',
+    );
+  }
   const userName = 'Administrador Synexa';
 
   let userId = USER_ID;
@@ -217,7 +222,7 @@ async function main() {
       is_active: true,
       service_step: 'reception',
       execution_order: 1,
-      allowed_tool_names: ['search_knowledge_base', 'execute_api'],
+      allowed_tool_names: [],
       transitions: {
         llm_provider: process.env.LLM_PROVIDER || 'mock',
         type: 'keyword',
@@ -259,9 +264,8 @@ async function main() {
 
 Você é o assistente de recepção da Synexa.
 Seu papel é receber o cliente, identificar o motivo do contato e resolver problemas simples.
-Se o cliente precisar de suporte técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"
-Se o cliente quiser consultar produtos ou preços, responda exatamente: "TRANSFERIR:vendas"
-Responda de forma educada e profissional.`,
+Atenda com educação e profissionalismo. A transferência para outros agentes acontece
+automaticamente quando as condições de ativação configuradas no painel forem atendidas.`,
       is_active: true,
       transitions: {
         llm_provider: process.env.LLM_PROVIDER || 'mock',
@@ -293,7 +297,7 @@ Responda de forma educada e profissional.`,
           },
         ],
       } as any,
-      allowed_tool_names: ['search_knowledge_base', 'execute_api'],
+      allowed_tool_names: [],
     },
   });
 
@@ -304,7 +308,7 @@ Responda de forma educada e profissional.`,
       is_active: true,
       service_step: 'suporte_tecnico',
       execution_order: 2,
-      allowed_tool_names: ['search_knowledge_base', 'execute_api'],
+      allowed_tool_names: [],
       transitions: {
         llm_provider: process.env.LLM_PROVIDER || 'mock',
         type: 'keyword',
@@ -342,8 +346,8 @@ Responda de forma educada e profissional.`,
 Você é o agente de suporte técnico da Synexa.
 Ajude o cliente a resolver problemas técnicos com produtos e serviços.
 Consulte a base de conhecimento e ferramentas disponíveis.
-Se o problema for financeiro, responda exatamente: "TRANSFERIR:financeiro"
-Se não conseguir resolver, responda exatamente: "TRANSFERIR:humano"`,
+A transferência para outros agentes acontece automaticamente quando as
+condições de ativação configuradas no painel forem atendidas.`,
       is_active: true,
       transitions: {
         llm_provider: process.env.LLM_PROVIDER || 'mock',
@@ -370,7 +374,7 @@ Se não conseguir resolver, responda exatamente: "TRANSFERIR:humano"`,
           },
         ],
       } as any,
-      allowed_tool_names: ['search_knowledge_base', 'execute_api'],
+      allowed_tool_names: [],
     },
   });
 
@@ -381,11 +385,7 @@ Se não conseguir resolver, responda exatamente: "TRANSFERIR:humano"`,
       is_active: true,
       service_step: 'vendas',
       execution_order: 3,
-      allowed_tool_names: [
-        'search_knowledge_base',
-        'execute_api',
-        'search_web',
-      ],
+      allowed_tool_names: [],
     },
     create: {
       id: AGENT_SALES_ID,
@@ -405,11 +405,7 @@ Se o cliente quiser fechar negócio, colete os dados e registre o pedido.`,
         type: 'keyword',
         rules: [],
       } as any,
-      allowed_tool_names: [
-        'search_knowledge_base',
-        'execute_api',
-        'search_web',
-      ],
+      allowed_tool_names: [],
     },
   });
 
@@ -420,7 +416,7 @@ Se o cliente quiser fechar negócio, colete os dados e registre o pedido.`,
       is_active: true,
       service_step: 'financeiro',
       execution_order: 4,
-      allowed_tool_names: ['search_knowledge_base', 'execute_api'],
+      allowed_tool_names: [],
     },
     create: {
       id: AGENT_FINANCE_ID,
@@ -433,7 +429,8 @@ Se o cliente quiser fechar negócio, colete os dados e registre o pedido.`,
 Você é o agente financeiro da Synexa.
 Ajude com questões de pagamento, boletos, faturas e reembolsos.
 Consulte as ferramentas disponíveis para verificar status de pagamentos.
-Se o problema for técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"`,
+A transferência para outros agentes acontece automaticamente quando as
+condições de ativação configuradas no painel forem atendidas.`,
       is_active: true,
       transitions: {
         llm_provider: process.env.LLM_PROVIDER || 'mock',
@@ -445,7 +442,7 @@ Se o problema for técnico, responda exatamente: "TRANSFERIR:suporte_tecnico"`,
           },
         ],
       } as any,
-      allowed_tool_names: ['execute_api'],
+      allowed_tool_names: [],
     },
   });
 

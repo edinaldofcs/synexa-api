@@ -72,7 +72,11 @@ describe('ClientsService', () => {
     clientsRepository.create.mockResolvedValue({ id: 'client-1' });
 
     await expect(
-      service.create({ user_id: 'user-1', company_name: 'ACME' }),
+      service.create(
+        { user_id: 'user-1', company_name: 'ACME' } as any,
+        'user-1',
+        'company-1',
+      ),
     ).resolves.toEqual({ id: 'client-1' });
 
     expect(clientsRepository.create).toHaveBeenCalledWith({
@@ -85,9 +89,9 @@ describe('ClientsService', () => {
   it('rejects client creation when user has no company', async () => {
     prisma.users.findUnique.mockResolvedValue(null);
 
-    await expect(service.create({ user_id: 'missing' })).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      service.create({ user_id: 'missing' } as any, 'missing', null),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('duplicates agents, intentions, apis, subagents and remaps next_api_id', async () => {

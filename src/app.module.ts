@@ -5,6 +5,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { validateEnv } from './common/config/env.validation';
 import { CommonModule } from './common/common.module';
 import { AuthModule } from './common/auth/auth.module';
+import { MailModule } from './common/mail/mail.module';
 import { AdminModule } from './admin/admin.module';
 import { TablesModule } from './tables/tables.module';
 import { ChatModule } from './chat/chat.module';
@@ -24,6 +25,7 @@ import { OrchestratorModule } from './orchestrator/orchestrator.module';
 import { WebSearchModule } from './agents/web-search/web-search.module';
 import { ImportsModule } from './imports/imports.module';
 import { BillingModule } from './billing/billing.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { SubagentsModule } from './subagents/subagents.module';
 import { WorkflowVersionsModule } from './workflow-versions/workflow-versions.module';
 import { AppController } from './app.controller';
@@ -44,6 +46,7 @@ import { AppService } from './app.service';
       },
     ]),
     CommonModule,
+    MailModule,
     AuthModule.forRoot(),
     AdminModule,
     TablesModule,
@@ -66,6 +69,7 @@ import { AppService } from './app.service';
     WebSearchModule,
     ImportsModule,
     BillingModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [

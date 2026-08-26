@@ -1,5 +1,6 @@
 import {
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   Optional,
   UnauthorizedException,
@@ -10,6 +11,13 @@ import { AuthGuard as PassportAuthGuard } from '@nestjs/passport';
 import { createClient } from '@supabase/supabase-js';
 import { PrismaService } from '../prisma/prisma.service';
 import { IS_PUBLIC_KEY } from './public.decorator';
+import {
+  getSessionId,
+  hasTrustedOrigin,
+  hasValidCsrfToken,
+} from './auth-cookie';
+import { SessionService } from './session.service';
+import type { SessionUser } from './session.service';
 
 @Injectable()
 export class AuthGuard extends PassportAuthGuard('jwt') {
@@ -17,6 +25,7 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
     private readonly reflector: Reflector,
     @Optional() private readonly configService?: ConfigService,
     @Optional() private readonly prisma?: PrismaService,
+    @Optional() private readonly sessionService?: SessionService,
   ) {
     super();
   }
@@ -28,12 +37,63 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
     ]);
     if (isPublic) return true;
 
-    const env = process.env.ENVIRONMENT || 'development';
+    const request = context.switchToHttp().getRequest();
+    const sessionId = getSessionId(request);
+    if (sessionId && this.sessionService) {
+      const session = await this.sessionService.get(sessionId);
+      if (session) {
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
+          if (
+            !this.configService ||
+            !hasTrustedOrigin(request, this.configService) ||
+            !hasValidCsrfToken(request, session.csrfToken)
+          ) {
+            throw new ForbiddenException('Proteção CSRF inválida');
+          }
+        }
+
+        request.user = this.prisma
+          ? await this.loadActiveSessionUser(session.user)
+          : session.user;
+        if (!request.user) {
+          await this.sessionService.destroy(sessionId);
+          throw new UnauthorizedException('Usuário não autorizado');
+        }
+        return true;
+      }
+    }
+
+    const env = process.env.ENVIRONMENT;
     if (env !== 'development' && env !== 'test') {
       return this.validateSupabaseToken(context);
     }
 
     return (await super.canActivate(context)) as boolean;
+  }
+
+  private async loadActiveSessionUser(
+    sessionUser: SessionUser,
+  ): Promise<Record<string, unknown> | null> {
+    const user = await this.prisma!.users.findUnique({
+      where: { id: sessionUser.id },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        company_id: true,
+        companies: { select: { status: true } },
+      },
+    });
+
+    if (!user || user.companies.status !== 'active') return null;
+    return {
+      id: user.id,
+      email: user.email ?? sessionUser.email,
+      name: user.name,
+      role: user.role,
+      company_id: user.company_id,
+    };
   }
 
   private async validateSupabaseToken(
@@ -78,16 +138,23 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
     const dbUser = this.prisma
       ? await this.prisma.users.findUnique({
           where: { id: data.user.id },
-          select: { role: true, company_id: true },
+          select: {
+            role: true,
+            company_id: true,
+            companies: { select: { status: true } },
+          },
         })
       : null;
+
+    if (!dbUser || dbUser.companies.status !== 'active') {
+      throw new UnauthorizedException('Usuário não autorizado');
+    }
 
     request.user = {
       id: data.user.id,
       email: data.user.email,
-      role: dbUser?.role || data.user.app_metadata?.role || data.user.role,
-      company_id:
-        dbUser?.company_id || data.user.app_metadata?.company_id || null,
+      role: dbUser.role,
+      company_id: dbUser.company_id,
     };
 
     return true;

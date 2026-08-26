@@ -4,7 +4,8 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import type { ClearTestChatDto, TestChatDto } from './dto/test-chat.dto';
 import {
-  evaluateConditions,
+  evaluateConditionsWithDetails,
+  describeEvaluation,
   type ActivationConditionGroup,
 } from './utils/condition-evaluator.util';
 import { WebSearchService } from '../agents/web-search/web-search.service';
@@ -14,6 +15,11 @@ import {
   type AgentCapabilities,
   type AgentConfig,
 } from './types/capabilities.types';
+import { resolvePromptTemplateString } from '../common/utils/prompt-variables.util';
+import {
+  InboundDataMapperService,
+  InboundMappingConfig,
+} from '../common/services/inbound-data-mapper.service';
 
 interface MemoryMessage {
   role: 'user' | 'assistant';
@@ -22,6 +28,20 @@ interface MemoryMessage {
 
 const TEST_CHAT_CONTEXT_KEY = 'test_chat_context_variables';
 const RAG_SEARCH_TOOL_ID = 'rag_search';
+
+// Nomes legados gravados por seeds/versões antigas que não correspondem a
+// ferramentas reais; são ignorados ao carregar as tools do agente
+const LEGACY_TOOL_NAMES = new Set([
+  'execute_api',
+  'search_knowledge_base',
+  'search_web',
+  'set_variable',
+  'save_crm_data',
+  'update_crm_data',
+]);
+
+// Tool nativa habilitável por agente via allowed_tool_names
+const HANDOFF_TOOL_NAME = 'transfer_to_human';
 
 interface ApiTool {
   id: string;
@@ -60,7 +80,7 @@ export interface TestChatDebug {
 type ToolCallDebug = TestChatDebug['toolCalls'][number];
 
 interface NativeRagRuntimeContext {
-  agentConfig: AgentConfig;
+  agentConfig?: AgentConfig;
   clientId: string;
   companyId: string;
   conversationId?: string;
@@ -71,6 +91,7 @@ interface NativeRagRuntimeContext {
 import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
 import { ModelPricingService } from './services/model-pricing.service';
 import { ConversationsService } from '../conversations/conversations.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 import { MediaService } from '../media/media.service';
 import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
 
@@ -89,6 +110,7 @@ export class TestChatService {
     private readonly conversationsService: ConversationsService,
     private readonly mediaService: MediaService,
     private readonly crmDataTransformer: CrmDataTransformerService,
+    private readonly analyticsService: AnalyticsService,
   ) {}
 
   async listModels(
@@ -96,22 +118,21 @@ export class TestChatService {
     apiKey?: string,
     clientId?: string,
   ): Promise<string[]> {
-    let finalKey = apiKey?.trim() || '';
+    const isMaskedOrPlaceholder = (k?: string | null) =>
+      !k ||
+      k.trim() === '' ||
+      k === 'stored' ||
+      k === 'undefined' ||
+      k === 'null' ||
+      k.includes('***') ||
+      k.includes('...') ||
+      k.startsWith('enc:');
 
-    // Se a chave for vazia ou for uma máscara (ex: 'AIza...1234' ou '***'), resolve do banco/env
-    if (
-      (!finalKey || finalKey.includes('...') || finalKey === '********') &&
-      clientId
-    ) {
-      finalKey = await this.providerKeyResolver.resolveApiKey(
-        clientId,
-        provider,
-      );
-    }
+    let finalKey = isMaskedOrPlaceholder(apiKey) ? '' : (apiKey?.trim() || '');
 
     if (!finalKey) {
       finalKey = await this.providerKeyResolver.resolveApiKey(
-        'default',
+        clientId || '',
         provider,
       );
     }
@@ -184,21 +205,38 @@ export class TestChatService {
       companyId = client.company_id;
 
       const metadata = (client.metadata as any) || {};
-      contextVariables = this.sanitizeContextVariables(metadata);
+      const inboundConfig = metadata.inbound_variable_mapping as InboundMappingConfig;
+      const mapper = new InboundDataMapperService();
+      const mappedInbound = mapper.mapInboundData(metadata, inboundConfig, originChannel || 'webchat');
+
+      contextVariables = {
+        ...this.sanitizeContextVariables(metadata),
+        ...mappedInbound,
+      };
       contextVariables.nome_agente = client.agent_name || '';
+      Object.assign(contextVariables, this.withMessageAliases(message));
       if (metadata.variable_schema) {
         contextVariables._variable_schema = metadata.variable_schema;
       }
 
       if (!resolvedAgentId) {
         const initialAgent = await this.prisma.painel_agents.findFirst({
-          where: { client_id: clientId, is_initial: true, is_active: true },
+          where: {
+            client_id: clientId,
+            is_initial: true,
+            is_active: true,
+            interaction_mode: { in: ['text', 'both'] },
+          },
         });
         if (initialAgent) {
           resolvedAgentId = initialAgent.id;
         } else {
           const firstAgent = await this.prisma.painel_agents.findFirst({
-            where: { client_id: clientId, is_active: true },
+            where: {
+              client_id: clientId,
+              is_active: true,
+              interaction_mode: { in: ['text', 'both'] },
+            },
           });
           if (firstAgent) resolvedAgentId = firstAgent.id;
         }
@@ -217,13 +255,26 @@ export class TestChatService {
           ...contextVariables,
           ...persistedContext,
         };
+        Object.assign(contextVariables, this.withMessageAliases(message));
 
         const state = await this.loadState(conversationId);
+        const hadPendingAgent = Boolean(state.pending_agent_id);
         resolvedAgentId = await this.resolveAgentId(
           clientId,
           state,
           resolvedAgentId || '',
           persistedContext,
+        );
+        if (hadPendingAgent) {
+          // Consome a transferência pendente para não colar nas próximas mensagens
+          await this.saveState(conversationId, { pending_agent_id: null });
+        }
+      } else {
+        resolvedAgentId = await this.resolveAgentId(
+          clientId,
+          {},
+          resolvedAgentId || '',
+          contextVariables,
         );
       }
 
@@ -232,6 +283,10 @@ export class TestChatService {
         agent = await this.prisma.painel_agents.findUnique({
           where: { id: resolvedAgentId },
         });
+      }
+
+      if (agent?.interaction_mode === 'voice') {
+        throw new Error('Este agente está configurado apenas para atendimento por voz.');
       }
 
       if (agent) {
@@ -244,7 +299,8 @@ export class TestChatService {
         systemPrompt = systemPrompt || agent.system_prompt || undefined;
         availableTools = Array.isArray(agent.allowed_tool_names)
           ? agent.allowed_tool_names.filter(
-              (tool: unknown): tool is string => typeof tool === 'string',
+              (tool: unknown): tool is string =>
+                typeof tool === 'string' && !LEGACY_TOOL_NAMES.has(tool),
             )
           : [];
         allClientApiNames = await this.loadAllClientApiNames(clientId);
@@ -260,9 +316,9 @@ export class TestChatService {
         if (this.canUseNativeRag(resolvedAgentConfig)) {
           apiTools.push(this.buildNativeRagApiTool());
         }
-        apiTools.push(this.buildNativeHandoffApiTool());
-        apiTools.push(this.buildNativeSetVariableApiTool());
-        apiTools.push(this.buildNativeSaveCrmDataApiTool());
+        if (availableTools.includes(HANDOFF_TOOL_NAME)) {
+          apiTools.push(this.buildNativeHandoffApiTool());
+        }
 
         const allowedSubagents = Array.isArray(transitions.allowed_subagents)
           ? (transitions.allowed_subagents as string[])
@@ -320,17 +376,34 @@ export class TestChatService {
         }
       }
 
-      if (!apiKey && provider) {
+      const isMaskedOrPlaceholder = (k?: string | null) =>
+        this.isMaskedOrPlaceholder(k);
+      if (isMaskedOrPlaceholder(apiKey) && provider) {
         apiKey = await this.providerKeyResolver.resolveApiKey(
+          clientId || '',
+          provider,
+        );
+      } else if (provider && !isMaskedOrPlaceholder(apiKey)) {
+        // Prioriza a chave cadastrada pelo cliente no painel (provider_credentials
+        // / metadata com descriptografia); a chave recebida é apenas fallback
+        const registeredKey = await this.providerKeyResolver.resolveApiKey(
           clientId,
           provider,
         );
+        if (registeredKey) apiKey = registeredKey;
       }
+    }
+
+    if (this.isMaskedOrPlaceholder(apiKey) && provider) {
+      apiKey = await this.providerKeyResolver.resolveApiKey(
+        clientId || '',
+        provider,
+      );
     }
 
     if (!provider || !model || !apiKey) {
       throw new Error(
-        'Configuracao incompleta: provider, model e apiKey sao obrigatorios',
+        `Configuração incompleta ou chave não encontrada para o provedor "${provider || 'desconhecido'}". Verifique a chave de API em Configurações > Provedores de IA.`,
       );
     }
 
@@ -531,15 +604,17 @@ export class TestChatService {
         });
       }
 
+      // Transição pós-API: avalia condições de ativação sobre o estado
+      // enriquecido com os retornos das APIs executadas neste turno
       if (resolvedAgentId && clientId && companyId) {
-        const immediateAgent = await this.checkImmediateActivation(
+        const activation = await this.checkActivationAfterApi(
           clientId,
           resolvedAgentId,
           contextVariables,
         );
-        if (immediateAgent) {
+        if (activation && activation.mode === 'immediate') {
           const immediateResult = await this.processWithAgent(
-            immediateAgent,
+            activation.agent,
             clientId,
             companyId,
             conversationId,
@@ -584,18 +659,19 @@ export class TestChatService {
               immediateResult.contextVariables,
             );
             await this.saveState(conversationId, {
-              current_agent_id: immediateAgent.id,
+              current_agent_id: activation.agent.id,
+              pending_agent_id: null,
             });
             return {
               ...immediateResult.result,
-              agentName: immediateAgent.service_step || immediateAgent.id,
+              agentName: activation.agent.service_step || activation.agent.id,
               debug: {
                 conversationId,
                 externalUserId,
                 originChannel,
                 provider,
                 model,
-                agentId: immediateAgent.id,
+                agentId: activation.agent.id,
                 memory: {
                   source: memory.source,
                   messagesUsed: history.length,
@@ -606,6 +682,12 @@ export class TestChatService {
               },
             };
           }
+        } else if (activation) {
+          // Modo "próxima mensagem": agenda o novo agente para o próximo turno
+          await this.saveState(conversationId, {
+            current_agent_id: activation.agent.id,
+            pending_agent_id: null,
+          });
         }
       }
 
@@ -633,6 +715,21 @@ export class TestChatService {
             ...contextVariables,
             ...freshState,
           };
+
+          // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
+          if (clientId && companyId) {
+            await this.analyticsService.evaluateAndRecord({
+              clientId,
+              companyId,
+              conversationId,
+              endUserId: freshConv?.end_user_id || null,
+              originChannel: originChannel,
+              toolNames: (result.toolCalls || [])
+                .map((call: any) => call?.name)
+                .filter((name: unknown): name is string => typeof name === 'string'),
+              state: combinedState,
+            });
+          }
 
           crmRecord = this.crmDataTransformer.transform({
             sessionState: combinedState,
@@ -919,7 +1016,7 @@ export class TestChatService {
   ): Promise<string> {
     const mergedState = { ...contextVariables, ...state };
 
-    const agents = await this.prisma.painel_agents.findMany({
+    const allAgents = await this.prisma.painel_agents.findMany({
       where: { client_id: clientId, is_active: true },
       select: {
         id: true,
@@ -927,14 +1024,19 @@ export class TestChatService {
         is_initial: true,
         activation_conditions: true,
         activation_mode: true,
+        interaction_mode: true,
       },
       orderBy: { execution_order: 'asc' },
     });
+    const agents = allAgents.filter(
+      (agent) => agent.interaction_mode !== 'voice',
+    );
 
     if (agents.length === 0) return defaultAgentId;
 
-    const currentAgentId =
-      (mergedState.current_agent_id as string) || defaultAgentId;
+    // Sem avaliação de condições aqui: a primeira mensagem sempre vai para o
+    // agente inicial e as condições só são avaliadas após retorno de APIs.
+    // Fluxo: pendente (transferência pós-API) > atual > inicial.
 
     const pendingAgentId = mergedState.pending_agent_id as string | undefined;
     if (pendingAgentId) {
@@ -942,27 +1044,24 @@ export class TestChatService {
       if (target) return target.id;
     }
 
-    for (const agent of agents) {
-      if (agent.id === currentAgentId) continue;
-      const conditions =
-        agent.activation_conditions as ActivationConditionGroup | null;
-      if (!conditions) continue;
-      if (evaluateConditions(conditions, mergedState)) {
-        return agent.id;
-      }
-    }
-
+    const currentAgentId =
+      (mergedState.current_agent_id as string) || defaultAgentId;
     const currentAgent = agents.find((a) => a.id === currentAgentId);
     if (currentAgent) return currentAgent.id;
 
-    return agents[0].id;
+    return (agents.find((a) => a.is_initial) || agents[0]).id;
   }
 
-  private async checkImmediateActivation(
+  /**
+   * Avalia as condições de ativação dos outros agentes após o retorno de uma
+   * API/tool sobre o estado enriquecido. Retorna o primeiro agente (por
+   * execution_order) cujas condições foram satisfeitas e seu modo de ativação.
+   */
+  private async checkActivationAfterApi(
     clientId: string,
     currentAgentId: string,
     contextVariables: Record<string, unknown>,
-  ): Promise<any | null> {
+  ): Promise<{ agent: any; mode: string } | null> {
     const agents = await this.prisma.painel_agents.findMany({
       where: { client_id: clientId, is_active: true },
       select: {
@@ -974,19 +1073,24 @@ export class TestChatService {
         allowed_tool_names: true,
         activation_conditions: true,
         activation_mode: true,
+        interaction_mode: true,
       },
       orderBy: { execution_order: 'asc' },
     });
 
     for (const agent of agents) {
-      if (agent.id === currentAgentId) continue;
-      if (agent.activation_mode !== 'immediate') continue;
-      const conditions =
-        agent.activation_conditions as ActivationConditionGroup | null;
-      if (!conditions) continue;
-      if (evaluateConditions(conditions, contextVariables)) {
-        return agent;
+      if (agent.id === currentAgentId || agent.interaction_mode === 'voice') {
+        continue;
       }
+      const conditions = agent.activation_conditions as ActivationConditionGroup | null;
+      if (!conditions?.conditions?.length) continue;
+      const evaluation = evaluateConditionsWithDetails(conditions, contextVariables);
+      if (evaluation.matched) {
+        return { agent, mode: agent.activation_mode || 'on_next_message' };
+      }
+      this.logger.debug(
+        `Condição de ativação não atendida para "${agent.service_step}": ${describeEvaluation(evaluation)}`,
+      );
     }
 
     return null;
@@ -1004,29 +1108,33 @@ export class TestChatService {
     history: MemoryMessage[],
     memory: any,
   ) {
-    const client = await this.prisma.painel_clients.findUnique({
-      where: { id: clientId },
-    });
-    const metadata = (client?.metadata as any) || {};
-
     const transitions = agent.transitions || {};
     const provider =
       transitions.llm_provider || process.env.LLM_PROVIDER || 'groq';
     const model = agent.model || 'openai/gpt-oss-120b';
 
-    const providerCfg = metadata.llm_providers?.[provider];
-    if (!providerCfg?.apiKey) {
+    // Sempre usa a chave cadastrada pelo cliente (provider_credentials / metadata
+    // com descriptografia), caindo para variáveis de ambiente apenas se necessário
+    let apiKey = await this.providerKeyResolver.resolveApiKey(
+      clientId,
+      provider,
+    );
+    if (!apiKey) {
+      const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+      apiKey = process.env[envKeyName] || '';
+    }
+    if (!apiKey) {
       this.logger.warn(
         { provider },
         'processWithAgent: API Key nao encontrada para provider',
       );
       return null;
     }
-    const apiKey = providerCfg.apiKey;
 
     const allowedToolNames = Array.isArray(agent.allowed_tool_names)
       ? agent.allowed_tool_names.filter(
-          (tool: unknown): tool is string => typeof tool === 'string',
+          (tool: unknown): tool is string =>
+            typeof tool === 'string' && !LEGACY_TOOL_NAMES.has(tool),
         )
       : [];
     const apiTools = await this.loadApiTools(
@@ -1045,7 +1153,9 @@ export class TestChatService {
     if (this.canUseNativeRag(agentConfig)) {
       apiTools.push(this.buildNativeRagApiTool());
     }
-    apiTools.push(this.buildNativeHandoffApiTool());
+    if (allowedToolNames.includes(HANDOFF_TOOL_NAME)) {
+      apiTools.push(this.buildNativeHandoffApiTool());
+    }
 
     const allowedSubagents = Array.isArray(transitions.allowed_subagents)
       ? (transitions.allowed_subagents as string[])
@@ -1153,7 +1263,7 @@ export class TestChatService {
         )
         .join('\n');
 
-      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou atualize os seguintes campos durante o atendimento usando a tool save_crm_data assim que o usuário fornecer os dados:\n${fieldList}\nAo identificar qualquer um desses dados confirmados pelo cliente, chame save_crm_data imediatamente.`;
+      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou confirme os seguintes campos durante o atendimento (eles são persistidos automaticamente no CRM pela plataforma):\n${fieldList}\nSempre que o cliente fornecer um desses dados, confirme-o claramente na conversa e, se houver uma API disponível para registrá-lo, utilize-a.`;
     }
 
     const entries = Object.entries(contextVariables).filter(
@@ -1162,16 +1272,7 @@ export class TestChatService {
     if (!entries.length && !crmInstruction) return systemPrompt;
 
     const basePrompt = (systemPrompt || '') + crmInstruction;
-    const replacedPrompt = basePrompt.replace(
-      /\[\[([^\]]+)]]/g,
-      (match, rawKey: string) => {
-        const key = rawKey.trim();
-        if (!Object.prototype.hasOwnProperty.call(contextVariables, key)) {
-          return match;
-        }
-        return this.formatContextValue(contextVariables[key]);
-      },
-    );
+    const replacedPrompt = resolvePromptTemplateString(basePrompt, contextVariables);
 
     if (!entries.length) return replacedPrompt;
 
@@ -1187,6 +1288,31 @@ export class TestChatService {
     ]
       .filter(Boolean)
       .join('\n\n');
+  }
+
+  private isMaskedOrPlaceholder(k?: string | null) {
+    return (
+      !k ||
+      k.trim() === '' ||
+      k === 'stored' ||
+      k === 'undefined' ||
+      k === 'null' ||
+      k.includes('***') ||
+      k.includes('...') ||
+      k.startsWith('enc:')
+    );
+  }
+
+  private withMessageAliases(message: string): Record<string, unknown> {
+    return {
+      mensagem_usuario: message,
+      user_message: message,
+      last_message: message,
+      message,
+      text: message,
+      texto: message,
+      user_transcript: message,
+    };
   }
 
   private formatContextValue(value: unknown) {
@@ -1392,71 +1518,6 @@ export class TestChatService {
     };
   }
 
-  private buildNativeSetVariableApiTool(): ApiTool {
-    return {
-      id: 'set_variable',
-      name: 'set_variable',
-      functionName: 'set_variable',
-      description:
-        'Define uma ou mais variáveis no estado da conversa para controle de fluxo e memória contextual.',
-      method: 'NATIVE',
-      url: null,
-      headers: null,
-      body: null,
-      parameters: {
-        type: 'object',
-        properties: {
-          variables: {
-            type: 'object',
-            description:
-              'Objeto com as variáveis a serem definidas (ex: {"valor_negociado": "R$ 500,00"}).',
-            additionalProperties: true,
-          },
-        },
-        required: ['variables'],
-      },
-      extract_data: null,
-    };
-  }
-
-  private buildNativeSaveCrmDataApiTool(): ApiTool {
-    return {
-      id: 'save_crm_data',
-      name: 'save_crm_data',
-      functionName: 'save_crm_data',
-      description:
-        'Salva ou atualiza dados estruturados de CRM, cobrança, FAQ ou vendas coletados durante o atendimento. Use sempre que o cliente confirmar um dado (ex: CPF, valor de acordo, data de pagamento, categoria de dúvida, produto de interesse).',
-      method: 'NATIVE',
-      url: null,
-      headers: null,
-      body: null,
-      parameters: {
-        type: 'object',
-        properties: {
-          operation_type: {
-            type: 'string',
-            description:
-              'Tipo de operação: "cobranca", "faq", "vendas", "suporte" ou "custom".',
-          },
-          variables: {
-            type: 'object',
-            description:
-              'Objeto chave-valor com os dados coletados (ex: {"data_promessa": "2026-09-25", "valor_negociado": "R$ 350,00"}).',
-            additionalProperties: true,
-          },
-          contact_data: {
-            type: 'object',
-            description:
-              'Dados de identificação do contato (ex: {"document_number": "123.456.789-00", "email": "cliente@email.com"}).',
-            additionalProperties: true,
-          },
-        },
-        required: ['variables'],
-      },
-      extract_data: null,
-    };
-  }
-
   private buildSubagentApiTool(subagent: {
     id: string;
     name: string;
@@ -1636,7 +1697,8 @@ export class TestChatService {
       : [];
     const allowedToolNames = Array.isArray(agent?.allowed_tool_names)
       ? agent.allowed_tool_names.filter(
-          (name: unknown): name is string => typeof name === 'string',
+          (name: unknown): name is string =>
+            typeof name === 'string' && !LEGACY_TOOL_NAMES.has(name),
         )
       : [];
 
@@ -1662,7 +1724,6 @@ export class TestChatService {
     messageId: string,
     agentRunId: string,
   ): NativeRagRuntimeContext | undefined {
-    if (!this.canUseNativeRag(agentConfig)) return undefined;
     return {
       agentConfig,
       clientId,
@@ -2032,15 +2093,71 @@ export class TestChatService {
       ? await response.json()
       : await response.text();
 
-    const result = {
+    const extracted = this.applyExtractData(raw, tool.extract_data);
+
+    const result: {
+      ok: boolean;
+      status: number;
+      data: any;
+      raw: unknown;
+      chained_result?: any;
+    } = {
       ok: response.ok,
       status: response.status,
-      data: this.applyExtractData(raw, tool.extract_data),
+      data: extracted,
       raw,
     };
 
     if (!response.ok) {
       throw new Error(`Erro ao executar ${tool.name}: ${response.status}`);
+    }
+
+    // Suporte a API encadeada (next_api_id ou next_tool)
+    const nextApiId = (headers.next_api_id as string) || (tool as any).next_tool;
+    if (response.ok && nextApiId) {
+      try {
+        const nextApi = await this.prisma.painel_apis.findFirst({
+          where: {
+            OR: [
+              { id: nextApiId },
+              { name: nextApiId },
+            ],
+            active: true,
+          },
+        });
+        if (nextApi) {
+          const nextTool = {
+            id: nextApi.id,
+            name: nextApi.name,
+            functionName: this.toFunctionName(nextApi.name, nextApi.id),
+            description: nextApi.description,
+            method: nextApi.method,
+            url: nextApi.url,
+            headers: nextApi.headers,
+            body: nextApi.body,
+            parameters: nextApi.parameters,
+            extract_data: nextApi.extract_data,
+          };
+          const nextArgs = {
+            ...args,
+            ...(typeof extracted === 'object' && extracted !== null ? extracted : {}),
+            ...(typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}),
+          };
+          const nextResult = await this.executeApiTool(nextTool, nextArgs);
+          if (nextResult && nextResult.ok) {
+            result.data = {
+              ...(typeof result.data === 'object' && result.data !== null ? result.data : {}),
+              ...(typeof nextResult.data === 'object' && nextResult.data !== null ? nextResult.data : {}),
+              tem_ofertas: true,
+            };
+            result.chained_result = nextResult;
+          }
+        }
+      } catch (chainErr) {
+        this.logger.warn(
+          `Falha ao executar API encadeada (${nextApiId}): ${chainErr instanceof Error ? chainErr.message : String(chainErr)}`,
+        );
+      }
     }
 
     return result;
@@ -2051,7 +2168,7 @@ export class TestChatService {
     message: string,
     context?: NativeRagRuntimeContext,
   ) {
-    if (!context) {
+    if (!context || !context.agentConfig) {
       return {
         error:
           'RAG search indisponivel: execute o chat com cliente, agente e sessao de teste persistida.',
@@ -2233,9 +2350,16 @@ export class TestChatService {
           }
         }
       } else if (cfg.source === 'system') {
-        resolvedValue = cfg.value;
+        const varName = typeof cfg.value === 'string' ? cfg.value.replace(/[{}]/g, '').trim() : '';
+        resolvedValue = (args as any)[varName] ?? (args as any)[key] ?? (args as any)['cliente_cpf'] ?? (args as any)['cpf'] ?? cfg.value;
       } else if ('value' in cfg) {
-        resolvedValue = cfg.value;
+        const rawVal = cfg.value;
+        if (typeof rawVal === 'string' && rawVal.startsWith('{{') && rawVal.endsWith('}}')) {
+          const varName = rawVal.replace(/[{}]/g, '').trim();
+          resolvedValue = (args as any)[varName] ?? (args as any)[key] ?? rawVal;
+        } else {
+          resolvedValue = rawVal;
+        }
       } else {
         resolvedValue = config;
       }
@@ -2471,6 +2595,21 @@ export class TestChatService {
   }
 
   private getByPath(value: unknown, path: string): unknown {
+    if (!path || value == null) return null;
+
+    const res = this.resolveByPathDirect(value, path);
+    if (res !== null && res !== undefined) return res;
+
+    // Fallback: se o objeto possui encapsulamento .data (comum em n8n e APIs REST)
+    if (typeof value === 'object' && value !== null && 'data' in value && !path.startsWith('data.')) {
+      const dataRes = this.resolveByPathDirect((value as any).data, path);
+      if (dataRes !== null && dataRes !== undefined) return dataRes;
+    }
+
+    return null;
+  }
+
+  private resolveByPathDirect(value: unknown, path: string): unknown {
     if (!path || value == null) return null;
 
     const steps: { key: string; index: string | null }[] = [];
@@ -2968,12 +3107,20 @@ export class TestChatService {
         payload.tool_choice = 'auto';
       }
 
+      const requestHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      };
+      if (
+        baseUrl.includes('google') ||
+        baseUrl.includes('generativelanguage')
+      ) {
+        requestHeaders['x-goog-api-key'] = apiKey;
+      }
+
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: requestHeaders,
         body: JSON.stringify(payload),
       });
       if (!res.ok)
@@ -2985,6 +3132,26 @@ export class TestChatService {
       }
       responseMessage = json?.choices?.[0]?.message;
       if (!responseMessage) break;
+
+      const finishReason = json?.choices?.[0]?.finish_reason;
+      const rawContent = responseMessage?.content;
+      const contentText =
+        typeof rawContent === 'string'
+          ? rawContent
+          : Array.isArray(rawContent)
+            ? rawContent
+                .map((part: any) =>
+                  typeof part?.text === 'string' ? part.text : '',
+                )
+                .join('')
+            : '';
+      if (!contentText.trim() && !responseMessage?.tool_calls?.length) {
+        this.logger.warn(
+          { provider, model, finishReason, loop },
+          'chat/completions retornou resposta sem conteúdo textual',
+        );
+      }
+      responseMessage = { ...responseMessage, content: contentText };
 
       messages.push(responseMessage);
       const calls = responseMessage.tool_calls || [];
@@ -3001,10 +3168,6 @@ export class TestChatService {
         const isNativeHandoff =
           functionName === 'transfer_to_human' ||
           functionName === 'request_handoff';
-        const isNativeSetVariable = functionName === 'set_variable';
-        const isNativeSaveCrmData =
-          functionName === 'save_crm_data' ||
-          functionName === 'update_crm_data';
 
         const isSubagent = functionName.startsWith('subagent_');
 
@@ -3013,8 +3176,6 @@ export class TestChatService {
           !isNativeWeb &&
           !isNativeRag &&
           !isNativeHandoff &&
-          !isNativeSetVariable &&
-          !isNativeSaveCrmData &&
           !isSubagent
         ) {
           messages.push({
@@ -3067,120 +3228,6 @@ export class TestChatService {
             };
             toolCalls.push({
               name: 'transfer_to_human',
-              arguments: args,
-              result,
-            });
-          } else if (isNativeSetVariable) {
-            const vars = (args.variables as Record<string, unknown>) || {};
-            const convId = nativeRagContext?.conversationId;
-            if (convId) {
-              const freshState = await this.conversationsService.getState(convId);
-              await this.conversationsService.updateState(convId, {
-                ...freshState,
-                ...vars,
-              });
-            }
-            result = {
-              status: 'success',
-              message: `${Object.keys(vars).length} variável(is) definida(s) com sucesso.`,
-              variables_set: Object.keys(vars),
-            };
-            toolCalls.push({
-              name: 'set_variable',
-              arguments: args,
-              result,
-            });
-          } else if (isNativeSaveCrmData) {
-            const vars = (args.variables as Record<string, unknown>) || {};
-            const opType = String(args.operation_type || 'custom');
-            const contactData = args.contact_data as
-              | Record<string, unknown>
-              | undefined;
-            const convId = nativeRagContext?.conversationId;
-
-            if (convId) {
-              const freshState = await this.conversationsService.getState(convId);
-              await this.conversationsService.updateState(convId, {
-                ...freshState,
-                ...vars,
-                _last_operation_type: opType,
-              });
-
-              const conv = await this.prisma.conversations.findUnique({
-                where: { id: convId },
-                select: { id: true, metadata: true, end_user_id: true },
-              });
-
-              if (conv) {
-                const existingMeta =
-                  (conv.metadata as Record<string, unknown>) || {};
-                const existingCrm =
-                  (existingMeta.crm_data as Record<string, unknown>) || {};
-                const existingVars =
-                  (existingCrm.variables as Record<string, unknown>) || {};
-
-                await this.prisma.conversations.update({
-                  where: { id: convId },
-                  data: {
-                    metadata: {
-                      ...existingMeta,
-                      crm_data: {
-                        operation_type: opType,
-                        updated_at: new Date().toISOString(),
-                        variables: {
-                          ...existingVars,
-                          ...vars,
-                        },
-                      },
-                    } as any,
-                  },
-                });
-
-                if (contactData && conv.end_user_id) {
-                  const endUser = await this.prisma.end_users.findUnique({
-                    where: { id: conv.end_user_id },
-                    select: { id: true, metadata: true, name: true },
-                  });
-
-                  if (endUser) {
-                    const userMeta =
-                      (endUser.metadata as Record<string, unknown>) || {};
-                    const userCustom =
-                      (userMeta.custom_attributes as Record<string, unknown>) ||
-                      {};
-
-                    await this.prisma.end_users.update({
-                      where: { id: conv.end_user_id },
-                      data: {
-                        name: (contactData.name as string) || endUser.name,
-                        metadata: {
-                          ...userMeta,
-                          document_number:
-                            contactData.document_number ||
-                            contactData.cpf ||
-                            contactData.cnpj ||
-                            userMeta.document_number,
-                          email: contactData.email || userMeta.email,
-                          custom_attributes: {
-                            ...userCustom,
-                            ...contactData,
-                          },
-                        } as any,
-                      },
-                    });
-                  }
-                }
-              }
-            }
-
-            result = {
-              status: 'success',
-              result: 'crm_data_saved',
-              message: `Dados da operação "${opType}" salvos com sucesso (${Object.keys(vars).length} variáveis).`,
-              saved_variables: Object.keys(vars),
-            };
-            toolCalls.push({
-              name: 'save_crm_data',
               arguments: args,
               result,
             });
@@ -3264,8 +3311,53 @@ export class TestChatService {
       }
     }
 
+    let finalText = responseMessage?.content || '';
+    if (typeof finalText !== 'string') finalText = String(finalText ?? '');
+
+    // Se o modelo encerrou sem conteúdo textual (ex: após cadeia de tool calls
+    // como switch_agent), faz uma chamada final sem ferramentas para forçar texto
+    if (!finalText.trim() && messages.length > 0) {
+      try {
+        const retryRes = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              ...messages,
+              {
+                role: 'user',
+                content:
+                  'Use as informações das ferramentas executadas acima e responda ao usuário em texto de forma clara e objetiva.',
+              },
+            ],
+            max_tokens: 4096,
+          }),
+        });
+        if (retryRes.ok) {
+          const retryJson = await retryRes.json();
+          if (retryJson?.usage) {
+            totalInputTokens += retryJson.usage.prompt_tokens || 0;
+            totalOutputTokens += retryJson.usage.completion_tokens || 0;
+          }
+          const retryContent = retryJson?.choices?.[0]?.message?.content;
+          if (typeof retryContent === 'string' && retryContent.trim()) {
+            finalText = retryContent.trim();
+          }
+        }
+      } catch (retryErr) {
+        this.logger.warn(
+          { error: (retryErr as Error).message },
+          'Falha no retry de resposta textual após tool calls',
+        );
+      }
+    }
+
     return {
-      text: responseMessage?.content || 'Sem resposta',
+      text: finalText || 'Sem resposta',
       toolCalls,
       transcription,
       usage: {

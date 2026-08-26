@@ -1,13 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { llmConfig } from '../providers/llm-config';
+import { buildAgentPromptFromBlocks } from '../../agents/utils/agent-prompt-builder.util';
 import type {
   AgentCapabilities,
   AgentConfig,
 } from '../types/capabilities.types';
 import { DEFAULT_CAPABILITIES } from '../types/capabilities.types';
-import { evaluateConditions } from '../utils/condition-evaluator.util';
-import type { ActivationConditionGroup } from '../utils/condition-evaluator.util';
 
 export interface SelectAgentResult {
   id: string;
@@ -19,17 +18,26 @@ export interface SelectAgentResult {
   activation_conditions: unknown;
   activation_mode: string | null;
   allowed_tool_names: unknown;
+  interaction_mode: string | null;
+  persona_blocks?: unknown;
 }
 
 @Injectable()
 export class AgentConfigResolver {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Seleciona o agente SEM avaliar condições de ativação.
+   * Fluxo: pendente (transferência pós-API) > atual > agente inicial.
+   * As condições de ativação são avaliadas apenas após o retorno de APIs
+   * (ver OrchestrationService.onToolCall).
+   */
   async resolveAgentConfig(
     clientId: string,
     state: Record<string, unknown>,
+    channel?: string,
   ): Promise<AgentConfig & { agentId: string }> {
-    const agents = (await this.prisma.painel_agents.findMany({
+    const allAgents = (await this.prisma.painel_agents.findMany({
       where: { client_id: clientId, is_active: true },
       select: {
         id: true,
@@ -41,46 +49,41 @@ export class AgentConfigResolver {
         activation_conditions: true,
         activation_mode: true,
         allowed_tool_names: true,
+        interaction_mode: true,
+        persona_blocks: true,
       },
       orderBy: { execution_order: 'asc' },
     })) as unknown as SelectAgentResult[];
 
+    const agents = channel
+      ? allAgents.filter((agent) => {
+          const mode = agent.interaction_mode || 'both';
+          return mode === 'both' || mode === (channel === 'voice' ? 'voice' : 'text');
+        })
+      : allAgents;
+
     if (agents.length === 0) {
       return this.buildDefaultAgentConfig();
-    }
-
-    const currentAgentId = state.current_agent_id as string | undefined;
-
-    if (!currentAgentId) {
-      const initialAgent = agents.find((a) => a.is_initial) || agents[0];
-      return this.agentRecordToConfig(initialAgent);
     }
 
     const pendingAgentId = state.pending_agent_id as string | undefined;
     if (pendingAgentId) {
       const targetAgent = agents.find((a) => a.id === pendingAgentId);
       if (targetAgent) {
-        return this.agentRecordToConfig(targetAgent);
+        return this.agentRecordToConfig(targetAgent, agents, state);
       }
     }
 
-    for (const agent of agents) {
-      if (agent.id === currentAgentId) continue;
-      const conditions =
-        agent.activation_conditions as ActivationConditionGroup | null;
-      if (!conditions) continue;
-
-      if (evaluateConditions(conditions, state)) {
-        return this.agentRecordToConfig(agent);
+    const currentAgentId = state.current_agent_id as string | undefined;
+    if (currentAgentId) {
+      const currentAgent = agents.find((a) => a.id === currentAgentId);
+      if (currentAgent) {
+        return this.agentRecordToConfig(currentAgent, agents, state);
       }
     }
 
-    const currentAgent = agents.find((a) => a.id === currentAgentId);
-    if (currentAgent) {
-      return this.agentRecordToConfig(currentAgent);
-    }
-
-    return this.agentRecordToConfig(agents[0]);
+    const initialAgent = agents.find((a) => a.is_initial) || agents[0];
+    return this.agentRecordToConfig(initialAgent, agents, state);
   }
 
   private buildDefaultAgentConfig(): AgentConfig & { agentId: string } {
@@ -101,10 +104,21 @@ export class AgentConfigResolver {
 
   private agentRecordToConfig(
     painelAgent: SelectAgentResult,
+    _agents: SelectAgentResult[] = [painelAgent],
+    state: Record<string, unknown> = {},
   ): AgentConfig & { agentId: string; llmProvider?: string } {
     const transitions =
       (painelAgent?.transitions as Record<string, unknown>) || {};
     const ws = (transitions.web_search as Record<string, unknown>) || {};
+
+    let systemPrompt = painelAgent?.system_prompt || 'You are a helpful assistant.';
+    if (
+      painelAgent?.persona_blocks &&
+      typeof painelAgent.persona_blocks === 'object' &&
+      Object.keys(painelAgent.persona_blocks).length > 0
+    ) {
+      systemPrompt = buildAgentPromptFromBlocks(painelAgent as any, state);
+    }
 
     return {
       agentId: painelAgent?.id || 'default',
@@ -112,8 +126,7 @@ export class AgentConfigResolver {
       name: painelAgent?.service_step || 'default',
       model: painelAgent?.model || llmConfig.models.gemini,
       llmProvider: (transitions.llm_provider as string) || undefined,
-      system_prompt:
-        painelAgent?.system_prompt || 'You are a helpful assistant.',
+      system_prompt: systemPrompt,
       capabilities: {
         ...DEFAULT_CAPABILITIES,
         ...(transitions.capabilities as Partial<AgentCapabilities>),

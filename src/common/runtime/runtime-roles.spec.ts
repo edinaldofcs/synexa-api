@@ -30,6 +30,7 @@ describe('Runtime Roles and Mock Providers Suite', () => {
     it('should validate worker service roles', () => {
       const config = {
         SERVICE_ROLE: ServiceRole.WORKER_AGENT,
+        ENVIRONMENT: 'development',
         DATABASE_URL: 'postgresql://postgres:pass@localhost:5432/synexa_db',
         REDIS_URL: 'redis://localhost:6379',
         JWT_SECRET: 'test-secret-at-least-32-chars-key!!',

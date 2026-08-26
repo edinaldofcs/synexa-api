@@ -3,7 +3,7 @@ import { WebSocket } from 'ws';
 import { VoiceGateway } from './voice.gateway';
 
 class FakeClientSocket extends EventEmitter {
-  readyState = WebSocket.OPEN;
+  readyState: number = WebSocket.OPEN;
   sent: string[] = [];
   close = jest.fn((code: number) => {
     this.readyState = WebSocket.CLOSED;
@@ -16,15 +16,21 @@ class FakeClientSocket extends EventEmitter {
 }
 
 describe('VoiceGateway security', () => {
-  it('rejects a start message without an access token', async () => {
+  it('rejects a start message without a session cookie', async () => {
     const client = new FakeClientSocket();
     const voiceAuthService = {
-      authenticate: jest.fn().mockRejectedValue(new Error('token required')),
+      authenticateSession: jest
+        .fn()
+        .mockRejectedValue(new Error('session required')),
       resolveClientId: jest.fn(),
     };
     const gateway = new VoiceGateway(
       {} as any,
       voiceAuthService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -35,7 +41,7 @@ describe('VoiceGateway security', () => {
     client.emit('message', Buffer.from(JSON.stringify({ type: 'start' })));
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(voiceAuthService.authenticate).toHaveBeenCalledWith('');
+    expect(voiceAuthService.authenticateSession).toHaveBeenCalledWith('');
     expect(client.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'error',
       code: 'VOICE_AUTH_REQUIRED',

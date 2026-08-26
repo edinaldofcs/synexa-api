@@ -23,7 +23,8 @@ WITH agent_list AS (
     pa.service_step,
     pa.is_initial,
     pa.activation_conditions,
-    pa.activation_mode
+    pa.activation_mode,
+    pa.interaction_mode
   FROM public.painel_agents pa
   WHERE pa.is_active = true
 ),
@@ -64,8 +65,9 @@ agent_activation AS (
       jsonb_build_object(
         'is_initial', is_initial,
         'service_step', service_step,
-        'activation_conditions', activation_conditions,
-        'activation_mode', activation_mode
+         'activation_conditions', activation_conditions,
+         'activation_mode', activation_mode,
+         'interaction_mode', interaction_mode
       )
     ) AS agent_configs
   FROM agent_list
@@ -115,7 +117,30 @@ WHERE a.id = ${clientId}::uuid
           ? (generatedMetadata as Record<string, unknown>)
           : {};
       const metadata = {
+        ...currentMetadata,
         ...generatedMetadataObject,
+        metadata: {
+          ...(typeof currentMetadata.metadata === 'object' &&
+          currentMetadata.metadata !== null
+            ? (currentMetadata.metadata as Record<string, unknown>)
+            : {}),
+          ...(typeof generatedMetadataObject.metadata === 'object' &&
+          generatedMetadataObject.metadata !== null
+            ? (generatedMetadataObject.metadata as Record<string, unknown>)
+            : {}),
+        },
+        ...(currentMetadata.inbound_variable_mapping
+          ? {
+              inbound_variable_mapping:
+                currentMetadata.inbound_variable_mapping,
+            }
+          : {}),
+        ...(currentMetadata.variable_schema
+          ? { variable_schema: currentMetadata.variable_schema }
+          : {}),
+        ...(currentMetadata.crm_output_config
+          ? { crm_output_config: currentMetadata.crm_output_config }
+          : {}),
         ...(currentMetadata.llm_providers
           ? { llm_providers: currentMetadata.llm_providers }
           : {}),
@@ -128,7 +153,7 @@ WHERE a.id = ${clientId}::uuid
       };
       await this.prisma.painel_clients.update({
         where: { id: clientId },
-        data: { metadata },
+        data: { metadata: metadata as any },
       });
     } catch (error) {
       this.logger.error(

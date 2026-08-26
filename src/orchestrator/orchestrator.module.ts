@@ -6,6 +6,7 @@ import { CompatibilityService } from './compatibility.service';
 import { OrchestrationService } from './orchestration.service';
 import { DevOnlyGuard } from '../common/auth/dev-only.guard';
 import { ConversationsModule } from '../conversations/conversations.module';
+import { AnalyticsModule } from '../analytics/analytics.module';
 import { MediaModule } from '../media/media.module';
 import { AgentConfigResolver } from './services/agent-config-resolver.service';
 import { RagSearchService } from './services/rag-search.service';
@@ -17,7 +18,7 @@ import { ProviderCircuitBreakerService } from './services/circuit-breaker.servic
 import { FallbackProviderService } from './services/fallback-provider.service';
 
 @Module({
-  imports: [ConversationsModule, MediaModule],
+  imports: [ConversationsModule, MediaModule, AnalyticsModule],
   controllers: [OrchestratorController],
   providers: [
     OrchestratorService,

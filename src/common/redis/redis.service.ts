@@ -21,8 +21,12 @@ export class RedisService implements OnModuleDestroy {
     );
   }
 
-  async set(key: string, value: unknown): Promise<void> {
-    await this.client.set(key, JSON.stringify(value), 'EX', this.sessionTtl);
+  async set(
+    key: string,
+    value: unknown,
+    ttlSeconds: number = this.sessionTtl,
+  ): Promise<void> {
+    await this.client.set(key, JSON.stringify(value), 'EX', ttlSeconds);
   }
 
   async get<T = unknown>(key: string): Promise<T | null> {
@@ -32,6 +36,22 @@ export class RedisService implements OnModuleDestroy {
 
   async del(key: string): Promise<void> {
     await this.client.del(key);
+  }
+
+  async addToSet(key: string, value: string): Promise<void> {
+    await this.client.sadd(key, value);
+  }
+
+  async getSetMembers(key: string): Promise<string[]> {
+    return this.client.smembers(key);
+  }
+
+  async removeFromSet(key: string, value: string): Promise<void> {
+    await this.client.srem(key, value);
+  }
+
+  async expire(key: string, ttlSeconds: number): Promise<void> {
+    await this.client.expire(key, ttlSeconds);
   }
 
   async checkRateLimit(

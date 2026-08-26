@@ -30,7 +30,12 @@ async function main() {
 
   // 2. Criar Usuário no Supabase Auth
   const email = 'admin@synexa.com.br';
-  const password = process.env.SEED_ADMIN_PASSWORD || 'SynexaAdmin2026!';
+  const password = process.env.SEED_ADMIN_PASSWORD?.trim();
+  if (!password || password.length < 12) {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD is required and must be at least 12 characters',
+    );
+  }
   
   console.log(`Criando usuário no Supabase Auth: ${email}...`);
   const { data: authUser, error: authError } = await supabase.auth.admin.createUser({

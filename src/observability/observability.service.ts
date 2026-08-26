@@ -46,7 +46,15 @@ export class ObservabilityService {
             queue.getDelayedCount(),
           ],
         );
-        return { queue: name, waiting, active, completed, failed, delayed };
+        return {
+          name,
+          queue: name,
+          waiting,
+          active,
+          completed,
+          failed,
+          delayed,
+        };
       }),
     );
 

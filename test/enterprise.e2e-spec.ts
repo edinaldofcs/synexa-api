@@ -69,6 +69,10 @@ describe('Enterprise Synexa (e2e)', () => {
         set: jest.fn(),
         get: jest.fn().mockResolvedValue(null),
         del: jest.fn(),
+        addToSet: jest.fn(),
+        getSetMembers: jest.fn().mockResolvedValue([]),
+        removeFromSet: jest.fn(),
+        expire: jest.fn(),
         acquireLock: jest.fn().mockResolvedValue(true),
         releaseLock: jest.fn(),
         checkRateLimit: jest.fn().mockResolvedValue({
@@ -611,21 +615,13 @@ describe('Enterprise Synexa (e2e)', () => {
   });
 
   describe('8. Deprecacao', () => {
-    it('/orchestrator/chat - headers de deprecated', async () => {
-      jest
-        .spyOn(prisma.channel_connections, 'findFirst')
-        .mockResolvedValue(null);
-      jest
-        .spyOn(prisma.channel_connections, 'findUnique')
-        .mockResolvedValue(null);
-
+    it('/orchestrator/chat - endpoint deprecated desativado fora de development', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/orchestrator/chat')
         .set('Authorization', `Bearer ${authToken}`)
         .send({ cellPhone: 'test', to: 'test', transcript: 'test' });
 
-      expect(res.headers['x-deprecated']).toBe('true');
-      expect(res.headers['sunset']).toBeDefined();
+      expect(res.status).toBe(404);
     });
   });
 });

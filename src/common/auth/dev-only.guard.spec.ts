@@ -24,10 +24,7 @@ describe('DevOnlyGuard', () => {
 
     const result = guard.canActivate(mockContext);
     expect(result).toBe(true);
-    expect(configService.get).toHaveBeenCalledWith(
-      'ENVIRONMENT',
-      'development',
-    );
+    expect(configService.get).toHaveBeenCalledWith('ENVIRONMENT');
   });
 
   it('should throw NotFoundException when environment is production', () => {
@@ -42,12 +39,11 @@ describe('DevOnlyGuard', () => {
     expect(() => guard.canActivate(mockContext)).toThrow(NotFoundException);
   });
 
-  it('should return true when environment is missing from config (uses default development)', () => {
+  it('should reject when environment is missing from config', () => {
     configService.get.mockImplementation(
       (_key: string, defaultValue: any) => defaultValue,
     );
 
-    const result = guard.canActivate(mockContext);
-    expect(result).toBe(true);
+    expect(() => guard.canActivate(mockContext)).toThrow(NotFoundException);
   });
 });

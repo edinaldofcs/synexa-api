@@ -59,8 +59,7 @@ export enum VoiceProvider {
 
 export class EnvironmentVariables {
   @IsIn(Object.values(Environment))
-  @IsOptional()
-  ENVIRONMENT?: string = Environment.DEVELOPMENT;
+  ENVIRONMENT!: string;
 
   @IsIn(Object.values(NodeEnv))
   @IsOptional()
@@ -120,6 +119,42 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   CORS_ORIGIN?: string;
+
+  @IsIn(['lax', 'strict', 'none'])
+  @IsOptional()
+  AUTH_COOKIE_SAME_SITE?: string = 'lax';
+
+  @IsUrl({ require_tld: false })
+  @IsOptional()
+  AUTH_CALLBACK_URL?: string;
+
+  @IsUrl({ require_tld: false })
+  @IsOptional()
+  AUTH_FRONTEND_URL?: string;
+
+  @IsString()
+  @IsOptional()
+  SMTP_HOST?: string;
+
+  @IsNumber({}, { message: 'SMTP_PORT must be a valid number' })
+  @IsOptional()
+  SMTP_PORT?: number = 587;
+
+  @IsIn(['true', 'false'])
+  @IsOptional()
+  SMTP_SECURE?: string = 'false';
+
+  @IsString()
+  @IsOptional()
+  SMTP_USER?: string;
+
+  @IsString()
+  @IsOptional()
+  SMTP_PASS?: string;
+
+  @IsString()
+  @IsOptional()
+  SMTP_FROM?: string;
 
   @IsString()
   @IsOptional()
@@ -192,6 +227,72 @@ export class EnvironmentVariables {
   @IsNumber({}, { message: 'UPLOAD_MAX_SIZE must be a valid number' })
   @IsOptional()
   UPLOAD_MAX_SIZE?: number = 52428800;
+
+  @IsNumber({}, { message: 'FASTAGI_PORT must be a valid number' })
+  @IsOptional()
+  FASTAGI_PORT?: number = 4573;
+
+  @IsOptional()
+  FASTAGI_ENABLED?: boolean = false;
+
+  @IsString()
+  @IsOptional()
+  ASTERISK_AMI_HOST?: string;
+
+  @IsNumber({}, { message: 'ASTERISK_AMI_PORT must be a valid number' })
+  @IsOptional()
+  ASTERISK_AMI_PORT?: number = 5038;
+
+  @IsString()
+  @IsOptional()
+  ASTERISK_AMI_USER?: string;
+
+  @IsString()
+  @IsOptional()
+  ASTERISK_AMI_SECRET?: string;
+
+  @IsOptional()
+  AUDIO_GATE_ENABLED?: boolean = true;
+
+  @IsNumber({}, { message: 'AUDIO_GATE_THRESHOLD must be a valid number' })
+  @IsOptional()
+  AUDIO_GATE_THRESHOLD?: number = 500;
+
+  @IsNumber(
+    {},
+    { message: 'AUDIO_GATE_HANGOVER_MARGIN_MS must be a valid number' },
+  )
+  @IsOptional()
+  AUDIO_GATE_HANGOVER_MARGIN_MS?: number = 500;
+
+  @IsNumber({}, { message: 'AUDIO_GATE_PREROLL_MS must be a valid number' })
+  @IsOptional()
+  AUDIO_GATE_PREROLL_MS?: number = 300;
+
+  @IsOptional()
+  GROQ_STT_ENABLED?: boolean = false;
+
+  @IsString()
+  @IsOptional()
+  GROQ_STT_MODEL?: string = 'whisper-large-v3-turbo';
+
+  @IsString()
+  @IsOptional()
+  GEMINI_LIVE_VOICE_MODEL?: string = 'gemini-3.1-flash-live-preview';
+
+  @IsString()
+  @IsOptional()
+  GEMINI_LIVE_DEFAULT_VOICE?: string = 'Aoede';
+
+  @IsOptional()
+  GEMINI_CONTEXT_COMPRESSION_ENABLED?: boolean = false;
+
+  @IsNumber(
+    {},
+    { message: 'GEMINI_WS_HANDSHAKE_TIMEOUT_MS must be a valid number' },
+  )
+  @IsOptional()
+  GEMINI_WS_HANDSHAKE_TIMEOUT_MS?: number = 15000;
 }
 
 export function validateEnv(
@@ -233,6 +334,16 @@ export function validateEnv(
     if (!validatedConfig.SUPABASE_SERVICE_ROLE_KEY) {
       throw new Error(
         'SUPABASE_SERVICE_ROLE_KEY is required in production/staging environment',
+      );
+    }
+    if (validatedConfig.AUTH_PROVIDER !== AuthProvider.SUPABASE) {
+      throw new Error(
+        'AUTH_PROVIDER must be supabase in production/staging environment',
+      );
+    }
+    if (!validatedConfig.SUPABASE_PUBLISH_KEY) {
+      throw new Error(
+        'SUPABASE_PUBLISH_KEY is required for Supabase authentication',
       );
     }
   }

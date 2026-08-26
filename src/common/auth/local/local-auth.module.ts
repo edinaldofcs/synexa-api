@@ -5,7 +5,6 @@ import { PassportModule } from '@nestjs/passport';
 import { PrismaModule } from '../../prisma/prisma.module';
 import { LocalAuthService } from './local-auth.service';
 import { LocalJwtStrategy } from './local-jwt.strategy';
-import { LocalAuthController } from './local-auth.controller';
 
 @Module({
   imports: [
@@ -34,7 +33,7 @@ import { LocalAuthController } from './local-auth.controller';
       inject: [ConfigService],
     }),
   ],
-  controllers: [LocalAuthController],
+  controllers: [],
   providers: [LocalAuthService, LocalJwtStrategy],
   exports: [LocalAuthService, JwtModule, PassportModule],
 })
