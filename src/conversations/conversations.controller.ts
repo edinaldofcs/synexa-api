@@ -94,9 +94,16 @@ export class ConversationsController {
   getMessages(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: any,
+    @Query('limit') limit?: string,
+    @Query('before') before?: string,
+    @Query('offset') offset?: string,
   ) {
     const ctx = extractTenantContext(user);
-    return this.conversationsService.getMessages(id, ctx.companyId);
+    return this.conversationsService.getMessages(id, ctx.companyId, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      before,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
   }
 
   @Post(':id/messages')

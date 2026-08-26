@@ -181,11 +181,55 @@ export class ConversationsService {
     return conversation;
   }
 
-  async getMessages(conversationId: string, companyId?: string) {
+  async getMessages(
+    conversationId: string,
+    companyId?: string,
+    query?: { limit?: number; before?: string; offset?: number },
+  ) {
     if (companyId)
       await this.assertConversationInTenant(conversationId, companyId);
+
+    const where: any = { conversation_id: conversationId };
+    if (query?.before) {
+      where.created_at = { lt: new Date(query.before) };
+    }
+
+    const limit = query?.limit ? Number(query.limit) : undefined;
+    const offset = query?.offset ? Number(query.offset) : undefined;
+
+    if (limit) {
+      const messages = await this.prisma.messages.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        take: limit,
+        skip: offset,
+        include: {
+          message_parts: {
+            orderBy: { order_index: 'asc' },
+            include: {
+              media_assets: {
+                select: {
+                  id: true,
+                  mime_type: true,
+                  file_size: true,
+                  storage_bucket: true,
+                  storage_path: true,
+                  source_url: true,
+                  transcript: true,
+                  ocr_text: true,
+                  status: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return messages.reverse();
+    }
+
     return this.prisma.messages.findMany({
-      where: { conversation_id: conversationId },
+      where,
       orderBy: { created_at: 'asc' },
       include: {
         message_parts: {
@@ -327,8 +371,16 @@ export class ConversationsService {
       orderBy: { last_message_at: 'desc' },
       take: 150,
       include: {
-        end_users: { select: { id: true, name: true } },
+        end_users: {
+          select: {
+            id: true,
+            name: true,
+            metadata: true,
+          },
+        },
         users: { select: { id: true, name: true, email: true } },
+        painel_clients: { select: { id: true, company_name: true } },
+        conversation_state: { select: { state: true, updated_at: true } },
         messages: {
           take: 1,
           orderBy: { created_at: 'desc' },
@@ -572,7 +624,15 @@ export class ConversationsService {
       where,
       orderBy: { last_inbound_at: 'asc' },
       include: {
-        end_users: { select: { id: true, name: true } },
+        end_users: {
+          select: {
+            id: true,
+            name: true,
+            metadata: true,
+          },
+        },
+        painel_clients: { select: { id: true, company_name: true } },
+        conversation_state: { select: { state: true, updated_at: true } },
         messages: {
           take: 1,
           orderBy: { created_at: 'desc' },

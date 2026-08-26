@@ -22,10 +22,14 @@ export class WebhooksController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get('endpoints')
-  async listEndpoints(@CurrentUser() user: any) {
+  async listEndpoints(
+    @CurrentUser() user: any,
+    @Query('client_id') clientId?: string,
+  ) {
     const ctx = extractTenantContext(user);
     return this.prisma.webhook_endpoints.findMany({
       where: {
+        ...(clientId ? { client_id: clientId } : {}),
         painel_clients: {
           company_id: ctx.companyId,
         },
@@ -141,6 +145,7 @@ export class WebhooksController {
   @Get('deliveries')
   async listDeliveries(
     @CurrentUser() user: any,
+    @Query('client_id') clientId?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
@@ -151,6 +156,7 @@ export class WebhooksController {
     return this.prisma.webhook_deliveries.findMany({
       where: {
         webhook_endpoints: {
+          ...(clientId ? { client_id: clientId } : {}),
           painel_clients: {
             company_id: ctx.companyId,
           },
