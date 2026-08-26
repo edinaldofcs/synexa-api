@@ -97,8 +97,10 @@ export function resolveDynamicSystemVariable(
   if (key === 'proximo_dia_util') {
     const day = baseDate.getDay();
     let addDays = 1;
-    if (day === 5) addDays = 3; // sexta -> segunda
-    else if (day === 6) addDays = 2; // sábado -> segunda
+    if (day === 5)
+      addDays = 3; // sexta -> segunda
+    else if (day === 6)
+      addDays = 2; // sábado -> segunda
     else if (day === 0) addDays = 1; // domingo -> segunda
     const targetDate = new Date(baseDate.getTime());
     targetDate.setDate(targetDate.getDate() + addDays);
@@ -129,7 +131,9 @@ export function resolveDynamicSystemVariable(
   // 7. Dia da Semana Útil (dia_semana_util+1)
   const diaSemanaUtilMatch = key.match(/^dia_semana_util([+-]\d+)?$/);
   if (diaSemanaUtilMatch) {
-    const offset = diaSemanaUtilMatch[1] ? parseInt(diaSemanaUtilMatch[1], 10) : 0;
+    const offset = diaSemanaUtilMatch[1]
+      ? parseInt(diaSemanaUtilMatch[1], 10)
+      : 0;
     const targetDate = addBusinessDays(baseDate, offset);
     return DIAS_SEMANA[targetDate.getDay()];
   }
@@ -176,7 +180,11 @@ export function resolveDynamicSystemVariable(
   }
 
   // 14. Saudação por período do dia (saudacao_tempo, periodo_dia, turno_dia)
-  if (key === 'saudacao_tempo' || key === 'periodo_dia' || key === 'turno_dia') {
+  if (
+    key === 'saudacao_tempo' ||
+    key === 'periodo_dia' ||
+    key === 'turno_dia'
+  ) {
     const hour = baseDate.getHours();
     if (hour >= 5 && hour < 12) return 'Bom dia';
     if (hour >= 12 && hour < 18) return 'Boa tarde';

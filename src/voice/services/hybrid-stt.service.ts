@@ -180,7 +180,8 @@ export class HybridSttService {
 
       const isHallucination = this.isLikelyHallucination(text);
       const passesNoSpeech = noSpeech === undefined || noSpeech <= maxNoSpeech;
-      const passesLogprob = avgLogprob === undefined || avgLogprob >= minLogprob;
+      const passesLogprob =
+        avgLogprob === undefined || avgLogprob >= minLogprob;
 
       const isReliable =
         !isHallucination && passesNoSpeech && passesLogprob && text.length > 0;
@@ -199,7 +200,9 @@ export class HybridSttService {
         latencyMs,
       };
     } catch (error: any) {
-      this.logger.warn(`❌ [HybridStt] Falha na transcrição Groq: ${error.message}`);
+      this.logger.warn(
+        `❌ [HybridStt] Falha na transcrição Groq: ${error.message}`,
+      );
       return {
         text: '',
         isReliable: false,

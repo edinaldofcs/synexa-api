@@ -7,11 +7,13 @@ import {
   QUEUE_DISPATCHER,
   QUEUE_MEDIA,
   QUEUE_KNOWLEDGE,
+  QUEUE_WEBHOOK,
   JOB_NORMALIZE_INBOUND,
   JOB_PROCESS_WITH_AGENT,
   JOB_DISPATCH_RESPONSE,
   JOB_PROCESS_MEDIA,
   JOB_INGEST_KNOWLEDGE_DOCUMENT,
+  JOB_DELIVER_WEBHOOK,
 } from './queue.constants';
 
 export interface IngestJobData {
@@ -76,6 +78,10 @@ export interface KnowledgeJobData {
   document_id: string;
 }
 
+export interface WebhookJobData {
+  delivery_id: string;
+}
+
 @Injectable()
 export class QueueService {
   private readonly logger = new Logger(QueueService.name);
@@ -86,6 +92,7 @@ export class QueueService {
     @InjectQueue(QUEUE_DISPATCHER) private readonly dispatcherQueue: Queue,
     @InjectQueue(QUEUE_MEDIA) private readonly mediaQueue: Queue,
     @InjectQueue(QUEUE_KNOWLEDGE) private readonly knowledgeQueue: Queue,
+    @InjectQueue(QUEUE_WEBHOOK) private readonly webhookQueue: Queue,
   ) {}
 
   async addIngestionJob(data: IngestJobData): Promise<string> {
@@ -151,6 +158,22 @@ export class QueueService {
     this.logger.log(
       { job_id: job.id, document_id: data.document_id },
       'Knowledge job queued',
+    );
+    return String(job.id ?? '');
+  }
+
+  async addWebhookJob(data: WebhookJobData, delayMs = 0): Promise<string> {
+    // Single-shot job: retry bookkeeping lives in webhook_deliveries, so a new
+    // row (and therefore a new job) is enqueued for every attempt.
+    const job = await this.webhookQueue.add(JOB_DELIVER_WEBHOOK, data, {
+      delay: Math.max(0, Math.min(delayMs, 60_000)),
+      attempts: 1,
+      removeOnComplete: true,
+      removeOnFail: true,
+    });
+    this.logger.log(
+      { job_id: job.id, delivery_id: data.delivery_id, delay_ms: delayMs },
+      'Webhook delivery queued',
     );
     return String(job.id ?? '');
   }

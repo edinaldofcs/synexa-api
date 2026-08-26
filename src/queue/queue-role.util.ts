@@ -4,6 +4,7 @@ import {
   QUEUE_INGESTION,
   QUEUE_KNOWLEDGE,
   QUEUE_MEDIA,
+  QUEUE_WEBHOOK,
 } from './queue.constants';
 
 const SOURCE_QUEUE_BY_ROLE: Record<string, string | undefined> = {
@@ -12,6 +13,7 @@ const SOURCE_QUEUE_BY_ROLE: Record<string, string | undefined> = {
   'worker-dispatcher': QUEUE_DISPATCHER,
   'worker-media': QUEUE_MEDIA,
   'worker-knowledge': QUEUE_KNOWLEDGE,
+  'worker-webhook': QUEUE_WEBHOOK,
 };
 
 export function getSourceQueuesForRole(serviceRole: string): string[] {
@@ -23,6 +25,7 @@ export function getSourceQueuesForRole(serviceRole: string): string[] {
       QUEUE_DISPATCHER,
       QUEUE_MEDIA,
       QUEUE_KNOWLEDGE,
+      QUEUE_WEBHOOK,
     ];
   }
 

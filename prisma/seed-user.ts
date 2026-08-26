@@ -9,7 +9,7 @@ dotenv.config({ path: path.join(__dirname, '../.env.prod') });
 const prisma = new PrismaClient();
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  process.env.SUPABASE_SERVICE_ROLE_KEY || '',
 );
 
 async function main() {
@@ -36,14 +36,15 @@ async function main() {
       'SEED_ADMIN_PASSWORD is required and must be at least 12 characters',
     );
   }
-  
+
   console.log(`Criando usuário no Supabase Auth: ${email}...`);
-  const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { name: 'Administrador Synexa' },
-  });
+  const { data: authUser, error: authError } =
+    await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { name: 'Administrador Synexa' },
+    });
 
   let userId: string;
   if (authError) {
@@ -51,8 +52,11 @@ async function main() {
       console.log('Usuário já existe no Supabase Auth. Buscando ID...');
       const listResult = await supabase.auth.admin.listUsers();
       if (listResult.error) throw listResult.error;
-      const existingUser = listResult.data.users.find(u => u.email === email);
-      if (!existingUser) throw new Error('Usuário reportado como existente mas não encontrado na lista.');
+      const existingUser = listResult.data.users.find((u) => u.email === email);
+      if (!existingUser)
+        throw new Error(
+          'Usuário reportado como existente mas não encontrado na lista.',
+        );
       userId = existingUser.id;
     } else {
       throw authError;
@@ -73,7 +77,9 @@ async function main() {
       role: 'admin',
     },
   });
-  console.log(`Perfil de Usuário criado/encontrado no banco: ${userProfile.name}`);
+  console.log(
+    `Perfil de Usuário criado/encontrado no banco: ${userProfile.name}`,
+  );
   console.log('\n🎉 Seed finalizado com sucesso!');
   console.log(`Utilize os dados abaixo para fazer login no localhost:`);
   console.log(`📧 E-mail: ${email}`);
@@ -81,7 +87,7 @@ async function main() {
 }
 
 main()
-  .catch(err => {
+  .catch((err) => {
     console.error('Erro no seed do banco de dados:', err);
     process.exit(1);
   })

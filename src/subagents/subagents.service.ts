@@ -82,18 +82,28 @@ export class SubagentsService {
   async update(id: string, dto: UpdateSubagentDto, userId: string) {
     await this.findOne(id, userId);
 
-    const safeName = dto.name ? dto.name.trim().toLowerCase().replace(/\s+/g, '_') : undefined;
+    const safeName = dto.name
+      ? dto.name.trim().toLowerCase().replace(/\s+/g, '_')
+      : undefined;
 
     return this.prisma.painel_subagents.update({
       where: { id },
       data: {
         ...(safeName && { name: safeName }),
         ...(dto.description !== undefined && { description: dto.description }),
-        ...(dto.system_prompt !== undefined && { system_prompt: dto.system_prompt }),
-        ...(dto.llm_provider !== undefined && { llm_provider: dto.llm_provider }),
+        ...(dto.system_prompt !== undefined && {
+          system_prompt: dto.system_prompt,
+        }),
+        ...(dto.llm_provider !== undefined && {
+          llm_provider: dto.llm_provider,
+        }),
         ...(dto.model !== undefined && { model: dto.model }),
-        ...(dto.allowed_tool_names !== undefined && { allowed_tool_names: dto.allowed_tool_names }),
-        ...(dto.allowed_knowledge_base_ids !== undefined && { allowed_knowledge_base_ids: dto.allowed_knowledge_base_ids }),
+        ...(dto.allowed_tool_names !== undefined && {
+          allowed_tool_names: dto.allowed_tool_names,
+        }),
+        ...(dto.allowed_knowledge_base_ids !== undefined && {
+          allowed_knowledge_base_ids: dto.allowed_knowledge_base_ids,
+        }),
         ...(dto.temperature !== undefined && { temperature: dto.temperature }),
         ...(dto.is_active !== undefined && { is_active: dto.is_active }),
         updated_at: new Date(),

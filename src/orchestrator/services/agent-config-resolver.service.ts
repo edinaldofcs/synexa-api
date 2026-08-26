@@ -58,7 +58,9 @@ export class AgentConfigResolver {
     const agents = channel
       ? allAgents.filter((agent) => {
           const mode = agent.interaction_mode || 'both';
-          return mode === 'both' || mode === (channel === 'voice' ? 'voice' : 'text');
+          return (
+            mode === 'both' || mode === (channel === 'voice' ? 'voice' : 'text')
+          );
         })
       : allAgents;
 
@@ -111,7 +113,8 @@ export class AgentConfigResolver {
       (painelAgent?.transitions as Record<string, unknown>) || {};
     const ws = (transitions.web_search as Record<string, unknown>) || {};
 
-    let systemPrompt = painelAgent?.system_prompt || 'You are a helpful assistant.';
+    let systemPrompt =
+      painelAgent?.system_prompt || 'You are a helpful assistant.';
     if (
       painelAgent?.persona_blocks &&
       typeof painelAgent.persona_blocks === 'object' &&

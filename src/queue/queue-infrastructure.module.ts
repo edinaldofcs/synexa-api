@@ -8,6 +8,7 @@ import {
   QUEUE_AGENT,
   QUEUE_MEDIA,
   QUEUE_KNOWLEDGE,
+  QUEUE_WEBHOOK,
   QUEUE_DEAD_LETTER,
 } from './queue.constants';
 
@@ -38,6 +39,7 @@ import {
       { name: QUEUE_DISPATCHER },
       { name: QUEUE_MEDIA },
       { name: QUEUE_KNOWLEDGE },
+      { name: QUEUE_WEBHOOK },
       { name: QUEUE_DEAD_LETTER },
     ),
   ],

@@ -73,7 +73,11 @@ describe('ApisService', () => {
 
       const result = await service.create(
         clientId,
-        { name: 'Buscar CEP', method: 'GET', url: 'https://viacep.com.br' } as any,
+        {
+          name: 'Buscar CEP',
+          method: 'GET',
+          url: 'https://viacep.com.br',
+        } as any,
         userId,
       );
 

@@ -34,9 +34,9 @@ describe('SubagentsService', () => {
     it('rejeita listagem quando usuário não tem empresa', async () => {
       mockPrisma.users.findUnique.mockResolvedValue(null);
 
-      await expect(service.findAllByClient(clientId, userId)).rejects.toBeInstanceOf(
-        ForbiddenException,
-      );
+      await expect(
+        service.findAllByClient(clientId, userId),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('rejeita busca de subagente pertencente a outra empresa', async () => {

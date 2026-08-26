@@ -28,12 +28,15 @@ export class CallFlexAdapter implements ITelephonyAdapter {
   private callStartCallback: (() => void) | null = null;
   private callEndCallback: ((reason?: string) => void) | null = null;
   private errorCallback: ((err: Error) => void) | null = null;
-  private variableCallback: ((key: string, value: string) => void) | null = null;
+  private variableCallback: ((key: string, value: string) => void) | null =
+    null;
   private isClosed = false;
 
   constructor(config: CallFlexAdapterConfig) {
     this.metadata = config.metadata || {};
-    this.id = this.metadata.uniqueId || `cf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.id =
+      this.metadata.uniqueId ||
+      `cf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     this.audioFormat = config.audioFormat || 'g711_ulaw';
 
     if (config.wsSocket) {
@@ -84,9 +87,10 @@ export class CallFlexAdapter implements ITelephonyAdapter {
       pcm8k = rawAudio;
     }
 
-    const pcm16k = this.audioFormat === 'pcm_16k'
-      ? rawAudio
-      : AudioResampler.telephonyToGemini(pcm8k);
+    const pcm16k =
+      this.audioFormat === 'pcm_16k'
+        ? rawAudio
+        : AudioResampler.telephonyToGemini(pcm8k);
 
     this.audioCallback(pcm16k);
   }
@@ -114,7 +118,8 @@ export class CallFlexAdapter implements ITelephonyAdapter {
   }
 
   public sendAudio(pcm16: Buffer): void {
-    if (!this.ws || this.isClosed || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.isClosed || this.ws.readyState !== WebSocket.OPEN)
+      return;
 
     let outgoingBuffer: Buffer;
     if (this.audioFormat === 'g711_ulaw') {
@@ -132,7 +137,9 @@ export class CallFlexAdapter implements ITelephonyAdapter {
 
   public hangup(reason = 'normal_hangup'): void {
     if (this.isClosed) return;
-    this.logger.log(`📞 [CallFlexAdapter] Desconectando chamada CallFlex (${reason})`);
+    this.logger.log(
+      `📞 [CallFlexAdapter] Desconectando chamada CallFlex (${reason})`,
+    );
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'hangup', reason }));
     }
@@ -148,7 +155,9 @@ export class CallFlexAdapter implements ITelephonyAdapter {
       this.ws.send(JSON.stringify({ type: 'set_variable', key, value }));
     }
     this.variableCallback?.(key, value);
-    this.logger.log(`📞 [CallFlexAdapter] Variável atualizada: ${key}="${value}"`);
+    this.logger.log(
+      `📞 [CallFlexAdapter] Variável atualizada: ${key}="${value}"`,
+    );
   }
 
   public getVariable(key: string): string | undefined {

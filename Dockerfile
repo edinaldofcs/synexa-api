@@ -3,20 +3,20 @@ FROM node:22-alpine AS base
 RUN apk add --no-cache libc6-compat openssl
 WORKDIR /app
 COPY package*.json ./
-COPY prisma ./prisma/
 RUN npm ci
-RUN npx prisma generate
 
 # Stage 2: Development (Watch mode)
 FROM base AS development
 ENV NODE_ENV=development
 COPY . .
+RUN npx prisma generate
 EXPOSE 3000
 CMD ["npm", "run", "start:dev"]
 
 # Stage 3: Builder
 FROM base AS builder
 COPY . .
+RUN npx prisma generate
 RUN npm run build
 RUN npm prune --production
 

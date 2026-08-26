@@ -79,7 +79,8 @@ export class OrchestrationService {
       text,
       texto: text,
     };
-    const conversation = await this.conversationsService.getConversation(conversationId);
+    const conversation =
+      await this.conversationsService.getConversation(conversationId);
 
     const hadPendingAgent = Boolean(state.pending_agent_id);
 
@@ -221,20 +222,20 @@ export class OrchestrationService {
           clientId,
           state,
           requestId,
-           async (query, limit) => {
-             return this.ragSearchService.searchRag(
-               agentConfig,
-               query,
-               clientId,
-               limit,
-               agentRun.id,
-               conversationId,
-               messageId,
-               companyId,
-               requestId,
-              );
-            },
-          );
+          async (query, limit) => {
+            return this.ragSearchService.searchRag(
+              agentConfig,
+              query,
+              clientId,
+              limit,
+              agentRun.id,
+              conversationId,
+              messageId,
+              companyId,
+              requestId,
+            );
+          },
+        );
 
         if (result && typeof result === 'object') {
           const resultRecord = result as Record<string, unknown>;
@@ -259,7 +260,9 @@ export class OrchestrationService {
             this.logger.log(
               {
                 from: sanitize(agentConfig.agentId),
-                to: sanitize(activation.agent.service_step || activation.agent.id),
+                to: sanitize(
+                  activation.agent.service_step || activation.agent.id,
+                ),
                 mode: activation.mode,
               },
               'Transição de agente pós-retorno de API',
@@ -686,7 +689,8 @@ export class OrchestrationService {
 
       for (const agent of agents) {
         if (agent.id === currentAgentId) continue;
-        const conditions = agent.activation_conditions as ActivationConditionGroup | null;
+        const conditions =
+          agent.activation_conditions as ActivationConditionGroup | null;
         if (!conditions?.conditions?.length) continue;
         const evaluation = evaluateConditionsWithDetails(conditions, state);
         if (evaluation.matched) {
@@ -753,13 +757,18 @@ export class OrchestrationService {
     try {
       const conv = await this.prisma.conversations.findUnique({
         where: { id: conversationId },
-        include: { end_users: true, painel_clients: { select: { metadata: true } } },
+        include: {
+          end_users: true,
+          painel_clients: { select: { metadata: true } },
+        },
       });
 
       if (conv) {
-        const clientMeta = (conv.painel_clients?.metadata as Record<string, unknown>) || {};
+        const clientMeta =
+          (conv.painel_clients?.metadata as Record<string, unknown>) || {};
         const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
-        const freshState = await this.conversationsService.getState(conversationId);
+        const freshState =
+          await this.conversationsService.getState(conversationId);
 
         // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
         if (conv.client_id) {
@@ -877,7 +886,8 @@ export class OrchestrationService {
     });
 
     const metadata = (client?.metadata as Record<string, unknown>) || {};
-    const schema = (metadata.variable_schema as Record<string, unknown>) || null;
+    const schema =
+      (metadata.variable_schema as Record<string, unknown>) || null;
 
     let crmInstruction = '';
     if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {

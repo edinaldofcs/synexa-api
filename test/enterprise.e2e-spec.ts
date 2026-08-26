@@ -7,6 +7,8 @@ import { JwtService } from '@nestjs/jwt';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/common/prisma/prisma.service';
 import { RedisService } from '../src/common/redis/redis.service';
+import { ConversationsRepository } from '../src/conversations/repositories/conversations.repository';
+import { ConversationsService } from '../src/conversations/conversations.service';
 
 const ACCEPTED = 201;
 
@@ -25,6 +27,7 @@ describe('Enterprise Synexa (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let authToken: string;
+  let noTenantToken: string;
 
   const mockConn = {
     id: 'test-conn-1',
@@ -95,6 +98,11 @@ describe('Enterprise Synexa (e2e)', () => {
       email: 'admin@synexa.com.br',
       role: 'admin',
       company_id: 'test-company',
+    });
+    noTenantToken = jwtService.sign({
+      sub: '00000000-0000-0000-0000-000000000005',
+      email: 'admin@synexa.com.br',
+      role: 'admin',
     });
 
     await app.init();
@@ -508,15 +516,24 @@ describe('Enterprise Synexa (e2e)', () => {
   describe('5. Handoff', () => {
     it('#22 Handoff em conversa já manual → 400', async () => {
       const validConvId = '00000000-0000-0000-0000-000000000001';
-      jest.spyOn(prisma.conversations, 'findUnique').mockResolvedValue({
-        id: validConvId,
-        mode: 'manual',
-        status: 'active',
-      } as any);
+      jest
+        .spyOn(
+          app.get(ConversationsService) as any,
+          'assertConversationInTenant',
+        )
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(app.get(ConversationsRepository), 'findById')
+        .mockResolvedValue({
+          id: validConvId,
+          company_id: 'test-company',
+          mode: 'manual',
+          status: 'active',
+        } as any);
 
       const res = await request(app.getHttpServer())
         .post(`/api/conversations/${validConvId}/handoff`)
-        .set('Authorization', `Bearer ${authToken}`)
+        .set('Authorization', `Bearer ${noTenantToken}`)
         .send({ reason: 'test' })
         .expect(400);
 
@@ -525,15 +542,24 @@ describe('Enterprise Synexa (e2e)', () => {
 
     it('#24 Liberar conversa automática → 400', async () => {
       const validConvId = '00000000-0000-0000-0000-000000000001';
-      jest.spyOn(prisma.conversations, 'findUnique').mockResolvedValue({
-        id: validConvId,
-        mode: 'auto',
-        status: 'active',
-      } as any);
+      jest
+        .spyOn(
+          app.get(ConversationsService) as any,
+          'assertConversationInTenant',
+        )
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(app.get(ConversationsRepository), 'findById')
+        .mockResolvedValue({
+          id: validConvId,
+          company_id: 'test-company',
+          mode: 'auto',
+          status: 'active',
+        } as any);
 
       const res = await request(app.getHttpServer())
         .post(`/api/conversations/${validConvId}/release-handoff`)
-        .set('Authorization', `Bearer ${authToken}`)
+        .set('Authorization', `Bearer ${noTenantToken}`)
         .expect(400);
 
       expect(res.body.message).toMatch(/not in manual/i);
@@ -561,7 +587,7 @@ describe('Enterprise Synexa (e2e)', () => {
           model: 'gemini',
           started_at: new Date(),
         },
-      ]);
+      ] as any);
 
       const res = await request(app.getHttpServer())
         .get('/api/observability/latency?hours=24')

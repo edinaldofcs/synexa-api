@@ -88,17 +88,11 @@ describe('conditional-prompt.util', () => {
     it('should evaluate exists and not_exists', () => {
       const state = { nome: 'João', vazio: null, indefinido: undefined };
       expect(
-        evaluateConditionRule(
-          { variable: 'nome', operator: 'exists' },
-          state,
-        ),
+        evaluateConditionRule({ variable: 'nome', operator: 'exists' }, state),
       ).toBe(true);
 
       expect(
-        evaluateConditionRule(
-          { variable: 'vazio', operator: 'exists' },
-          state,
-        ),
+        evaluateConditionRule({ variable: 'vazio', operator: 'exists' }, state),
       ).toBe(false);
 
       expect(
@@ -127,7 +121,11 @@ describe('conditional-prompt.util', () => {
 
       expect(
         evaluateConditionRule(
-          { variable: 'status', operator: 'not_in', value: ['cancelado', 'bloqueado'] },
+          {
+            variable: 'status',
+            operator: 'not_in',
+            value: ['cancelado', 'bloqueado'],
+          },
           state,
         ),
       ).toBe(true);
@@ -142,7 +140,11 @@ describe('conditional-prompt.util', () => {
           {
             logic: 'AND',
             rules: [
-              { variable: 'tipo_cliente', operator: 'equals', value: 'premium' },
+              {
+                variable: 'tipo_cliente',
+                operator: 'equals',
+                value: 'premium',
+              },
               { variable: 'saldo', operator: 'gt', value: 0 },
             ],
           },
@@ -155,7 +157,11 @@ describe('conditional-prompt.util', () => {
           {
             logic: 'AND',
             rules: [
-              { variable: 'tipo_cliente', operator: 'equals', value: 'premium' },
+              {
+                variable: 'tipo_cliente',
+                operator: 'equals',
+                value: 'premium',
+              },
               { variable: 'saldo', operator: 'gt', value: 1000 },
             ],
           },
@@ -171,7 +177,11 @@ describe('conditional-prompt.util', () => {
           {
             logic: 'OR',
             rules: [
-              { variable: 'tipo_cliente', operator: 'equals', value: 'premium' },
+              {
+                variable: 'tipo_cliente',
+                operator: 'equals',
+                value: 'premium',
+              },
               { variable: 'saldo', operator: 'gt', value: 0 },
             ],
           },
@@ -239,19 +249,32 @@ describe('conditional-prompt.util', () => {
           type: 'conditional',
           condition: {
             logic: 'AND',
-            rules: [{ variable: 'plano', operator: 'equals', value: 'enterprise' }],
+            rules: [
+              { variable: 'plano', operator: 'equals', value: 'enterprise' },
+            ],
           },
-          then_blocks: [{ type: 'text', content: 'Atendimento Platinum 24/7.' }],
+          then_blocks: [
+            { type: 'text', content: 'Atendimento Platinum 24/7.' },
+          ],
           elseif_branches: [
             {
               condition: {
                 logic: 'AND',
-                rules: [{ variable: 'plano', operator: 'equals', value: 'pro' }],
+                rules: [
+                  { variable: 'plano', operator: 'equals', value: 'pro' },
+                ],
               },
-              then_blocks: [{ type: 'text', content: 'Atendimento Gold em horário comercial.' }],
+              then_blocks: [
+                {
+                  type: 'text',
+                  content: 'Atendimento Gold em horário comercial.',
+                },
+              ],
             },
           ],
-          else_blocks: [{ type: 'text', content: 'Atendimento Standard por email.' }],
+          else_blocks: [
+            { type: 'text', content: 'Atendimento Standard por email.' },
+          ],
         },
       ];
 
@@ -282,13 +305,21 @@ describe('conditional-prompt.util', () => {
               type: 'conditional',
               condition: {
                 logic: 'AND',
-                rules: [{ variable: 'role', operator: 'equals', value: 'admin' }],
+                rules: [
+                  { variable: 'role', operator: 'equals', value: 'admin' },
+                ],
               },
-              then_blocks: [{ type: 'text', content: 'Permissão de administrador total.' }],
-              else_blocks: [{ type: 'text', content: 'Acesso padrão de cliente.' }],
+              then_blocks: [
+                { type: 'text', content: 'Permissão de administrador total.' },
+              ],
+              else_blocks: [
+                { type: 'text', content: 'Acesso padrão de cliente.' },
+              ],
             },
           ],
-          else_blocks: [{ type: 'text', content: 'Solicite login ao usuário.' }],
+          else_blocks: [
+            { type: 'text', content: 'Solicite login ao usuário.' },
+          ],
         },
       ];
 
@@ -338,4 +369,3 @@ Aprovado VIP com saldo.
     });
   });
 });
-

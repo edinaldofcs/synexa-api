@@ -63,7 +63,9 @@ export class AudioGateSession {
     isGateOpen: boolean;
   } {
     if (!this.enabled || !dataBase64) {
-      const approxBytes = dataBase64 ? Math.floor((dataBase64.length * 3) / 4) : 0;
+      const approxBytes = dataBase64
+        ? Math.floor((dataBase64.length * 3) / 4)
+        : 0;
       this.stats.forwardedBytes += approxBytes;
       if (isAiSpeaking) {
         this.stats.forwardedAiSpeakingBytes += approxBytes;
@@ -167,7 +169,10 @@ export class AudioGateSession {
     const bytesPerMs = Math.round((this.sampleRate * 2) / 1000);
     const maxPreRollBytes = bytesPerMs * this.prerollMs;
 
-    while (this.preRollBytes > maxPreRollBytes && this.preRollQueue.length > 0) {
+    while (
+      this.preRollBytes > maxPreRollBytes &&
+      this.preRollQueue.length > 0
+    ) {
       const removed = this.preRollQueue.shift();
       if (removed) {
         this.preRollBytes -= Math.floor((removed.length * 3) / 4);
@@ -213,9 +218,13 @@ export class AudioGateSession {
   public getStats(): AudioGateStats {
     const bytesPerSec = this.sampleRate * 2; // PCM16 mono = sampleRate * 2 bytes/sec
     const forwardedSec =
-      bytesPerSec > 0 ? Number((this.stats.forwardedBytes / bytesPerSec).toFixed(2)) : 0;
+      bytesPerSec > 0
+        ? Number((this.stats.forwardedBytes / bytesPerSec).toFixed(2))
+        : 0;
     const suppressedSec =
-      bytesPerSec > 0 ? Number((this.stats.suppressedBytes / bytesPerSec).toFixed(2)) : 0;
+      bytesPerSec > 0
+        ? Number((this.stats.suppressedBytes / bytesPerSec).toFixed(2))
+        : 0;
 
     return {
       ...this.stats,

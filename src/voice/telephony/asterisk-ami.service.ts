@@ -13,12 +13,10 @@ export class AsteriskAmiService {
   constructor(private readonly configService: ConfigService) {
     this.host =
       this.configService.get<string>('ASTERISK_AMI_HOST') || 'dialer-asterisk';
-    this.port =
-      this.configService.get<number>('ASTERISK_AMI_PORT') || 5038;
+    this.port = this.configService.get<number>('ASTERISK_AMI_PORT') || 5038;
     this.user =
       this.configService.get<string>('ASTERISK_AMI_USER') || 'synexa_voice';
-    this.secret =
-      this.configService.get<string>('ASTERISK_AMI_SECRET') || '';
+    this.secret = this.configService.get<string>('ASTERISK_AMI_SECRET') || '';
   }
 
   public async hangupChannel(channel: string): Promise<boolean> {

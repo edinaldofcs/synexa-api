@@ -15,7 +15,9 @@ export class MockVoiceProvider {
     onTurnComplete: () => void;
     onError: (err: any) => void;
   }) {
-    this.logger.log('🎙️ [MockVoiceProvider] Iniciando sessão simulada de voz (createSession)');
+    this.logger.log(
+      '🎙️ [MockVoiceProvider] Iniciando sessão simulada de voz (createSession)',
+    );
     let audioDebounceTimer: NodeJS.Timeout | null = null;
     let receivedAudioChunks = 0;
 
@@ -35,7 +37,9 @@ export class MockVoiceProvider {
             if (receivedAudioChunks > 2) {
               callbacks.onUserTranscript('(Áudio captado pelo microfone)');
               setTimeout(() => {
-                callbacks.onAiTranscript('Recebi sua fala! (Modo Mock ativo: áudio simulado sem chamada de API externa).');
+                callbacks.onAiTranscript(
+                  'Recebi sua fala! (Modo Mock ativo: áudio simulado sem chamada de API externa).',
+                );
                 callbacks.onTurnComplete();
               }, 200);
             }

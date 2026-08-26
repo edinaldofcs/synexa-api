@@ -206,7 +206,11 @@ export class CrmDataTransformerService {
         this.getByPath(sessionState, 'agreement_id') ||
         this.getByPath(sessionState, 'id_acordo');
 
-      if (agreementId !== undefined && agreementId !== null && agreementId !== '') {
+      if (
+        agreementId !== undefined &&
+        agreementId !== null &&
+        agreementId !== ''
+      ) {
         record['promessa'] = true;
         record['id_acordo'] = String(agreementId);
         mappedKeys.add('agreementId');
@@ -315,7 +319,9 @@ export class CrmDataTransformerService {
     switch (type) {
       case 'boolean':
         if (typeof value === 'boolean') return value;
-        return value === true || value === 'true' || value === 1 || value === '1';
+        return (
+          value === true || value === 'true' || value === 1 || value === '1'
+        );
 
       case 'number': {
         const num = Number(value);
@@ -326,7 +332,11 @@ export class CrmDataTransformerService {
         const num =
           typeof value === 'number'
             ? value
-            : Number(String(value).replace(',', '.').replace(/[^\d.]/g, ''));
+            : Number(
+                String(value)
+                  .replace(',', '.')
+                  .replace(/[^\d.]/g, ''),
+              );
         return isNaN(num) ? value : Number(num.toFixed(2));
       }
 

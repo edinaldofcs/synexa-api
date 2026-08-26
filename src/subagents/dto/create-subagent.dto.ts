@@ -1,4 +1,10 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsNumber } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsBoolean,
+  IsNumber,
+} from 'class-validator';
 
 export class CreateSubagentDto {
   @IsString()

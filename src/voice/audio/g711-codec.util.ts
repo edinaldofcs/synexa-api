@@ -65,7 +65,11 @@ export class G711Codec {
       sample = sample + 0x84;
 
       let exponent = 7;
-      for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
+      for (
+        let expMask = 0x4000;
+        (sample & expMask) === 0 && exponent > 0;
+        expMask >>= 1
+      ) {
         exponent--;
       }
 

@@ -221,10 +221,7 @@ export class BillingService {
     };
   }
 
-  async getDailyUsage(
-    companyId: string,
-    days = 30,
-  ): Promise<DailyUsageItem[]> {
+  async getDailyUsage(companyId: string, days = 30): Promise<DailyUsageItem[]> {
     const since = new Date();
     since.setDate(since.getDate() - days);
 

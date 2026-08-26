@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { QueueService } from '../../queue/queue.service';
 import { WebhookCallbackPayload } from '../dto/webhook-payload.dto';
 import { validateWebhookUrl } from '../../common/utils/ssrf-guard';
 
@@ -20,6 +21,7 @@ export class WebhooksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly queueService: QueueService,
   ) {
     this.allowLocalInDev =
       configService.get<string>('ENVIRONMENT', 'development') === 'development';
@@ -140,14 +142,9 @@ export class WebhooksService {
       'Webhook delivery scheduled for retry',
     );
 
-    setTimeout(() => {
-      this.processRetry(retry.id).catch((err) => {
-        this.logger.error(
-          { delivery_id: retry.id, error: err },
-          'Retry processing failed',
-        );
-      });
-    }, delayMs);
+    // Persistent retry: the Bull queue (Redis) survives process restarts,
+    // unlike the previous in-memory setTimeout.
+    await this.queueService.addWebhookJob({ delivery_id: retry.id }, delayMs);
   }
 
   async processRetry(deliveryId: string): Promise<void> {

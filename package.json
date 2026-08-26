@@ -9,7 +9,7 @@
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
-    "start:dev": "npx --yes kill-port 3000 && nest start --watch",
+    "start:dev": "nest start --watch",
     "start:voice": "npx cross-env SERVICE_ROLE=voice nest start --watch",
     "start:worker": "npx cross-env SERVICE_ROLE=worker nest start --watch",
     "start:worker:ingestion": "npx cross-env SERVICE_ROLE=worker-ingestion nest start --watch",
@@ -32,7 +32,7 @@
     "db:reset": "tsx prisma/reset.ts",
     "db:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

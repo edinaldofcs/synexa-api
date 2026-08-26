@@ -581,7 +581,7 @@ condições de ativação configuradas no painel forem atendidas.`,
   console.log(`Entrada            | Valor`);
   console.log(`------------------|----------------------------------------`);
   console.log(`Login             | ${email}`);
-  console.log(`Senha             | ${password}`);
+  console.log(`Senha             | configurada via SEED_ADMIN_PASSWORD`);
   console.log(`company_id        | ${COMPANY_ID}`);
   console.log(`client_id         | ${CLIENT_ID}`);
   console.log(`agent_reception   | ${agentMain.id}`);
@@ -590,7 +590,7 @@ condições de ativação configuradas no painel forem atendidas.`,
   console.log(`agent_finance     | ${agentFinance.id}`);
   console.log(`channel_conn (api)| ${apiConn.id}`);
   console.log(`channel_conn (wa) | ${waConn.id}`);
-  console.log(`api_key (secret)  | test-secret-api-key`);
+  console.log(`api_key (secret)  | configurada para fixtures locais`);
   console.log(`end_user          | test-user-1`);
   console.log(`user_id (auth)    | ${userId}`);
 }

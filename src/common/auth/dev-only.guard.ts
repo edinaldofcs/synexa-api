@@ -11,7 +11,9 @@ export class DevOnlyGuard implements CanActivate {
   constructor(private readonly configService: ConfigService) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const environment = this.configService.get<string>('ENVIRONMENT');
+    // Explicit process configuration must win in tests and container runtimes.
+    const environment =
+      process.env.ENVIRONMENT || this.configService.get<string>('ENVIRONMENT');
     if (environment === 'development') {
       return true;
     }

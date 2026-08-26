@@ -52,15 +52,16 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
     private readonly inboundDataMapper: InboundDataMapperService,
   ) {
     this.port = this.configService.get<number>('FASTAGI_PORT') || 4573;
-    this.enabled =
-      this.configService.get<boolean>('FASTAGI_ENABLED') ?? false;
+    this.enabled = this.configService.get<boolean>('FASTAGI_ENABLED') ?? false;
   }
 
   public onModuleInit(): void {
     if (this.enabled) {
       this.start();
     } else {
-      this.logger.log('ℹ️ [FastAGI] Servidor FastAGI desativado (FASTAGI_ENABLED=false)');
+      this.logger.log(
+        'ℹ️ [FastAGI] Servidor FastAGI desativado (FASTAGI_ENABLED=false)',
+      );
     }
   }
 
@@ -76,7 +77,9 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.server.listen(this.port, '0.0.0.0', () => {
-      this.logger.log(`📞 [FastAGI] Servidor TCP escutando em 0.0.0.0:${this.port}`);
+      this.logger.log(
+        `📞 [FastAGI] Servidor TCP escutando em 0.0.0.0:${this.port}`,
+      );
     });
   }
 
@@ -101,7 +104,9 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
       if (trimmed === '') {
         rl.removeAllListeners('line');
         this.processAgiCall(socket, agiEnv).catch((err) => {
-          this.logger.error(`❌ [FastAGI] Erro ao processar chamada: ${err.message}`);
+          this.logger.error(
+            `❌ [FastAGI] Erro ao processar chamada: ${err.message}`,
+          );
           socket.end();
         });
       } else {
@@ -135,7 +140,8 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
     );
 
     // 1. Busca configurações da empresa/cliente e agente no banco
-    const targetClientId = (customVariables.SYNEXA_CLIENT_ID as string) || undefined;
+    const targetClientId =
+      (customVariables.SYNEXA_CLIENT_ID as string) || undefined;
     const client = targetClientId
       ? await this.prisma.painel_clients.findUnique({
           where: { id: targetClientId },
@@ -149,12 +155,15 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
     const clientId = client?.id;
 
     // Busca agente configurado ou step especificado no dialplan
-    const targetAgentStep = (customVariables.SYNEXA_AGENT_STEP as string) || undefined;
+    const targetAgentStep =
+      (customVariables.SYNEXA_AGENT_STEP as string) || undefined;
     const selectedAgent = clientId
       ? await this.prisma.painel_agents.findFirst({
           where: {
             client_id: clientId,
-            ...(targetAgentStep ? { service_step: targetAgentStep } : { is_active: true }),
+            ...(targetAgentStep
+              ? { service_step: targetAgentStep }
+              : { is_active: true }),
           },
         })
       : null;
@@ -171,7 +180,8 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
     // 2. Mapeia e Constrói o Prompt interpolando variáveis do Asterisk / Discador
     const clientMeta = (client?.metadata as Record<string, unknown>) || {};
     const inboundConfig =
-      (clientMeta.inbound_variable_mapping as InboundMappingConfig) || undefined;
+      (clientMeta.inbound_variable_mapping as InboundMappingConfig) ||
+      undefined;
 
     const rawInbound = {
       ...customVariables,
@@ -226,7 +236,9 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
           },
         });
       } catch (err: any) {
-        this.logger.warn(`Erro ao persistir conversation_state FastAGI: ${err.message}`);
+        this.logger.warn(
+          `Erro ao persistir conversation_state FastAGI: ${err.message}`,
+        );
       }
     }
 
@@ -250,8 +262,10 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
     // 5. Cria Sessão RTP UDP
     const rtpSession = this.rtpGatewayService.createSession({
       onPcmAudioIn: (pcm16Base64) => {
-        const { forwardChunks, shouldSendStreamEnd } =
-          gateSession.processChunk(pcm16Base64, isAiSpeaking);
+        const { forwardChunks, shouldSendStreamEnd } = gateSession.processChunk(
+          pcm16Base64,
+          isAiSpeaking,
+        );
 
         for (const chunk of forwardChunks) {
           liveProvider.sendAudio(chunk);
@@ -297,7 +311,9 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
         onToolCall: async (calls) => {
           for (const call of calls) {
             if (call.name === 'finalizar_chamada') {
-              this.logger.log('📞 [FastAGI] IA solicitou encerramento da chamada');
+              this.logger.log(
+                '📞 [FastAGI] IA solicitou encerramento da chamada',
+              );
               await this.amiService.hangupChannel(channel);
             } else if (call.name === 'set_variable') {
               const varName = call.args?.name;
@@ -322,7 +338,10 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
       rtpSession.close();
       liveProvider.close();
 
-      const durationSec = Math.max(1, Math.round((Date.now() - startTime) / 1000));
+      const durationSec = Math.max(
+        1,
+        Math.round((Date.now() - startTime) / 1000),
+      );
       const stats = gateSession.getStats();
 
       if (conversationId && companyId) {
@@ -363,7 +382,9 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
             },
           });
         } catch (err: any) {
-          this.logger.warn(`Erro ao persistir telemetria FastAGI: ${err.message}`);
+          this.logger.warn(
+            `Erro ao persistir telemetria FastAGI: ${err.message}`,
+          );
         }
       }
     });

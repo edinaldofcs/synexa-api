@@ -10,7 +10,9 @@ import {
 export class PublishVersionDto {
   @IsNotEmpty({ message: 'A nota de versão é obrigatória' })
   @IsString()
-  @MaxLength(500, { message: 'A nota de versão deve ter no máximo 500 caracteres' })
+  @MaxLength(500, {
+    message: 'A nota de versão deve ter no máximo 500 caracteres',
+  })
   description!: string;
 }
 

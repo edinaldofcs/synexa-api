@@ -130,6 +130,17 @@ describe('validateEnv', () => {
   });
 
   describe('environment-specific checks', () => {
+    it('should reject Supabase auth on a development worker', () => {
+      const config = {
+        ...baseConfig,
+        SERVICE_ROLE: 'worker-agent',
+        AUTH_PROVIDER: 'supabase',
+      };
+      expect(() => validateEnv(config)).toThrow(
+        'Worker development runtime must use AUTH_PROVIDER=local',
+      );
+    });
+
     it('should throw in production when JWT_SECRET is less than 32 chars', () => {
       const config = {
         ...baseConfig,

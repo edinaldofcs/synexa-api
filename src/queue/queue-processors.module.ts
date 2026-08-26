@@ -15,6 +15,7 @@ import { OrchestratorModule } from '../orchestrator/orchestrator.module';
 import { WebSearchModule } from '../agents/web-search/web-search.module';
 import { MediaModule } from '../media/media.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 import { QueueInfrastructureModule } from './queue-infrastructure.module';
 import { IngestionProcessor } from './processors/ingestion.processor';
 import { DispatcherProcessor } from './processors/dispatcher.processor';
@@ -22,12 +23,14 @@ import { AgentProcessor } from './processors/agent.processor';
 import { MediaProcessor } from './processors/media.processor';
 import { KnowledgeProcessor } from './processors/knowledge.processor';
 import { DeadLetterProcessor } from './processors/dead-letter.processor';
+import { WebhookProcessor } from './processors/webhook.processor';
 import {
   QUEUE_INGESTION,
   QUEUE_DISPATCHER,
   QUEUE_AGENT,
   QUEUE_MEDIA,
   QUEUE_KNOWLEDGE,
+  QUEUE_WEBHOOK,
   QUEUE_DEAD_LETTER,
   JOB_DEAD_LETTER_STORE,
 } from './queue.constants';
@@ -44,6 +47,7 @@ export class QueueProcessorsModule implements OnModuleInit {
     @InjectQueue(QUEUE_DISPATCHER) private readonly dispatcherQueue: Queue,
     @InjectQueue(QUEUE_MEDIA) private readonly mediaQueue: Queue,
     @InjectQueue(QUEUE_KNOWLEDGE) private readonly knowledgeQueue: Queue,
+    @InjectQueue(QUEUE_WEBHOOK) private readonly webhookQueue: Queue,
     @InjectQueue(QUEUE_DEAD_LETTER) private readonly deadLetterQueue: Queue,
   ) {}
 
@@ -60,6 +64,7 @@ export class QueueProcessorsModule implements OnModuleInit {
         AgentProcessor,
         MediaProcessor,
         KnowledgeProcessor,
+        WebhookProcessor,
         DeadLetterProcessor,
       );
     } else {
@@ -68,6 +73,7 @@ export class QueueProcessorsModule implements OnModuleInit {
       if (role === 'worker-dispatcher') providers.push(DispatcherProcessor);
       if (role === 'worker-media') providers.push(MediaProcessor);
       if (role === 'worker-knowledge') providers.push(KnowledgeProcessor);
+      if (role === 'worker-webhook') providers.push(WebhookProcessor);
       if (role === 'worker-dlq') providers.push(DeadLetterProcessor);
     }
 
@@ -91,6 +97,9 @@ export class QueueProcessorsModule implements OnModuleInit {
     if (sourceQueues.has(QUEUE_KNOWLEDGE)) {
       imports.push(KnowledgeModule);
     }
+    if (sourceQueues.has(QUEUE_WEBHOOK)) {
+      imports.push(WebhooksModule);
+    }
 
     return {
       module: QueueProcessorsModule,
@@ -107,6 +116,7 @@ export class QueueProcessorsModule implements OnModuleInit {
       { name: QUEUE_DISPATCHER, queue: this.dispatcherQueue },
       { name: QUEUE_MEDIA, queue: this.mediaQueue },
       { name: QUEUE_KNOWLEDGE, queue: this.knowledgeQueue },
+      { name: QUEUE_WEBHOOK, queue: this.webhookQueue },
     ].filter(({ name }) =>
       getSourceQueuesForRole(process.env.SERVICE_ROLE || 'worker').includes(
         name,

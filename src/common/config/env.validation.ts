@@ -31,6 +31,7 @@ export enum ServiceRole {
   WORKER_DISPATCHER = 'worker-dispatcher',
   WORKER_MEDIA = 'worker-media',
   WORKER_KNOWLEDGE = 'worker-knowledge',
+  WORKER_WEBHOOK = 'worker-webhook',
   WORKER_DLQ = 'worker-dlq',
 }
 
@@ -320,6 +321,18 @@ export function validateEnv(
       })
       .join('\n');
     throw new Error(`Environment validation failed:\n${messages}`);
+  }
+
+  const serviceRole = validatedConfig.SERVICE_ROLE || ServiceRole.API;
+  const isWorker =
+    serviceRole === ServiceRole.WORKER || serviceRole.startsWith('worker-');
+
+  if (isWorker && validatedConfig.ENVIRONMENT === Environment.DEVELOPMENT) {
+    if (validatedConfig.AUTH_PROVIDER !== AuthProvider.LOCAL) {
+      throw new Error(
+        'Worker development runtime must use AUTH_PROVIDER=local',
+      );
+    }
   }
 
   if (

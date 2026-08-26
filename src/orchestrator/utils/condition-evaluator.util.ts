@@ -46,7 +46,10 @@ const MESSAGE_ALIASES = new Set([
   'user_transcript',
 ]);
 
-function resolveValue(state: Record<string, unknown>, variable: string): unknown {
+function resolveValue(
+  state: Record<string, unknown>,
+  variable: string,
+): unknown {
   const direct = getNestedValue(state, variable);
   if (direct !== undefined || !MESSAGE_ALIASES.has(variable)) return direct;
 
@@ -60,7 +63,8 @@ function resolveValue(state: Record<string, unknown>, variable: string): unknown
 
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
-  if (typeof value === 'number' && (value === 0 || value === 1)) return value === 1;
+  if (typeof value === 'number' && (value === 0 || value === 1))
+    return value === 1;
   if (typeof value !== 'string') return undefined;
 
   const normalized = value.trim().toLowerCase();
@@ -85,7 +89,9 @@ function valuesEqual(actual: unknown, expected: unknown): boolean {
   }
 
   if (typeof actual === 'string' && typeof expected === 'string') {
-    return actual.localeCompare(expected, undefined, { sensitivity: 'accent' }) === 0;
+    return (
+      actual.localeCompare(expected, undefined, { sensitivity: 'accent' }) === 0
+    );
   }
 
   return actual === expected;
@@ -194,13 +200,11 @@ export interface ConditionEvaluationResult {
   details: ConditionEvaluationDetail[];
 }
 
-export function describeEvaluation(
-  result: ConditionEvaluationResult,
-): string {
+export function describeEvaluation(result: ConditionEvaluationResult): string {
   const parts = result.details.map((detail) => {
     const actualLabel = detail.missing
       ? 'ausente'
-      : JSON.stringify(detail.actual) ?? String(detail.actual);
+      : (JSON.stringify(detail.actual) ?? String(detail.actual));
     return `${detail.variable} ${detail.operator} ${JSON.stringify(detail.expected)} → ${actualLabel} [${detail.passed ? 'ok' : 'falhou'}]`;
   });
   return `(lógica ${result.logic}) ${parts.join(' ; ')}`;

@@ -14,15 +14,22 @@ export interface PersonaBlocks {
   variaveis_customizadas?: Record<string, string> | string;
 }
 
-const STRUCTURED_SECTIONS: Array<{ key: keyof PersonaBlocks; label: string }> = [
-  { key: 'identidade_persona', label: 'Identidade da Persona' },
-  { key: 'diretrizes_linguagem', label: 'Diretrizes de Linguagem & Sotaque' },
-  { key: 'dados_sistema', label: 'Dados do Sistema / Catálogo' },
-  { key: 'ofertas_disponiveis', label: 'Ofertas Disponíveis / Condições Comerciais' },
-  { key: 'fluxo_conversa', label: 'Fluxo de Conversa (Roteiro Turno a Turno)' },
-  { key: 'regras_output', label: 'Regras de Output & Formatação' },
-  { key: 'guardrails', label: 'Guardrails & Regras de Segurança' },
-];
+const STRUCTURED_SECTIONS: Array<{ key: keyof PersonaBlocks; label: string }> =
+  [
+    { key: 'identidade_persona', label: 'Identidade da Persona' },
+    { key: 'diretrizes_linguagem', label: 'Diretrizes de Linguagem & Sotaque' },
+    { key: 'dados_sistema', label: 'Dados do Sistema / Catálogo' },
+    {
+      key: 'ofertas_disponiveis',
+      label: 'Ofertas Disponíveis / Condições Comerciais',
+    },
+    {
+      key: 'fluxo_conversa',
+      label: 'Fluxo de Conversa (Roteiro Turno a Turno)',
+    },
+    { key: 'regras_output', label: 'Regras de Output & Formatação' },
+    { key: 'guardrails', label: 'Guardrails & Regras de Segurança' },
+  ];
 
 export function buildAgentPromptFromBlocks(
   agent: {
@@ -34,18 +41,16 @@ export function buildAgentPromptFromBlocks(
   const blocks = agent.persona_blocks as PersonaBlocks | null | undefined;
 
   if (blocks && typeof blocks === 'object') {
-    const parts = STRUCTURED_SECTIONS
-      .map(({ key, label }) => {
-        const content = blocks[key];
-        const value =
-          typeof content === 'string'
-            ? content.trim()
-            : Array.isArray(content)
-              ? resolveConditionalBlocks(content, state || {}).trim()
-              : '';
-        return value ? `## ${label}\n${value}` : '';
-      })
-      .filter((p) => p.length > 0);
+    const parts = STRUCTURED_SECTIONS.map(({ key, label }) => {
+      const content = blocks[key];
+      const value =
+        typeof content === 'string'
+          ? content.trim()
+          : Array.isArray(content)
+            ? resolveConditionalBlocks(content, state || {}).trim()
+            : '';
+      return value ? `## ${label}\n${value}` : '';
+    }).filter((p) => p.length > 0);
 
     if (parts.length > 0) {
       let prompt = parts.join('\n\n');
@@ -66,7 +71,12 @@ export function buildAgentPromptFromBlocks(
 
       if (state) {
         for (const [tag, field] of Object.entries(customVars)) {
-          if (tag && field && state[field] !== undefined && state[field] !== null) {
+          if (
+            tag &&
+            field &&
+            state[field] !== undefined &&
+            state[field] !== null
+          ) {
             const val =
               typeof state[field] === 'object'
                 ? JSON.stringify(state[field])

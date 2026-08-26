@@ -62,17 +62,25 @@ describe('HybridSttService', () => {
 
   describe('isLikelyHallucination', () => {
     it('should identify hallucination patterns on silence', () => {
-      expect(service.isLikelyHallucination('Obrigado por assistir!')).toBe(true);
-      expect(service.isLikelyHallucination('Legendas pela comunidade')).toBe(true);
+      expect(service.isLikelyHallucination('Obrigado por assistir!')).toBe(
+        true,
+      );
+      expect(service.isLikelyHallucination('Legendas pela comunidade')).toBe(
+        true,
+      );
       expect(service.isLikelyHallucination('Inscreva-se no canal')).toBe(true);
       expect(service.isLikelyHallucination('   ')).toBe(true);
       expect(service.isLikelyHallucination('...')).toBe(true);
     });
 
     it('should allow legitimate user speech', () => {
-      expect(service.isLikelyHallucination('Olá, gostaria de pagar meu boleto')).toBe(false);
+      expect(
+        service.isLikelyHallucination('Olá, gostaria de pagar meu boleto'),
+      ).toBe(false);
       expect(service.isLikelyHallucination('Sim, confirmo')).toBe(false);
-      expect(service.isLikelyHallucination('Meu CPF é 12345678900')).toBe(false);
+      expect(service.isLikelyHallucination('Meu CPF é 12345678900')).toBe(
+        false,
+      );
     });
   });
 });

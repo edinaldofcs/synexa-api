@@ -1,6 +1,7 @@
 # Synexa API
 
-Backend NestJS do painel Synexa. Suporta dois modos de execução controlados pela variável `ENVIRONMENT`:
+Backend NestJS do painel Synexa. O runtime pode executar API, Voice Gateway ou
+workers a partir da mesma imagem, controlado por `SERVICE_ROLE`.
 
 | Modo | `ENVIRONMENT` | Auth | Storage | Banco |
 |---|---|---|---|---|
@@ -12,24 +13,26 @@ Backend NestJS do painel Synexa. Suporta dois modos de execução controlados pe
 ### Pré-requisitos
 
 - Docker Desktop
-- Node.js 20+
+- Node.js 22+
 
 ### 1. Subir dependências
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d db redis
+cd ..
+docker compose up -d db redis
+cd synexa-api
 ```
 
 ### 2. Instalar pacotes
 
 ```bash
-npm install
+npm ci
 ```
 
-### 3. Sincronizar schema com o banco
+### 3. Aplicar migrations
 
 ```bash
-npx prisma db push --accept-data-loss
+npm run db:migrate
 ```
 
 ### 4. Gerar Prisma Client
@@ -51,6 +54,17 @@ npm run start:dev
 ```
 
 A API roda em `http://localhost:3000/api`.
+
+Para executar os demais runtimes no host:
+
+```bash
+npm run start:voice
+npm run start:worker
+npm run start:worker:agent
+```
+
+O comando `start:worker` executa todos os processors. Os comandos
+`start:worker:*` executam somente a fila correspondente.
 
 ### Credenciais de desenvolvimento
 
@@ -85,3 +99,6 @@ npm run test
 # e2e tests
 npm run test:e2e
 ```
+
+Os testes E2E são executados serialmente para evitar concorrência entre
+instâncias NestJS que compartilham o banco local.

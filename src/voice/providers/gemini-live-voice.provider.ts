@@ -53,12 +53,15 @@ export class GeminiLiveVoiceProvider {
 
   public connect(options: GeminiLiveConnectOptions): void {
     this.options = options;
-    const model = options.model === DEFAULT_LIVE_MODEL ? options.model : DEFAULT_LIVE_MODEL;
+    const model =
+      options.model === DEFAULT_LIVE_MODEL ? options.model : DEFAULT_LIVE_MODEL;
     const voice = options.voiceName || 'Kore';
     const handshakeTimeout = options.handshakeTimeoutMs ?? 15000;
 
     if (!options.apiKey) {
-      const err = new Error('GEMINI_API_KEY não informada para o Voice Provider');
+      const err = new Error(
+        'GEMINI_API_KEY não informada para o Voice Provider',
+      );
       this.logger.error(err.message);
       options.onError?.(err);
       options.onClose?.();
@@ -77,7 +80,9 @@ export class GeminiLiveVoiceProvider {
         handshakeTimeout,
       });
     } catch (e: any) {
-      this.logger.error(`❌ [GeminiLive] Falha ao instanciar WebSocket: ${e.message}`);
+      this.logger.error(
+        `❌ [GeminiLive] Falha ao instanciar WebSocket: ${e.message}`,
+      );
       options.onError?.(e);
       options.onClose?.();
       return;
@@ -129,7 +134,9 @@ export class GeminiLiveVoiceProvider {
         const message = JSON.parse(raw.toString());
         this.handleMessage(message);
       } catch (err: any) {
-        this.logger.warn(`[GeminiLive] Erro ao processar mensagem recebida: ${err.message}`);
+        this.logger.warn(
+          `[GeminiLive] Erro ao processar mensagem recebida: ${err.message}`,
+        );
       }
     });
 
@@ -140,7 +147,9 @@ export class GeminiLiveVoiceProvider {
 
     this.ws.on('close', (code: number, reason: Buffer) => {
       this.isReady = false;
-      this.logger.log(`🔴 [GeminiLive] Conexão encerrada (${code}): ${reason.toString()}`);
+      this.logger.log(
+        `🔴 [GeminiLive] Conexão encerrada (${code}): ${reason.toString()}`,
+      );
       options.onClose?.();
     });
   }
@@ -239,9 +248,16 @@ export class GeminiLiveVoiceProvider {
   }
 
   public sendToolResponse(
-    functionResponses: { name: string; id: string; response: Record<string, any> }[],
+    functionResponses: {
+      name: string;
+      id: string;
+      response: Record<string, any>;
+    }[],
   ): void {
-    if (this.ws?.readyState === WebSocket.OPEN && functionResponses?.length > 0) {
+    if (
+      this.ws?.readyState === WebSocket.OPEN &&
+      functionResponses?.length > 0
+    ) {
       const payload = {
         toolResponse: {
           functionResponses,

@@ -72,7 +72,9 @@ export class ModelPricingService {
   constructor(private readonly configService?: ConfigService) {}
 
   getMarkupPercent(): number {
-    return this.configService?.get<number>('BILLING_AI_MARKUP_PERCENT', 25) ?? 25;
+    return (
+      this.configService?.get<number>('BILLING_AI_MARKUP_PERCENT', 25) ?? 25
+    );
   }
 
   getExchangeRate(): number {
@@ -129,10 +131,7 @@ export class ModelPricingService {
     return Number((durationCost + tokenCost).toFixed(6));
   }
 
-  calculateBillable(
-    rawCostUsd: number,
-    isByok = false,
-  ): BillableCalculation {
+  calculateBillable(rawCostUsd: number, isByok = false): BillableCalculation {
     const markupPercent = isByok ? 0 : this.getMarkupPercent();
     const exchangeRate = this.getExchangeRate();
     const multiplier = 1 + markupPercent / 100;

@@ -1,12 +1,30 @@
 import { Injectable, OnModuleDestroy, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import Redis from 'ioredis';
+
+const RELEASE_LOCK_SCRIPT = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+else
+  return 0
+end
+`;
+
+const RENEW_LOCK_SCRIPT = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("pexpire", KEYS[1], ARGV[2])
+else
+  return 0
+end
+`;
 
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private client: Redis;
   private readonly sessionTtl = 60 * 60 * 24;
+  private readonly lockTokens = new Map<string, string>();
 
   constructor(private readonly configService: ConfigService) {
     const redisUrl = this.configService.get<string>(
@@ -76,18 +94,48 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async acquireLock(key: string, ttlSeconds: number = 30): Promise<boolean> {
+    const token = randomUUID();
     const result = await this.client.set(
       key,
-      'locked',
+      token,
       'PX',
       ttlSeconds * 1000,
       'NX',
     );
-    return result === 'OK';
+    if (result === 'OK') {
+      this.lockTokens.set(key, token);
+      return true;
+    }
+    return false;
   }
 
-  async releaseLock(key: string): Promise<void> {
-    await this.client.del(key);
+  async releaseLock(key: string): Promise<boolean> {
+    const token = this.lockTokens.get(key);
+    if (!token) {
+      // Never released a lock we do not own.
+      return false;
+    }
+    try {
+      const result = await this.client.eval(RELEASE_LOCK_SCRIPT, 1, key, token);
+      return result === 1;
+    } finally {
+      this.lockTokens.delete(key);
+    }
+  }
+
+  async renewLock(key: string, ttlSeconds: number = 30): Promise<boolean> {
+    const token = this.lockTokens.get(key);
+    if (!token) {
+      return false;
+    }
+    const result = await this.client.eval(
+      RENEW_LOCK_SCRIPT,
+      1,
+      key,
+      token,
+      ttlSeconds * 1000,
+    );
+    return result === 1;
   }
 
   async rpush(key: string, value: unknown): Promise<void> {

@@ -26,10 +26,7 @@ export class SubagentsController {
   }
 
   @Get(':id')
-  findOne(
-    @Param('id') id: string,
-    @CurrentUser() user: { id: string },
-  ) {
+  findOne(@Param('id') id: string, @CurrentUser() user: { id: string }) {
     return this.subagentsService.findOne(id, user.id);
   }
 
@@ -52,10 +49,7 @@ export class SubagentsController {
   }
 
   @Delete(':id')
-  remove(
-    @Param('id') id: string,
-    @CurrentUser() user: { id: string },
-  ) {
+  remove(@Param('id') id: string, @CurrentUser() user: { id: string }) {
     return this.subagentsService.remove(id, user.id);
   }
 }

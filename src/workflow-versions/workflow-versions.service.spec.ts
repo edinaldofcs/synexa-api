@@ -1,4 +1,8 @@
-import { NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import {
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
 import { WorkflowVersionsService } from './workflow-versions.service';
 
 describe('WorkflowVersionsService', () => {
@@ -30,7 +34,10 @@ describe('WorkflowVersionsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new WorkflowVersionsService(mockPrisma as never, metadata as never);
+    service = new WorkflowVersionsService(
+      mockPrisma as never,
+      metadata as never,
+    );
 
     mockPrisma.users.findUnique.mockResolvedValue({ company_id: companyId });
     mockPrisma.painel_clients.findUnique.mockResolvedValue({
@@ -125,13 +132,28 @@ describe('WorkflowVersionsService', () => {
   describe('Snapshots & Diffing', () => {
     it('monta o snapshot completo das 4 entidades do cliente', async () => {
       mockPrisma.painel_agents.findMany.mockResolvedValue([
-        { id: 'ag-1', model: 'gpt-4o', service_step: 'reception', execution_order: 1 },
+        {
+          id: 'ag-1',
+          model: 'gpt-4o',
+          service_step: 'reception',
+          execution_order: 1,
+        },
       ]);
       mockPrisma.painel_subagents.findMany.mockResolvedValue([
-        { id: 'sub-1', name: 'analista', description: 'desc', system_prompt: 'prompt' },
+        {
+          id: 'sub-1',
+          name: 'analista',
+          description: 'desc',
+          system_prompt: 'prompt',
+        },
       ]);
       mockPrisma.painel_apis.findMany.mockResolvedValue([
-        { id: 'api-1', name: 'consulta', method: 'GET', url: 'https://api.com' },
+        {
+          id: 'api-1',
+          name: 'consulta',
+          method: 'GET',
+          url: 'https://api.com',
+        },
       ]);
       mockPrisma.painel_intentions.findMany.mockResolvedValue([
         { id: 'int-1', code: 'saudacao', description: 'Oi' },
@@ -153,7 +175,14 @@ describe('WorkflowVersionsService', () => {
           id: 'v1',
           client_id: clientId,
           snapshot: {
-            agents: [{ id: 'ag-1', model: 'gpt-4o-mini', service_step: 'reception', execution_order: 1 }],
+            agents: [
+              {
+                id: 'ag-1',
+                model: 'gpt-4o-mini',
+                service_step: 'reception',
+                execution_order: 1,
+              },
+            ],
             subagents: [],
             apis: [],
             intentions: [],
@@ -163,8 +192,17 @@ describe('WorkflowVersionsService', () => {
           id: 'v2',
           client_id: clientId,
           snapshot: {
-            agents: [{ id: 'ag-1', model: 'gpt-4o', service_step: 'reception', execution_order: 1 }],
-            subagents: [{ id: 'sub-1', name: 'suporte', system_prompt: 'Prompt' }],
+            agents: [
+              {
+                id: 'ag-1',
+                model: 'gpt-4o',
+                service_step: 'reception',
+                execution_order: 1,
+              },
+            ],
+            subagents: [
+              { id: 'sub-1', name: 'suporte', system_prompt: 'Prompt' },
+            ],
             apis: [],
             intentions: [],
           },
@@ -187,9 +225,9 @@ describe('WorkflowVersionsService', () => {
       });
       mockPrisma.workflow_versions.count.mockResolvedValue(1);
 
-      await expect(service.delete(clientId, 'pub-only', userId)).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
+      await expect(
+        service.delete(clientId, 'pub-only', userId),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('permite a exclusão de rascunhos e versões arquivadas', async () => {
@@ -198,7 +236,9 @@ describe('WorkflowVersionsService', () => {
         client_id: clientId,
         status: 'draft',
       });
-      mockPrisma.workflow_versions.delete.mockResolvedValue({ id: 'draft-del' });
+      mockPrisma.workflow_versions.delete.mockResolvedValue({
+        id: 'draft-del',
+      });
 
       const res = await service.delete(clientId, 'draft-del', userId);
 

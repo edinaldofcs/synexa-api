@@ -69,7 +69,9 @@ describe('BillingService', () => {
   });
 
   it('should summarize monthly usage correctly with tokens and voice minutes', async () => {
-    const summary = await service.getUsageSummary('00000000-0000-0000-0000-000000000001');
+    const summary = await service.getUsageSummary(
+      '00000000-0000-0000-0000-000000000001',
+    );
 
     expect(summary.companyId).toBe('00000000-0000-0000-0000-000000000001');
     expect(summary.plan).toBe('scale');
@@ -84,7 +86,10 @@ describe('BillingService', () => {
   });
 
   it('should aggregate daily usage data series', async () => {
-    const daily = await service.getDailyUsage('00000000-0000-0000-0000-000000000001', 30);
+    const daily = await service.getDailyUsage(
+      '00000000-0000-0000-0000-000000000001',
+      30,
+    );
 
     expect(daily.length).toBeGreaterThan(0);
     expect(daily[0].runs).toBe(2);

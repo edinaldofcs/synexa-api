@@ -28,7 +28,11 @@ describe('RtpGatewayService', () => {
         pcm24.writeInt16LE(1000, i * 2);
       }
 
-      const encoded = RtpGatewayService.downsampleTo8AndEncode(pcm24, 'ulaw', 24000);
+      const encoded = RtpGatewayService.downsampleTo8AndEncode(
+        pcm24,
+        'ulaw',
+        24000,
+      );
       expect(encoded.length).toBe(160); // 160 bytes = 20ms at 8kHz
     });
   });

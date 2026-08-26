@@ -96,4 +96,3 @@ export class CreateClientDto {
   @IsOptional()
   metadata?: Record<string, unknown> | null;
 }
-

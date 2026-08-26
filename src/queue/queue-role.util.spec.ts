@@ -1,18 +1,18 @@
-import {
-  getSourceQueuesForRole,
-} from './queue-role.util';
+import { getSourceQueuesForRole } from './queue-role.util';
 import {
   QUEUE_AGENT,
   QUEUE_DISPATCHER,
   QUEUE_INGESTION,
   QUEUE_KNOWLEDGE,
   QUEUE_MEDIA,
+  QUEUE_WEBHOOK,
 } from './queue.constants';
 
 describe('getSourceQueuesForRole', () => {
   it('maps each specialist worker to only its source queue', () => {
     expect(getSourceQueuesForRole('worker-agent')).toEqual([QUEUE_AGENT]);
     expect(getSourceQueuesForRole('worker-media')).toEqual([QUEUE_MEDIA]);
+    expect(getSourceQueuesForRole('worker-webhook')).toEqual([QUEUE_WEBHOOK]);
     expect(getSourceQueuesForRole('worker-dlq')).toEqual([]);
   });
 
@@ -23,6 +23,7 @@ describe('getSourceQueuesForRole', () => {
       QUEUE_DISPATCHER,
       QUEUE_MEDIA,
       QUEUE_KNOWLEDGE,
+      QUEUE_WEBHOOK,
     ]);
   });
 

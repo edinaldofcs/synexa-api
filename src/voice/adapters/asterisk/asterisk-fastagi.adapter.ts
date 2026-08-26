@@ -35,16 +35,16 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
   private callStartCallback: (() => void) | null = null;
   private callEndCallback: ((reason?: string) => void) | null = null;
   private errorCallback: ((err: Error) => void) | null = null;
-  private variableCallback: ((key: string, value: string) => void) | null = null;
+  private variableCallback: ((key: string, value: string) => void) | null =
+    null;
   private dtmfCallback: ((digit: string) => void) | null = null;
   private isClosed = false;
 
-  constructor(
-    socket: net.Socket,
-    rawEnv: FastAgiRawEnvironment,
-  ) {
+  constructor(socket: net.Socket, rawEnv: FastAgiRawEnvironment) {
     this.socket = socket;
-    this.id = rawEnv.agi_uniqueid || `ast_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.id =
+      rawEnv.agi_uniqueid ||
+      `ast_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
     // Extrai variáveis contextuais enviadas pelo dialplan do Asterisk
     const customVariables: Record<string, string | unknown> = {};
@@ -54,7 +54,10 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
       if (key.startsWith('agi_variable_')) {
         const cleanKey = key.replace('agi_variable_', '');
         customVariables[cleanKey] = this.tryParseJson(value);
-      } else if (key.toUpperCase().startsWith('SYNEXA_') || key.toUpperCase().startsWith('VAR_')) {
+      } else if (
+        key.toUpperCase().startsWith('SYNEXA_') ||
+        key.toUpperCase().startsWith('VAR_')
+      ) {
         customVariables[key] = this.tryParseJson(value);
       }
     }
@@ -74,7 +77,11 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
       uniqueId: this.id,
       callerNumber: rawEnv.agi_callerid || rawEnv.agi_arg_1 || 'anonymous',
       callerName: rawEnv.agi_calleridname,
-      didNumber: rawEnv.agi_extension || rawEnv.agi_dnid || rawEnv.agi_arg_2 || 'default',
+      didNumber:
+        rawEnv.agi_extension ||
+        rawEnv.agi_dnid ||
+        rawEnv.agi_arg_2 ||
+        'default',
       customVariables,
     };
 
@@ -85,7 +92,9 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
     if (!this.socket) return;
 
     this.socket.on('error', (err) => {
-      this.logger.warn(`[AsteriskFastAgiAdapter] Erro no socket TCP: ${err.message}`);
+      this.logger.warn(
+        `[AsteriskFastAgiAdapter] Erro no socket TCP: ${err.message}`,
+      );
       this.errorCallback?.(err);
     });
 
@@ -145,7 +154,9 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
     this.metadata.customVariables[key] = value;
     this.sendCommand(`SET VARIABLE ${key} "${value}"`);
     this.variableCallback?.(key, value);
-    this.logger.log(`📞 [AsteriskFastAgiAdapter] Variável de canal definida: ${key}="${value}"`);
+    this.logger.log(
+      `📞 [AsteriskFastAgiAdapter] Variável de canal definida: ${key}="${value}"`,
+    );
   }
 
   public getVariable(key: string): string | undefined {
@@ -154,14 +165,18 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
 
   public hangup(reason = 'normal_hangup'): void {
     if (this.isClosed) return;
-    this.logger.log(`📞 [AsteriskFastAgiAdapter] Desligando chamada (${reason})`);
+    this.logger.log(
+      `📞 [AsteriskFastAgiAdapter] Desligando chamada (${reason})`,
+    );
     this.sendCommand('HANGUP');
     this.close();
   }
 
   public async transferCall(destination: string): Promise<boolean> {
     if (this.isClosed) return false;
-    this.logger.log(`📞 [AsteriskFastAgiAdapter] Transferindo chamada para: ${destination}`);
+    this.logger.log(
+      `📞 [AsteriskFastAgiAdapter] Transferindo chamada para: ${destination}`,
+    );
     this.sendCommand(`EXEC Transfer "${destination}"`);
     return true;
   }

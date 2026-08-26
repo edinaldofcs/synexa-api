@@ -151,14 +151,20 @@ export class WorkflowVersionsService {
     const updated = await this.prisma.workflow_versions.update({
       where: { id: versionId },
       data: {
-        description: dto.description !== undefined ? dto.description : version.description,
-        base_version: dto.baseVersion !== undefined ? dto.baseVersion : (version as any).base_version,
+        description:
+          dto.description !== undefined ? dto.description : version.description,
+        base_version:
+          dto.baseVersion !== undefined
+            ? dto.baseVersion
+            : (version as any).base_version,
         snapshot: nextSnapshot as any,
       },
     });
 
     // Gravar no metadata do cliente como a versão em edição ativa
-    const client = await this.prisma.painel_clients.findUnique({ where: { id: clientId } });
+    const client = await this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+    });
     const currentMeta = (client?.metadata as any) || {};
     await this.prisma.painel_clients.update({
       where: { id: clientId },
@@ -172,8 +178,15 @@ export class WorkflowVersionsService {
     });
 
     // Se a versão atualizada for a que está ativa em produção e o snapshot mudou, sincroniza as tabelas e cache
-    if (version.status === 'published' && (dto.captureCurrentState || dto.snapshot)) {
-      await this.applySnapshotInTransaction(clientId, nextSnapshot as any, this.prisma);
+    if (
+      version.status === 'published' &&
+      (dto.captureCurrentState || dto.snapshot)
+    ) {
+      await this.applySnapshotInTransaction(
+        clientId,
+        nextSnapshot as any,
+        this.prisma,
+      );
       void this.metadataService.refresh(clientId);
     }
 
@@ -217,7 +230,9 @@ export class WorkflowVersionsService {
       });
 
       // 3. Gravar no metadata do cliente que a versão ativa em edição é esta ativada
-      const client = await tx.painel_clients.findUnique({ where: { id: clientId } });
+      const client = await tx.painel_clients.findUnique({
+        where: { id: clientId },
+      });
       const currentMeta = (client?.metadata as any) || {};
       await tx.painel_clients.update({
         where: { id: clientId },
@@ -249,7 +264,9 @@ export class WorkflowVersionsService {
     });
 
     if (!targetVersion || targetVersion.client_id !== clientId) {
-      throw new NotFoundException('Versão não encontrada para carregar no painel');
+      throw new NotFoundException(
+        'Versão não encontrada para carregar no painel',
+      );
     }
 
     const snapshot = targetVersion.snapshot as unknown as WorkflowSnapshot;
@@ -259,7 +276,9 @@ export class WorkflowVersionsService {
       await this.applySnapshotInTransaction(clientId, snapshot, tx);
 
       // 2. Gravar no metadata do cliente qual versão está sendo ativamente editada
-      const client = await tx.painel_clients.findUnique({ where: { id: clientId } });
+      const client = await tx.painel_clients.findUnique({
+        where: { id: clientId },
+      });
       const currentMeta = (client?.metadata as any) || {};
       await tx.painel_clients.update({
         where: { id: clientId },
@@ -325,7 +344,9 @@ export class WorkflowVersionsService {
     }
 
     if (!targetVersionId) {
-      throw new NotFoundException('Nenhuma versão ativa identificada para salvar.');
+      throw new NotFoundException(
+        'Nenhuma versão ativa identificada para salvar.',
+      );
     }
 
     const currentSnapshot = await this.buildCurrentSnapshot(clientId);
@@ -434,7 +455,10 @@ export class WorkflowVersionsService {
         data: {
           snapshot: snapshot as any,
           description: dto?.description || existingDraft.description,
-          base_version: dto?.baseVersion !== undefined ? dto.baseVersion : (existingDraft as any).base_version,
+          base_version:
+            dto?.baseVersion !== undefined
+              ? dto.baseVersion
+              : (existingDraft as any).base_version,
           created_at: new Date(),
           created_by: userId,
         },
@@ -473,7 +497,9 @@ export class WorkflowVersionsService {
     await this.validateClientAccess(clientId, companyId);
 
     if (!dto?.description?.trim()) {
-      throw new BadRequestException('A nota de versão é obrigatória para publicação.');
+      throw new BadRequestException(
+        'A nota de versão é obrigatória para publicação.',
+      );
     }
 
     let targetVersion = await this.prisma.workflow_versions.findUnique({
@@ -736,13 +762,17 @@ export class WorkflowVersionsService {
       const draft = await this.prisma.workflow_versions.findFirst({
         where: { client_id: clientId, status: 'draft' },
       });
-      return draft ? (draft.snapshot as unknown as WorkflowSnapshot) : this.buildCurrentSnapshot(clientId);
+      return draft
+        ? (draft.snapshot as unknown as WorkflowSnapshot)
+        : this.buildCurrentSnapshot(clientId);
     }
     if (identifier === 'published') {
       const pub = await this.prisma.workflow_versions.findFirst({
         where: { client_id: clientId, status: 'published' },
       });
-      return pub ? (pub.snapshot as unknown as WorkflowSnapshot) : { agents: [], subagents: [], apis: [], intentions: [] };
+      return pub
+        ? (pub.snapshot as unknown as WorkflowSnapshot)
+        : { agents: [], subagents: [], apis: [], intentions: [] };
     }
 
     const ver = await this.prisma.workflow_versions.findUnique({

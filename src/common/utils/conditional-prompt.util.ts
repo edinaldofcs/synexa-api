@@ -70,7 +70,10 @@ const MESSAGE_ALIASES = new Set([
   'user_transcript',
 ]);
 
-function resolveValue(state: Record<string, unknown>, variable: string): unknown {
+function resolveValue(
+  state: Record<string, unknown>,
+  variable: string,
+): unknown {
   if (!state || typeof state !== 'object' || !variable) return undefined;
   const direct = getNestedValue(state, variable);
   if (direct !== undefined || !MESSAGE_ALIASES.has(variable)) return direct;
@@ -85,12 +88,20 @@ function resolveValue(state: Record<string, unknown>, variable: string): unknown
 
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
-  if (typeof value === 'number' && (value === 0 || value === 1)) return value === 1;
+  if (typeof value === 'number' && (value === 0 || value === 1))
+    return value === 1;
   if (typeof value !== 'string') return undefined;
 
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'true' || normalized === '1' || normalized === 'sim') return true;
-  if (normalized === 'false' || normalized === '0' || normalized === 'nao' || normalized === 'não') return false;
+  if (normalized === 'true' || normalized === '1' || normalized === 'sim')
+    return true;
+  if (
+    normalized === 'false' ||
+    normalized === '0' ||
+    normalized === 'nao' ||
+    normalized === 'não'
+  )
+    return false;
   return undefined;
 }
 
@@ -106,7 +117,12 @@ function valuesEqual(actual: unknown, expected: unknown): boolean {
     actual !== undefined &&
     expected !== null &&
     expected !== undefined &&
-    (typeof actual === 'number' || typeof expected === 'number' || (!isNaN(Number(actual)) && !isNaN(Number(expected)) && String(actual).trim() !== '' && String(expected).trim() !== ''))
+    (typeof actual === 'number' ||
+      typeof expected === 'number' ||
+      (!isNaN(Number(actual)) &&
+        !isNaN(Number(expected)) &&
+        String(actual).trim() !== '' &&
+        String(expected).trim() !== ''))
   ) {
     const actualNumber = Number(actual);
     const expectedNumber = Number(expected);
@@ -116,11 +132,23 @@ function valuesEqual(actual: unknown, expected: unknown): boolean {
   }
 
   if (typeof actual === 'string' && typeof expected === 'string') {
-    return actual.trim().localeCompare(expected.trim(), undefined, { sensitivity: 'accent' }) === 0;
+    return (
+      actual.trim().localeCompare(expected.trim(), undefined, {
+        sensitivity: 'accent',
+      }) === 0
+    );
   }
 
-  if (actual !== undefined && actual !== null && expected !== undefined && expected !== null) {
-    return String(actual).trim().toLowerCase() === String(expected).trim().toLowerCase();
+  if (
+    actual !== undefined &&
+    actual !== null &&
+    expected !== undefined &&
+    expected !== null
+  ) {
+    return (
+      String(actual).trim().toLowerCase() ===
+      String(expected).trim().toLowerCase()
+    );
   }
 
   return actual === expected;
@@ -135,9 +163,13 @@ export function evaluateConditionRule(
 
   switch (rule.operator) {
     case 'exists':
-      return actual !== undefined && actual !== null && String(actual).trim() !== '';
+      return (
+        actual !== undefined && actual !== null && String(actual).trim() !== ''
+      );
     case 'not_exists':
-      return actual === undefined || actual === null || String(actual).trim() === '';
+      return (
+        actual === undefined || actual === null || String(actual).trim() === ''
+      );
     case 'equals':
       return valuesEqual(actual, rule.value);
     case 'not_equals':
@@ -234,11 +266,16 @@ export function parseConditionRuleString(raw: string): ConditionRule | null {
   if (!str) return null;
 
   // Unary operators (exists / not_exists)
-  const unaryMatch = str.match(/^([a-zA-Z0-9_.]+)\s+(exists|not_exists|existe|não existe|nao existe)$/i);
+  const unaryMatch = str.match(
+    /^([a-zA-Z0-9_.]+)\s+(exists|not_exists|existe|não existe|nao existe)$/i,
+  );
   if (unaryMatch) {
-    const op = unaryMatch[2].toLowerCase().includes('not') || unaryMatch[2].toLowerCase().includes('não') || unaryMatch[2].toLowerCase().includes('nao')
-      ? 'not_exists'
-      : 'exists';
+    const op =
+      unaryMatch[2].toLowerCase().includes('not') ||
+      unaryMatch[2].toLowerCase().includes('não') ||
+      unaryMatch[2].toLowerCase().includes('nao')
+        ? 'not_exists'
+        : 'exists';
     return { variable: unaryMatch[1], operator: op };
   }
 
@@ -262,7 +299,8 @@ export function parseConditionRuleString(raw: string): ConditionRule | null {
 
     let operator: ConditionRule['operator'] = 'equals';
     if (rawOp === '==' || rawOp === 'é igual a') operator = 'equals';
-    else if (rawOp === '!=' || rawOp === 'é diferente de') operator = 'not_equals';
+    else if (rawOp === '!=' || rawOp === 'é diferente de')
+      operator = 'not_equals';
     else if (rawOp === '>' || rawOp === 'é maior que') operator = 'gt';
     else if (rawOp === '<' || rawOp === 'é menor que') operator = 'lt';
     else if (rawOp === '>=') operator = 'gte';
@@ -299,7 +337,8 @@ export function parseConditionGroupString(expr: string): ConditionGroup {
 
   return {
     logic: isOr ? 'OR' : 'AND',
-    rules: rules.length > 0 ? rules : [{ variable: trimmed, operator: 'exists' }],
+    rules:
+      rules.length > 0 ? rules : [{ variable: trimmed, operator: 'exists' }],
   };
 }
 
@@ -333,13 +372,18 @@ export function resolveConditionalString(
       const branchCondExpr = elseParts[i];
       const branchContent = elseParts[i + 1] || '';
       branches.push({
-        condition: branchCondExpr ? parseConditionGroupString(branchCondExpr) : undefined,
+        condition: branchCondExpr
+          ? parseConditionGroupString(branchCondExpr)
+          : undefined,
         content: branchContent,
       });
     }
 
     for (const branch of branches) {
-      if (!branch.condition || evaluateConditionGroup(branch.condition, state)) {
+      if (
+        !branch.condition ||
+        evaluateConditionGroup(branch.condition, state)
+      ) {
         return resolveConditionalString(branch.content, state).trim();
       }
     }
@@ -362,13 +406,18 @@ export function resolveConditionalString(
       const branchCondExpr = elseParts[i]?.trim();
       const branchContent = elseParts[i + 1] || '';
       branches.push({
-        condition: branchCondExpr ? parseConditionGroupString(branchCondExpr) : undefined,
+        condition: branchCondExpr
+          ? parseConditionGroupString(branchCondExpr)
+          : undefined,
         content: branchContent,
       });
     }
 
     for (const branch of branches) {
-      if (!branch.condition || evaluateConditionGroup(branch.condition, state)) {
+      if (
+        !branch.condition ||
+        evaluateConditionGroup(branch.condition, state)
+      ) {
         return resolveConditionalString(branch.content, state).trim();
       }
     }
@@ -395,7 +444,8 @@ export function resolveConditionalBlocks(
     if (!block || typeof block !== 'object') continue;
 
     if (block.type === 'text') {
-      const text = typeof block.content === 'string' ? block.content.trim() : '';
+      const text =
+        typeof block.content === 'string' ? block.content.trim() : '';
       if (text) {
         // Also resolve any inline conditional text syntax if present
         const resolvedText = resolveConditionalString(text, state).trim();
@@ -413,8 +463,14 @@ export function resolveConditionalBlocks(
           for (const branch of block.elseif_branches) {
             if (evaluateConditionGroup(branch.condition, state)) {
               matchedElseIf = true;
-              if (Array.isArray(branch.then_blocks) && branch.then_blocks.length > 0) {
-                const resolved = resolveConditionalBlocks(branch.then_blocks, state);
+              if (
+                Array.isArray(branch.then_blocks) &&
+                branch.then_blocks.length > 0
+              ) {
+                const resolved = resolveConditionalBlocks(
+                  branch.then_blocks,
+                  state,
+                );
                 if (resolved) parts.push(resolved);
               }
               break;
@@ -422,7 +478,11 @@ export function resolveConditionalBlocks(
           }
         }
 
-        if (!matchedElseIf && Array.isArray(block.else_blocks) && block.else_blocks.length > 0) {
+        if (
+          !matchedElseIf &&
+          Array.isArray(block.else_blocks) &&
+          block.else_blocks.length > 0
+        ) {
           const resolved = resolveConditionalBlocks(block.else_blocks, state);
           if (resolved) parts.push(resolved);
         }

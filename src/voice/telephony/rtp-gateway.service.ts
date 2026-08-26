@@ -166,7 +166,9 @@ export class RtpChannelSession {
       this.socket.bind(0, '0.0.0.0', () => {
         const addr = this.socket?.address();
         this.localPort = typeof addr === 'object' && addr ? addr.port : 0;
-        this.logger.log(`🎧 [RtpSession] Socket UDP alocado na porta ${this.localPort}`);
+        this.logger.log(
+          `🎧 [RtpSession] Socket UDP alocado na porta ${this.localPort}`,
+        );
         this.startOutboundLoop();
         resolve(this.localPort);
       });
@@ -223,7 +225,13 @@ export class RtpChannelSession {
     rtpPacket.writeUInt32BE(this.ssrc, 8);
     payload.copy(rtpPacket, 12);
 
-    this.socket.send(rtpPacket, 0, rtpPacket.length, this.remotePort, this.remoteIp);
+    this.socket.send(
+      rtpPacket,
+      0,
+      rtpPacket.length,
+      this.remotePort,
+      this.remoteIp,
+    );
   }
 
   public close(): void {
@@ -253,7 +261,8 @@ export class RtpGatewayService {
     const pcm16 = Buffer.alloc(buffer.length * 4); // 8kHz -> 16kHz (2x samples * 2 bytes = 4x)
     for (let i = 0; i < buffer.length; i++) {
       const valCurrent = muLawToPcmTable[buffer[i]];
-      const valNext = i < buffer.length - 1 ? muLawToPcmTable[buffer[i + 1]] : valCurrent;
+      const valNext =
+        i < buffer.length - 1 ? muLawToPcmTable[buffer[i + 1]] : valCurrent;
       const valInterm = Math.round((valCurrent + valNext) / 2);
 
       const offset = i * 4;
@@ -267,7 +276,8 @@ export class RtpGatewayService {
     const pcm16 = Buffer.alloc(buffer.length * 4);
     for (let i = 0; i < buffer.length; i++) {
       const valCurrent = aLawToPcmTable[buffer[i]];
-      const valNext = i < buffer.length - 1 ? aLawToPcmTable[buffer[i + 1]] : valCurrent;
+      const valNext =
+        i < buffer.length - 1 ? aLawToPcmTable[buffer[i + 1]] : valCurrent;
       const valInterm = Math.round((valCurrent + valNext) / 2);
 
       const offset = i * 4;

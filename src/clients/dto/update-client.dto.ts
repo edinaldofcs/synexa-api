@@ -96,4 +96,3 @@ export class UpdateClientDto {
   @IsOptional()
   metadata?: Record<string, unknown> | null;
 }
-

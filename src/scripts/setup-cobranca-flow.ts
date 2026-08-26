@@ -13,7 +13,9 @@ const API_OFFERS_ID = '66003399-485c-40ce-b7e8-fa8e1af0d437';
 const API_AGREEMENT_ID = 'ce22257e-fcb8-45d1-9753-9418395c4c1d';
 
 async function main() {
-  console.log('🚀 Iniciando configuração do Fluxo de Cobrança com 3 APIs e 3 Agentes...');
+  console.log(
+    '🚀 Iniciando configuração do Fluxo de Cobrança com 3 APIs e 3 Agentes...',
+  );
 
   // 1. Garantir Cliente
   await prisma.painel_clients.upsert({
@@ -41,7 +43,8 @@ async function main() {
       client_id: CLIENT_ID,
       agent_id: AGENT_RECEPTION_ID,
       name: 'offers',
-      description: 'Busca as propostas de desconto à vista e parcelamentos disponíveis para o débito do cliente.',
+      description:
+        'Busca as propostas de desconto à vista e parcelamentos disponíveis para o débito do cliente.',
       method: 'POST',
       url: 'https://prd.naldofcs-ai.com/webhook/synexa_offers',
       headers: {
@@ -70,7 +73,8 @@ async function main() {
       client_id: CLIENT_ID,
       agent_id: AGENT_RECEPTION_ID,
       name: 'offers',
-      description: 'Busca as propostas de desconto à vista e parcelamentos disponíveis para o débito do cliente.',
+      description:
+        'Busca as propostas de desconto à vista e parcelamentos disponíveis para o débito do cliente.',
       method: 'POST',
       url: 'https://prd.naldofcs-ai.com/webhook/synexa_offers',
       headers: {
@@ -103,7 +107,8 @@ async function main() {
       client_id: CLIENT_ID,
       agent_id: AGENT_RECEPTION_ID,
       name: 'buscar_cpf',
-      description: 'Consulta débitos e dados cadastrais do cliente a partir do número do CPF.',
+      description:
+        'Consulta débitos e dados cadastrais do cliente a partir do número do CPF.',
       method: 'POST',
       url: 'https://prd.naldofcs-ai.com/webhook/synexa_debts',
       headers: {
@@ -121,7 +126,8 @@ async function main() {
       parameters: {
         cpf: {
           type: 'string',
-          description: 'Número do CPF do cliente (somente números ou formatado)',
+          description:
+            'Número do CPF do cliente (somente números ou formatado)',
           required: true,
         },
       } as any,
@@ -144,7 +150,8 @@ async function main() {
       client_id: CLIENT_ID,
       agent_id: AGENT_RECEPTION_ID,
       name: 'buscar_cpf',
-      description: 'Consulta débitos e dados cadastrais do cliente a partir do número do CPF.',
+      description:
+        'Consulta débitos e dados cadastrais do cliente a partir do número do CPF.',
       method: 'POST',
       url: 'https://prd.naldofcs-ai.com/webhook/synexa_debts',
       headers: {
@@ -162,7 +169,8 @@ async function main() {
       parameters: {
         cpf: {
           type: 'string',
-          description: 'Número do CPF do cliente (somente números ou formatado)',
+          description:
+            'Número do CPF do cliente (somente números ou formatado)',
           required: true,
         },
       } as any,
@@ -189,7 +197,8 @@ async function main() {
       client_id: CLIENT_ID,
       agent_id: AGENT_NEGOCIACAO_ID,
       name: 'agreement',
-      description: 'Formaliza e registra o acordo de quitação escolhido pelo cliente gerando chave PIX e vencimento.',
+      description:
+        'Formaliza e registra o acordo de quitação escolhido pelo cliente gerando chave PIX e vencimento.',
       method: 'POST',
       url: 'https://prd.naldofcs-ai.com/webhook/synexa_agreement',
       headers: {
@@ -203,7 +212,8 @@ async function main() {
         },
         codigo_plano: {
           type: 'string',
-          value: 'Código do plano de pagamento aceito pelo cliente (ex: NEG-001)',
+          value:
+            'Código do plano de pagamento aceito pelo cliente (ex: NEG-001)',
           source: 'ai',
         },
         forma_pagamento: {
@@ -215,7 +225,8 @@ async function main() {
       parameters: {
         codigo_plano: {
           type: 'string',
-          description: 'Código do plano aceito pelo cliente (ex: NEG-001 para à vista com desconto, NEG-002, NEG-003, NEG-004 ou NEG-005)',
+          description:
+            'Código do plano aceito pelo cliente (ex: NEG-001 para à vista com desconto, NEG-002, NEG-003, NEG-004 ou NEG-005)',
           required: true,
         },
         forma_pagamento: {
@@ -241,7 +252,8 @@ async function main() {
       client_id: CLIENT_ID,
       agent_id: AGENT_NEGOCIACAO_ID,
       name: 'agreement',
-      description: 'Formaliza e registra o acordo de quitação escolhido pelo cliente gerando chave PIX e vencimento.',
+      description:
+        'Formaliza e registra o acordo de quitação escolhido pelo cliente gerando chave PIX e vencimento.',
       method: 'POST',
       url: 'https://prd.naldofcs-ai.com/webhook/synexa_agreement',
       headers: {
@@ -255,7 +267,8 @@ async function main() {
         },
         codigo_plano: {
           type: 'string',
-          value: 'Código do plano de pagamento aceito pelo cliente (ex: NEG-001)',
+          value:
+            'Código do plano de pagamento aceito pelo cliente (ex: NEG-001)',
           source: 'ai',
         },
         forma_pagamento: {
@@ -267,7 +280,8 @@ async function main() {
       parameters: {
         codigo_plano: {
           type: 'string',
-          description: 'Código do plano aceito pelo cliente (ex: NEG-001 para à vista com desconto, NEG-002, NEG-003, NEG-004 ou NEG-005)',
+          description:
+            'Código do plano aceito pelo cliente (ex: NEG-001 para à vista com desconto, NEG-002, NEG-003, NEG-004 ou NEG-005)',
           required: true,
         },
         forma_pagamento: {
@@ -290,7 +304,9 @@ async function main() {
     },
   });
 
-  console.log('✅ 3 APIs cadastradas com sucesso: buscar_cpf -> offers, agreement');
+  console.log(
+    '✅ 3 APIs cadastradas com sucesso: buscar_cpf -> offers, agreement',
+  );
 
   // 3. Configurar os 3 Agentes
 
@@ -325,9 +341,12 @@ Seu objetivo é acolher o cliente com cordialidade, solicitar a confirmação do
       allowed_tool_names: ['buscar_cpf'] as any,
       system_prompt: promptAgente1,
       persona_blocks: {
-        identidade: 'Você é a Sofia, assistente de acolhimento e identificação da Synexa.',
-        diretrizes_voz: 'Fale de forma natural, calorosa e concisa. Respostas diretas adequadas para texto e voz.',
-        roteiro: 'Solicite o CPF do cliente. Ao receber, execute imediatamente a ferramenta buscar_cpf.',
+        identidade:
+          'Você é a Sofia, assistente de acolhimento e identificação da Synexa.',
+        diretrizes_voz:
+          'Fale de forma natural, calorosa e concisa. Respostas diretas adequadas para texto e voz.',
+        roteiro:
+          'Solicite o CPF do cliente. Ao receber, execute imediatamente a ferramenta buscar_cpf.',
       } as any,
       transitions: {
         llm_provider: 'gemini',
@@ -348,9 +367,12 @@ Seu objetivo é acolher o cliente com cordialidade, solicitar a confirmação do
       allowed_tool_names: ['buscar_cpf'] as any,
       system_prompt: promptAgente1,
       persona_blocks: {
-        identidade: 'Você é a Sofia, assistente de acolhimento e identificação da Synexa.',
-        diretrizes_voz: 'Fale de forma natural, calorosa e concisa. Respostas diretas adequadas para texto e voz.',
-        roteiro: 'Solicite o CPF do cliente. Ao receber, execute imediatamente a ferramenta buscar_cpf.',
+        identidade:
+          'Você é a Sofia, assistente de acolhimento e identificação da Synexa.',
+        diretrizes_voz:
+          'Fale de forma natural, calorosa e concisa. Respostas diretas adequadas para texto e voz.',
+        roteiro:
+          'Solicite o CPF do cliente. Ao receber, execute imediatamente a ferramenta buscar_cpf.',
       } as any,
       transitions: {
         llm_provider: 'gemini',
@@ -414,9 +436,12 @@ Débito localizado para regularização imediata.
       allowed_tool_names: ['agreement'] as any,
       system_prompt: promptAgente2,
       persona_blocks: {
-        identidade: 'Especialista de negociação financeira da Synexa focado em conciliação e facilidades de pagamento.',
-        condicionais: '[SE [[dias_atraso]] > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
-        planos: 'Plano à vista com desconto (NEG-001) e planos parcelados em até 5x (NEG-002 a NEG-005).',
+        identidade:
+          'Especialista de negociação financeira da Synexa focado em conciliação e facilidades de pagamento.',
+        condicionais:
+          '[SE [[dias_atraso]] > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
+        planos:
+          'Plano à vista com desconto (NEG-001) e planos parcelados em até 5x (NEG-002 a NEG-005).',
       } as any,
       transitions: {
         llm_provider: 'gemini',
@@ -443,9 +468,12 @@ Débito localizado para regularização imediata.
       allowed_tool_names: ['agreement'] as any,
       system_prompt: promptAgente2,
       persona_blocks: {
-        identidade: 'Especialista de negociação financeira da Synexa focado em conciliação e facilidades de pagamento.',
-        condicionais: '[SE [[dias_atraso]] > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
-        planos: 'Plano à vista com desconto (NEG-001) e planos parcelados em até 5x (NEG-002 a NEG-005).',
+        identidade:
+          'Especialista de negociação financeira da Synexa focado em conciliação e facilidades de pagamento.',
+        condicionais:
+          '[SE [[dias_atraso]] > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
+        planos:
+          'Plano à vista com desconto (NEG-001) e planos parcelados em até 5x (NEG-002 a NEG-005).',
       } as any,
       transitions: {
         llm_provider: 'gemini',
@@ -496,8 +524,10 @@ Você assume a conversa no instante em que o acordo foi registrado no sistema pe
       allowed_tool_names: [] as any,
       system_prompt: promptAgente3,
       persona_blocks: {
-        identidade: 'Assistente de formalização e entrega de chaves PIX e protocolos de acordos fechados.',
-        instrucoes_pix: 'Entregar código PIX copia e cola, orientar pagamento no app bancário até o vencimento e encerrar com cordialidade.',
+        identidade:
+          'Assistente de formalização e entrega de chaves PIX e protocolos de acordos fechados.',
+        instrucoes_pix:
+          'Entregar código PIX copia e cola, orientar pagamento no app bancário até o vencimento e encerrar com cordialidade.',
       } as any,
       transitions: {
         llm_provider: 'gemini',
@@ -524,8 +554,10 @@ Você assume a conversa no instante em que o acordo foi registrado no sistema pe
       allowed_tool_names: [] as any,
       system_prompt: promptAgente3,
       persona_blocks: {
-        identidade: 'Assistente de formalização e entrega de chaves PIX e protocolos de acordos fechados.',
-        instrucoes_pix: 'Entregar código PIX copia e cola, orientar pagamento no app bancário até o vencimento e encerrar com cordialidade.',
+        identidade:
+          'Assistente de formalização e entrega de chaves PIX e protocolos de acordos fechados.',
+        instrucoes_pix:
+          'Entregar código PIX copia e cola, orientar pagamento no app bancário até o vencimento e encerrar com cordialidade.',
       } as any,
       transitions: {
         llm_provider: 'gemini',
@@ -536,8 +568,12 @@ Você assume a conversa no instante em que o acordo foi registrado no sistema pe
 
   console.log('✅ 3 Agentes cadastrados e configurados com sucesso:');
   console.log('   1. inicio_atendimento (Inicial, tool: buscar_cpf)');
-  console.log('   2. negociacao (Ativação imediata: valor_divida > 0, tool: agreement)');
-  console.log('   3. encerramento (Ativação imediata: acordo_confirmado == true, entrega PIX)');
+  console.log(
+    '   2. negociacao (Ativação imediata: valor_divida > 0, tool: agreement)',
+  );
+  console.log(
+    '   3. encerramento (Ativação imediata: acordo_confirmado == true, entrega PIX)',
+  );
 }
 
 main()

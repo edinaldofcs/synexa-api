@@ -22,8 +22,12 @@ describe('buildAgentPromptFromBlocks', () => {
       },
     });
 
-    expect(prompt).toContain('## Identidade da Persona\nVocê é a Clara, especialista financeira.');
-    expect(prompt).toContain('## Diretrizes de Linguagem & Sotaque\nFale com tom formal e acolhedor.');
+    expect(prompt).toContain(
+      '## Identidade da Persona\nVocê é a Clara, especialista financeira.',
+    );
+    expect(prompt).toContain(
+      '## Diretrizes de Linguagem & Sotaque\nFale com tom formal e acolhedor.',
+    );
     expect(prompt).toContain('Fale com tom formal e acolhedor.');
     expect(prompt).toContain('Taxa de juros de 1.5% a.m.');
     expect(prompt).toContain('Desconto de até 40% para pagamento à vista.');
@@ -64,12 +68,19 @@ describe('buildAgentPromptFromBlocks', () => {
               condition: {
                 logic: 'AND',
                 rules: [
-                  { variable: 'tipo_cliente', operator: 'equals', value: 'premium' },
+                  {
+                    variable: 'tipo_cliente',
+                    operator: 'equals',
+                    value: 'premium',
+                  },
                   { variable: 'saldo_devedor', operator: 'gt', value: 0 },
                 ],
               },
               then_blocks: [
-                { type: 'text', content: 'Trate com atenção VIP. Ofereça 40% de desconto.' },
+                {
+                  type: 'text',
+                  content: 'Trate com atenção VIP. Ofereça 40% de desconto.',
+                },
               ],
               else_blocks: [
                 { type: 'text', content: 'Trate com tom cordial padrão.' },
@@ -101,7 +112,11 @@ describe('buildAgentPromptFromBlocks', () => {
               condition: {
                 logic: 'AND',
                 rules: [
-                  { variable: 'tipo_cliente', operator: 'equals', value: 'premium' },
+                  {
+                    variable: 'tipo_cliente',
+                    operator: 'equals',
+                    value: 'premium',
+                  },
                 ],
               },
               then_blocks: [
@@ -123,4 +138,3 @@ describe('buildAgentPromptFromBlocks', () => {
     expect(prompt).not.toContain('Trate com atenção VIP.');
   });
 });
-

@@ -4,6 +4,7 @@ import { validateEnv } from './common/config/env.validation';
 import { CommonModule } from './common/common.module';
 import { QueueInfrastructureModule } from './queue/queue-infrastructure.module';
 import { QueueProcessorsModule } from './queue/queue-processors.module';
+import { WorkerHealthService } from './common/health/worker-health.service';
 
 @Module({
   imports: [
@@ -17,5 +18,6 @@ import { QueueProcessorsModule } from './queue/queue-processors.module';
     QueueInfrastructureModule,
     QueueProcessorsModule.register(process.env.SERVICE_ROLE || 'worker'),
   ],
+  providers: [WorkerHealthService],
 })
 export class WorkerModule {}

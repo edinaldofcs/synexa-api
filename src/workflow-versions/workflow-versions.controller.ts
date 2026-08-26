@@ -121,11 +121,7 @@ export class WorkflowVersionsController {
     @Param('versionId') versionId: string,
     @CurrentUser() user: { id: string },
   ) {
-    return this.workflowVersionsService.activate(
-      clientId,
-      versionId,
-      user.id,
-    );
+    return this.workflowVersionsService.activate(clientId, versionId, user.id);
   }
 
   @Post(':versionId/checkout')
@@ -134,11 +130,7 @@ export class WorkflowVersionsController {
     @Param('versionId') versionId: string,
     @CurrentUser() user: { id: string },
   ) {
-    return this.workflowVersionsService.checkout(
-      clientId,
-      versionId,
-      user.id,
-    );
+    return this.workflowVersionsService.checkout(clientId, versionId, user.id);
   }
 
   @Post(':versionId/rollback')

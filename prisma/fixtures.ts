@@ -67,7 +67,9 @@ async function main() {
     },
   });
 
-  console.log(`[fixtures] Empresa B criada para testes de isolamento: ${COMPANY_B_ID}`);
+  console.log(
+    `[fixtures] Empresa B criada para testes de isolamento: ${COMPANY_B_ID}`,
+  );
 
   // ── 2. Conversas e Mensagens ─────────────────────────────────
   await prisma.conversations.upsert({
@@ -100,7 +102,9 @@ async function main() {
 
   await prisma.messages.upsert({
     where: { id: MSG_1_ID },
-    update: { content: 'Olá, gostaria de informações sobre produtos e horários.' },
+    update: {
+      content: 'Olá, gostaria de informações sobre produtos e horários.',
+    },
     create: {
       id: MSG_1_ID,
       company_id: COMPANY_A_ID,
@@ -115,7 +119,10 @@ async function main() {
 
   await prisma.messages.upsert({
     where: { id: MSG_2_ID },
-    update: { content: 'Olá! Nosso horário de atendimento é de segunda a sexta, das 8h às 18h.' },
+    update: {
+      content:
+        'Olá! Nosso horário de atendimento é de segunda a sexta, das 8h às 18h.',
+    },
     create: {
       id: MSG_2_ID,
       company_id: COMPANY_A_ID,
@@ -123,7 +130,8 @@ async function main() {
       direction: 'outbound',
       channel: 'whatsapp',
       sender_type: 'ai',
-      content: 'Olá! Nosso horário de atendimento é de segunda a sexta, das 8h às 18h.',
+      content:
+        'Olá! Nosso horário de atendimento é de segunda a sexta, das 8h às 18h.',
       status: 'sent',
     },
   });
@@ -143,7 +151,9 @@ async function main() {
     },
   });
 
-  console.log(`[fixtures] Conversas e mensagens criadas (CONV_1: ${CONV_1_ID})`);
+  console.log(
+    `[fixtures] Conversas e mensagens criadas (CONV_1: ${CONV_1_ID})`,
+  );
 
   // ── 3. Documento RAG, Chunks e Vetores Sintéticos ─────────────
   await prisma.knowledge_documents.upsert({
@@ -158,14 +168,18 @@ async function main() {
       source_type: 'text',
       status: 'ready',
       metadata: {
-        raw_content: 'A Synexa opera 24/7 com suporte automatizado e agentes de voz integrados.',
+        raw_content:
+          'A Synexa opera 24/7 com suporte automatizado e agentes de voz integrados.',
       } as any,
     },
   });
 
   await prisma.knowledge_chunks.upsert({
     where: { id: CHUNK_1_ID },
-    update: { content: 'A Synexa opera 24/7 com suporte automatizado e agentes de voz integrados.' },
+    update: {
+      content:
+        'A Synexa opera 24/7 com suporte automatizado e agentes de voz integrados.',
+    },
     create: {
       id: CHUNK_1_ID,
       company_id: COMPANY_A_ID,
@@ -173,7 +187,8 @@ async function main() {
       knowledge_base_id: KB_A_ID,
       document_id: DOC_1_ID,
       chunk_index: 0,
-      content: 'A Synexa opera 24/7 com suporte automatizado e agentes de voz integrados.',
+      content:
+        'A Synexa opera 24/7 com suporte automatizado e agentes de voz integrados.',
     },
   });
 

@@ -50,7 +50,11 @@ async function main() {
     }
   }
 
-  if (!isDevelopment && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (
+    !isDevelopment &&
+    process.env.SUPABASE_URL &&
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  ) {
     try {
       const supabase = createClient(
         process.env.SUPABASE_URL,
@@ -60,7 +64,9 @@ async function main() {
       for (const u of users.users) {
         if (u.email === 'admin@synexa.com.br') {
           await supabase.auth.admin.deleteUser(u.id);
-          console.log('  [reset] Usuário Supabase admin@synexa.com.br removido.');
+          console.log(
+            '  [reset] Usuário Supabase admin@synexa.com.br removido.',
+          );
         }
       }
     } catch {}

@@ -189,7 +189,8 @@ export class OpenRouterProvider implements LLMProvider {
                   tool_call_id: (pending as any).id,
                   role: 'tool',
                   content: JSON.stringify({
-                    error: 'Execução cancelada: a tool anterior falhou (Fail-Fast).',
+                    error:
+                      'Execução cancelada: a tool anterior falhou (Fail-Fast).',
                   }),
                 } as OpenAI.Chat.ChatCompletionMessageParam);
               }

@@ -25,7 +25,10 @@ describe('prompt-variables.util', () => {
       const hora = resolveDynamicSystemVariable('hora_atual', fixedDate);
       expect(hora).toBe('11:30');
 
-      const dataHora = resolveDynamicSystemVariable('data_hora_atual', fixedDate);
+      const dataHora = resolveDynamicSystemVariable(
+        'data_hora_atual',
+        fixedDate,
+      );
       expect(dataHora).toBe('21/08/2026 às 11:30');
     });
 
@@ -39,15 +42,24 @@ describe('prompt-variables.util', () => {
 
     it('resolves dias_uteis and skips weekends', () => {
       // Friday + 1 business day should be Monday (24/08/2026)
-      const proximoDiaUtil = resolveDynamicSystemVariable('dias_uteis+1', fixedDate);
+      const proximoDiaUtil = resolveDynamicSystemVariable(
+        'dias_uteis+1',
+        fixedDate,
+      );
       expect(proximoDiaUtil).toBe('24/08/2026');
 
-      const doisDiasUteis = resolveDynamicSystemVariable('dias_uteis+2', fixedDate);
+      const doisDiasUteis = resolveDynamicSystemVariable(
+        'dias_uteis+2',
+        fixedDate,
+      );
       expect(doisDiasUteis).toBe('25/08/2026');
     });
 
     it('resolves proximo_dia_util and eh_dia_util', () => {
-      const proximo = resolveDynamicSystemVariable('proximo_dia_util', fixedDate);
+      const proximo = resolveDynamicSystemVariable(
+        'proximo_dia_util',
+        fixedDate,
+      );
       expect(proximo).toBe('24/08/2026');
 
       const ehUtil = resolveDynamicSystemVariable('eh_dia_util', fixedDate);
@@ -70,12 +82,18 @@ describe('prompt-variables.util', () => {
 
     it('resolves saudacao_tempo', () => {
       // At 11:30 it is 'Bom dia'
-      const saudacao = resolveDynamicSystemVariable('saudacao_tempo', fixedDate);
+      const saudacao = resolveDynamicSystemVariable(
+        'saudacao_tempo',
+        fixedDate,
+      );
       expect(saudacao).toBe('Bom dia');
 
       // Test afternoon date: 15:00 Sao Paulo time (18:00 UTC)
       const afternoonDate = new Date('2026-08-21T18:00:00.000Z');
-      const saudacaoTarde = resolveDynamicSystemVariable('saudacao_tempo', afternoonDate);
+      const saudacaoTarde = resolveDynamicSystemVariable(
+        'saudacao_tempo',
+        afternoonDate,
+      );
       expect(saudacaoTarde).toBe('Boa tarde');
     });
   });
@@ -88,7 +106,11 @@ describe('prompt-variables.util', () => {
         nome_cliente: 'Carlos Silva',
       };
 
-      const result = resolvePromptTemplateString(template, variables, fixedDate);
+      const result = resolvePromptTemplateString(
+        template,
+        variables,
+        fixedDate,
+      );
       expect(result).toBe(
         'Olá Carlos Silva! Bom dia, hoje é sexta-feira (21/08/2026), e seu boleto vence em 26/08/2026. Horário de atendimento: 11:30.',
       );

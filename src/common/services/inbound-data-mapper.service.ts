@@ -77,9 +77,18 @@ export class InboundDataMapperService {
         ruleChannel === 'all' ||
         ruleChannel === normalizedChannel ||
         (ruleChannel === 'voice' &&
-          ['voice', 'telephony', 'fastagi', 'callflex', 'asterisk', 'sip'].includes(normalizedChannel)) ||
-        (ruleChannel === 'crm' && ['crm', 'webhook', 'api'].includes(normalizedChannel)) ||
-        (ruleChannel === 'api' && ['api', 'webhook'].includes(normalizedChannel));
+          [
+            'voice',
+            'telephony',
+            'fastagi',
+            'callflex',
+            'asterisk',
+            'sip',
+          ].includes(normalizedChannel)) ||
+        (ruleChannel === 'crm' &&
+          ['crm', 'webhook', 'api'].includes(normalizedChannel)) ||
+        (ruleChannel === 'api' &&
+          ['api', 'webhook'].includes(normalizedChannel));
 
       if (!channelMatches) continue;
 
@@ -101,7 +110,11 @@ export class InboundDataMapperService {
       }
 
       // Aplica transformações de tipo e sanitização
-      if (finalValue !== undefined && finalValue !== null && finalValue !== '') {
+      if (
+        finalValue !== undefined &&
+        finalValue !== null &&
+        finalValue !== ''
+      ) {
         finalValue = this.applyTransformation(finalValue, rule.transform);
         mappedState[rule.target_variable] = finalValue;
       }
@@ -110,7 +123,10 @@ export class InboundDataMapperService {
     // Preserva campos não mapeados se configurado
     if (preserveUnmapped) {
       for (const [key, value] of Object.entries(rawData)) {
-        if (!appliedSourceKeys.has(key.toLowerCase()) && !Object.prototype.hasOwnProperty.call(mappedState, key)) {
+        if (
+          !appliedSourceKeys.has(key.toLowerCase()) &&
+          !Object.prototype.hasOwnProperty.call(mappedState, key)
+        ) {
           mappedState[key] = value;
         }
       }
@@ -135,7 +151,11 @@ export class InboundDataMapperService {
       const parts = keyOrPath.split('.');
       let current: any = obj;
       for (const part of parts) {
-        if (current === null || current === undefined || typeof current !== 'object') {
+        if (
+          current === null ||
+          current === undefined ||
+          typeof current !== 'object'
+        ) {
           current = undefined;
           break;
         }
@@ -202,7 +222,11 @@ export class InboundDataMapperService {
         } else {
           let cleaned = strVal.replace(/[R$\s]/gi, '');
           // Identifica se vírgula é decimal (ex: 1.500,50 ou 250,00)
-          if (cleaned.includes(',') && (!cleaned.includes('.') || cleaned.indexOf('.') < cleaned.indexOf(','))) {
+          if (
+            cleaned.includes(',') &&
+            (!cleaned.includes('.') ||
+              cleaned.indexOf('.') < cleaned.indexOf(','))
+          ) {
             cleaned = cleaned.replace(/\./g, '').replace(',', '.');
           } else if (cleaned.includes(',') && cleaned.includes('.')) {
             // Formato US com vírgula de milhar: 1,500.50
@@ -223,7 +247,11 @@ export class InboundDataMapperService {
       case 'number': {
         if (typeof value === 'number') return value;
         let cleaned = strVal.replace(/[R$\s]/gi, '');
-        if (cleaned.includes(',') && (!cleaned.includes('.') || cleaned.indexOf('.') < cleaned.indexOf(','))) {
+        if (
+          cleaned.includes(',') &&
+          (!cleaned.includes('.') ||
+            cleaned.indexOf('.') < cleaned.indexOf(','))
+        ) {
           cleaned = cleaned.replace(/\./g, '').replace(',', '.');
         } else if (cleaned.includes(',') && cleaned.includes('.')) {
           cleaned = cleaned.replace(/,/g, '');
@@ -234,7 +262,9 @@ export class InboundDataMapperService {
 
       case 'boolean': {
         const lower = strVal.toLowerCase();
-        if (['true', '1', 'sim', 's', 'yes', 'y', 'verdadeiro'].includes(lower)) {
+        if (
+          ['true', '1', 'sim', 's', 'yes', 'y', 'verdadeiro'].includes(lower)
+        ) {
           return true;
         }
         if (['false', '0', 'nao', 'não', 'n', 'no', 'falso'].includes(lower)) {
