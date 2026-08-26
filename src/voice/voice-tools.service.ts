@@ -27,10 +27,7 @@ export class VoiceToolsService {
     private readonly providerKeyResolver: ProviderKeyResolverService,
   ) {}
 
-  async getAgentTools(
-    clientId: string,
-    agentId: string,
-  ): Promise<VoiceTool[]> {
+  async getAgentTools(clientId: string, agentId: string): Promise<VoiceTool[]> {
     const agent = await this.prisma.painel_agents.findFirst({
       where: { id: agentId, client_id: clientId },
       select: { allowed_tool_names: true },
@@ -48,7 +45,8 @@ export class VoiceToolsService {
       visible_to_agent: true,
     };
     const customToolNames = allowedNames.filter(
-      (name) => !['execute_api', 'search_knowledge_base', 'search_web'].includes(name),
+      (name) =>
+        !['execute_api', 'search_knowledge_base', 'search_web'].includes(name),
     );
     if (customToolNames.length > 0) {
       where.name = { in: customToolNames };
@@ -66,7 +64,8 @@ export class VoiceToolsService {
       apiName: api.name,
       name: this.toFunctionName(api.name, api.id),
       description:
-        api.description || `Executa a API "${api.name}" e retorna os dados encontrados.`,
+        api.description ||
+        `Executa a API "${api.name}" e retorna os dados encontrados.`,
       parameters: this.buildParameters(api),
       method: api.method,
       url: api.url,
@@ -108,12 +107,16 @@ export class VoiceToolsService {
     agentId: string,
     functionName: string,
     args: Record<string, unknown>,
+    sessionState?: Record<string, unknown>,
   ) {
     const tool = (await this.getAgentTools(clientId, agentId)).find(
       (candidate) => candidate.name === functionName,
     );
     if (!tool) {
-      return { ok: false, error: `Tool ${functionName} nao encontrada para este agente.` };
+      return {
+        ok: false,
+        error: `Tool ${functionName} nao encontrada para este agente.`,
+      };
     }
     if (!tool.url) {
       return { ok: false, error: `Tool ${tool.apiName} sem URL configurada.` };
@@ -121,9 +124,13 @@ export class VoiceToolsService {
 
     let url = tool.url;
     for (const parameter of this.extractUrlParams(url)) {
-      const value = args[parameter];
+      const value =
+        args[parameter] ?? this.lookupSessionValue(sessionState, parameter);
       if (value === undefined || value === null || value === '') {
-        return { ok: false, error: `Parametro obrigatorio ausente: ${parameter}` };
+        return {
+          ok: false,
+          error: `Parametro obrigatorio ausente: ${parameter}`,
+        };
       }
       url = url.replace(`{${parameter}}`, encodeURIComponent(String(value)));
     }
@@ -131,10 +138,14 @@ export class VoiceToolsService {
     const method = (tool.method || 'GET').toUpperCase();
     const headers = this.asRecord(tool.headers) as Record<string, string>;
     const init: RequestInit = { method, headers };
-    const body = this.buildBody(tool.body, args);
+    const body = this.buildBody(tool.body, args, sessionState);
     if (method !== 'GET' && method !== 'HEAD' && body !== undefined) {
       init.body = JSON.stringify(body);
-      if (!Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')) {
+      if (
+        !Object.keys(headers).some(
+          (key) => key.toLowerCase() === 'content-type',
+        )
+      ) {
         headers['Content-Type'] = 'application/json';
       }
     }
@@ -148,7 +159,9 @@ export class VoiceToolsService {
         ? await response.json()
         : await response.text();
 
-      const extractConfig = tool.extract_data as Record<string, any> | undefined;
+      const extractConfig = tool.extract_data as
+        | Record<string, any>
+        | undefined;
       const fallbackMessage =
         extractConfig?._fallback_message ||
         extractConfig?.fallback_message ||
@@ -168,7 +181,12 @@ export class VoiceToolsService {
         extractConfig &&
         typeof extractConfig === 'object' &&
         Object.keys(extractConfig).filter(
-          (k) => !['_fallback_message', 'fallback_message', 'validate_field'].includes(k),
+          (k) =>
+            ![
+              '_fallback_message',
+              'fallback_message',
+              'validate_field',
+            ].includes(k),
         ).length > 0;
 
       let consolidatedData: Record<string, unknown> = {};
@@ -179,15 +197,13 @@ export class VoiceToolsService {
       }
 
       // Suporte a API encadeada (next_api_id ou next_tool)
-      const nextApiId = (headers.next_api_id as string) || (tool as any).next_tool;
+      const nextApiId =
+        (headers.next_api_id as string) || (tool as any).next_tool;
       if (response.ok && nextApiId) {
         try {
           const nextApi = await this.prisma.painel_apis.findFirst({
             where: {
-              OR: [
-                { id: nextApiId },
-                { name: nextApiId },
-              ],
+              OR: [{ id: nextApiId }, { name: nextApiId }],
               active: true,
             },
           });
@@ -201,6 +217,7 @@ export class VoiceToolsService {
               agentId,
               this.toFunctionName(nextApi.name, nextApi.id),
               nextArgs,
+              sessionState,
             );
             if (nextResult && nextResult.ok) {
               consolidatedData = {
@@ -211,7 +228,9 @@ export class VoiceToolsService {
             }
           }
         } catch (chainErr) {
-          this.logger.warn(`Falha ao executar API encadeada no canal de voz (${nextApiId}): ${chainErr}`);
+          this.logger.warn(
+            `Falha ao executar API encadeada no canal de voz (${nextApiId}): ${chainErr}`,
+          );
         }
       }
 
@@ -229,7 +248,9 @@ export class VoiceToolsService {
         resultado: raw ?? fallbackMessage,
       };
     } catch (error) {
-      const extractConfig = tool.extract_data as Record<string, any> | undefined;
+      const extractConfig = tool.extract_data as
+        | Record<string, any>
+        | undefined;
       const fallbackMessage =
         extractConfig?._fallback_message ||
         extractConfig?.fallback_message ||
@@ -251,28 +272,45 @@ export class VoiceToolsService {
     args: Record<string, unknown>,
   ) {
     const subagent = (await this.findAllowedSubagents(clientId, agentId)).find(
-      (candidate) => this.toSubagentFunctionName(candidate.name) === functionName,
+      (candidate) =>
+        this.toSubagentFunctionName(candidate.name) === functionName,
     );
     if (!subagent) {
-      return { ok: false, error: `Subagente ${functionName} nao autorizado para este agente.` };
+      return {
+        ok: false,
+        error: `Subagente ${functionName} nao autorizado para este agente.`,
+      };
     }
 
     const provider = (subagent.llm_provider || 'gemini').toLowerCase();
     if (provider !== 'gemini') {
-      return { ok: false, error: `Provedor ${provider} nao suportado para subagentes de voz.` };
+      return {
+        ok: false,
+        error: `Provedor ${provider} nao suportado para subagentes de voz.`,
+      };
     }
 
-    const apiKey = await this.providerKeyResolver.resolveApiKey(clientId, provider);
+    const apiKey = await this.providerKeyResolver.resolveApiKey(
+      clientId,
+      provider,
+    );
     if (!apiKey) {
-      return { ok: false, error: 'Chave Gemini nao configurada para o subagente.' };
+      return {
+        ok: false,
+        error: 'Chave Gemini nao configurada para o subagente.',
+      };
     }
 
-    const task = typeof args.task === 'string' ? args.task : JSON.stringify(args.task || '');
-    const contextData = typeof args.context_data === 'string'
-      ? args.context_data
-      : args.context_data
-        ? JSON.stringify(args.context_data)
-        : 'Nenhum dado adicional fornecido.';
+    const task =
+      typeof args.task === 'string'
+        ? args.task
+        : JSON.stringify(args.task || '');
+    const contextData =
+      typeof args.context_data === 'string'
+        ? args.context_data
+        : args.context_data
+          ? JSON.stringify(args.context_data)
+          : 'Nenhum dado adicional fornecido.';
     const model = subagent.model || 'gemini-2.5-flash-lite';
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -281,12 +319,16 @@ export class VoiceToolsService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: subagent.system_prompt }] },
-          contents: [{
-            role: 'user',
-            parts: [{
-              text: `[TAREFA DELEGADA PELO AGENTE DE VOZ]\n${task}\n\n[DADOS DE CONTEXTO]\n${contextData}`,
-            }],
-          }],
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: `[TAREFA DELEGADA PELO AGENTE DE VOZ]\n${task}\n\n[DADOS DE CONTEXTO]\n${contextData}`,
+                },
+              ],
+            },
+          ],
           generationConfig: { temperature: subagent.temperature ?? 0.7 },
         }),
       },
@@ -327,11 +369,15 @@ export class VoiceToolsService {
       : Array.isArray(transitions.allowed_subagent_ids)
         ? transitions.allowed_subagent_ids
         : [];
-    const values = allowed.filter((value): value is string => typeof value === 'string');
+    const values = allowed.filter(
+      (value): value is string => typeof value === 'string',
+    );
     if (!values.length) return [];
 
     const isUuid = (value: string) =>
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        value,
+      );
     const ids = values.filter(isUuid);
     const names = values.filter((value) => !isUuid(value));
     const conditions: Array<Record<string, unknown>> = [];
@@ -393,7 +439,11 @@ export class VoiceToolsService {
     };
   }
 
-  private buildBody(bodyValue: unknown, args: Record<string, unknown>) {
+  private buildBody(
+    bodyValue: unknown,
+    args: Record<string, unknown>,
+    sessionState?: Record<string, unknown>,
+  ) {
     const body = this.asRecord(bodyValue);
     if (!Object.keys(body).length) return undefined;
     const output: Record<string, unknown> = {};
@@ -408,14 +458,43 @@ export class VoiceToolsService {
         if (resolved === undefined && key.includes('.')) {
           resolved = args[key.split('.').pop()!];
         }
+        if (resolved === undefined) {
+          resolved = this.lookupSessionValue(sessionState, key);
+        }
       } else if (config.source === 'system') {
-        const varName = typeof config.value === 'string' ? config.value.replace(/[{}]/g, '').trim() : '';
-        resolved = (args as any)[varName] ?? (args as any)[key] ?? (args as any)['cliente_cpf'] ?? (args as any)['cpf'] ?? config.value;
+        // "Dado de Outra API / Sessão": resolve na ordem estado da sessão ->
+        // argumentos da IA. Se nada for encontrado, o campo é OMITIDO
+        // (nunca enviar o nome da variável literal como valor).
+        const varName =
+          typeof config.value === 'string'
+            ? config.value.replace(/[{}]/g, '').trim()
+            : '';
+        const keyLower = key.toLowerCase();
+        const isCpfField =
+          varName.toLowerCase().includes('cpf') || keyLower.includes('cpf');
+        resolved =
+          this.lookupSessionValue(sessionState, varName) ??
+          this.lookupSessionValue(sessionState, key) ??
+          (isCpfField
+            ? this.lookupSessionValue(sessionState, 'cliente_cpf')
+            : undefined) ??
+          (args as any)[varName] ??
+          (args as any)[key] ??
+          (args as any)['cliente_cpf'] ??
+          (args as any)['cpf'];
       } else if ('value' in config) {
         const rawVal = config.value;
-        if (typeof rawVal === 'string' && rawVal.startsWith('{{') && rawVal.endsWith('}}')) {
+        if (
+          typeof rawVal === 'string' &&
+          rawVal.startsWith('{{') &&
+          rawVal.endsWith('}}')
+        ) {
           const varName = rawVal.replace(/[{}]/g, '').trim();
-          resolved = (args as any)[varName] ?? (args as any)[key] ?? rawVal;
+          resolved =
+            (args as any)[varName] ??
+            (args as any)[key] ??
+            this.lookupSessionValue(sessionState, varName) ??
+            rawVal;
         } else {
           resolved = rawVal;
         }
@@ -423,12 +502,20 @@ export class VoiceToolsService {
         resolved = value;
       }
 
-      if (config.type === 'number' && resolved !== undefined && resolved !== null) {
+      if (
+        config.type === 'number' &&
+        resolved !== undefined &&
+        resolved !== null
+      ) {
         const numeric = Number(resolved);
         if (!Number.isNaN(numeric)) resolved = numeric;
       }
       if (config.type === 'boolean') {
-        resolved = resolved === true || resolved === 'true' || resolved === 1 || resolved === '1';
+        resolved =
+          resolved === true ||
+          resolved === 'true' ||
+          resolved === 1 ||
+          resolved === '1';
       }
       this.setDeepValue(output, key, resolved);
     }
@@ -438,7 +525,10 @@ export class VoiceToolsService {
   private applyExtractData(raw: unknown, extractData: unknown) {
     const mapping = this.asRecord(extractData);
     const keys = Object.keys(mapping).filter(
-      (k) => !['_fallback_message', 'fallback_message', 'validate_field'].includes(k),
+      (k) =>
+        !['_fallback_message', 'fallback_message', 'validate_field'].includes(
+          k,
+        ),
     );
     if (!keys.length || !raw || typeof raw !== 'object') return raw;
     const result: Record<string, unknown> = {};
@@ -446,7 +536,10 @@ export class VoiceToolsService {
       const path = mapping[key];
       if (typeof path === 'string') result[key] = this.getByPath(raw, path);
       else if (path && typeof path === 'object' && 'path' in path) {
-        result[key] = this.getByPath(raw, String((path as { path: unknown }).path));
+        result[key] = this.getByPath(
+          raw,
+          String((path as { path: unknown }).path),
+        );
       }
     }
     return result;
@@ -460,17 +553,40 @@ export class VoiceToolsService {
 
     if (direct !== undefined && direct !== null) return direct;
 
-    if (typeof value === 'object' && value !== null && 'data' in value && !path.startsWith('data.')) {
-      return path.split('.').reduce<unknown>((current, key) => {
-        if (!current || typeof current !== 'object') return undefined;
-        return (current as Record<string, unknown>)[key];
-      }, (value as any).data);
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      'data' in value &&
+      !path.startsWith('data.')
+    ) {
+      return path.split('.').reduce<unknown>(
+        (current, key) => {
+          if (!current || typeof current !== 'object') return undefined;
+          return (current as Record<string, unknown>)[key];
+        },
+        (value as any).data,
+      );
     }
 
     return undefined;
   }
 
-  private setDeepValue(target: Record<string, unknown>, path: string, value: unknown) {
+  private lookupSessionValue(
+    state: Record<string, unknown> | undefined,
+    path: string,
+  ): unknown {
+    if (!state || !path) return undefined;
+    return path.split('.').reduce<unknown>((current, part) => {
+      if (!current || typeof current !== 'object') return undefined;
+      return (current as Record<string, unknown>)[part];
+    }, state);
+  }
+
+  private setDeepValue(
+    target: Record<string, unknown>,
+    path: string,
+    value: unknown,
+  ) {
     const parts = path.split('.');
     let current = target;
     parts.forEach((part, index) => {
@@ -478,7 +594,8 @@ export class VoiceToolsService {
         current[part] = value;
         return;
       }
-      if (!current[part] || typeof current[part] !== 'object') current[part] = {};
+      if (!current[part] || typeof current[part] !== 'object')
+        current[part] = {};
       current = current[part] as Record<string, unknown>;
     });
   }

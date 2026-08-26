@@ -616,6 +616,24 @@ export class VoiceGateway
               }> = [];
               let requestedAgent: any = null;
               let switchReason = '';
+              // Configs das APIs do agente (para aplicar save_to_session)
+              let apiToolRecords: Awaited<
+                ReturnType<typeof this.voiceToolsService.getAgentTools>
+              > = [];
+              if (
+                functionCalls.some(
+                  (call: any) => !call?.name?.startsWith('subagent_'),
+                )
+              ) {
+                try {
+                  apiToolRecords = await this.voiceToolsService.getAgentTools(
+                    session.clientId,
+                    session.agentId,
+                  );
+                } catch {
+                  apiToolRecords = [];
+                }
+              }
               for (const call of functionCalls) {
                 const startedAt = Date.now();
                 const args = call.args || {};
@@ -623,6 +641,41 @@ export class VoiceGateway
                   name: call.name,
                   arguments: args,
                 });
+
+                if (call.name === 'set_call_variable') {
+                  const varName =
+                    typeof args.name === 'string' ? args.name.trim() : '';
+                  const varVal = args.value;
+                  if (
+                    varName &&
+                    varVal !== undefined &&
+                    varVal !== null &&
+                    varVal !== ''
+                  ) {
+                    session.state = { ...session.state, [varName]: varVal };
+                    await persistVoiceState();
+                    sendDebug(
+                      'session',
+                      `💾 Variável "${varName}" salva na sessão pelo assistente.`,
+                      { state: summarizeState(session.state) },
+                    );
+                    responses.push({
+                      id: call.id,
+                      name: call.name,
+                      response: { ok: true, saved: { [varName]: varVal } },
+                    });
+                  } else {
+                    responses.push({
+                      id: call.id,
+                      name: call.name,
+                      response: {
+                        ok: false,
+                        error: 'Informe "name" e "value".',
+                      },
+                    });
+                  }
+                  continue;
+                }
 
                 const isSubagent = call.name.startsWith('subagent_');
                 const response = isSubagent
@@ -637,6 +690,7 @@ export class VoiceGateway
                       session.agentId,
                       call.name,
                       args,
+                      session.state,
                     );
 
                 // Transição pós-API: avalia condições de ativação sobre o
@@ -658,11 +712,22 @@ export class VoiceGateway
                               ),
                           ),
                         );
-                  if (Object.keys(returnedState).length > 0) {
+                  // Campos marcados como "Salvar valor enviado na sessão"
+                  const sessionSaves = collectSessionSavesBound(
+                    apiToolRecords,
+                    call.name,
+                    args,
+                  );
+                  const hasReturnedState =
+                    Object.keys(returnedState).length > 0;
+                  const hasSessionSaves = Object.keys(sessionSaves).length > 0;
+                  if (hasReturnedState || hasSessionSaves) {
                     session.state = {
                       ...session.state,
-                      retorno_api: returnedState,
-                      ...returnedState,
+                      ...(hasReturnedState
+                        ? { retorno_api: returnedState, ...returnedState }
+                        : {}),
+                      ...sessionSaves,
                     };
                     await persistVoiceState();
                     sendDebug(
@@ -723,6 +788,50 @@ export class VoiceGateway
               }
             };
 
+            const collectSessionSavesBound = (
+              tools: Awaited<
+                ReturnType<typeof this.voiceToolsService.getAgentTools>
+              >,
+              functionName: string,
+              args: Record<string, unknown>,
+            ): Record<string, unknown> => {
+              const tool = tools.find((t) => t.name === functionName);
+              if (!tool) return {};
+              const saves: Record<string, unknown> = {};
+              const configs: Record<string, any> = {
+                ...(typeof tool.body === 'object' && tool.body !== null
+                  ? (tool.body as Record<string, any>)
+                  : {}),
+                ...(typeof tool.parameters === 'object' &&
+                tool.parameters !== null
+                  ? (tool.parameters as Record<string, any>)
+                  : {}),
+              };
+              for (const [key, cfg] of Object.entries(configs)) {
+                const fieldCfg =
+                  cfg && typeof cfg === 'object'
+                    ? (cfg as Record<string, any>)
+                    : {};
+                const shouldSave =
+                  fieldCfg.save_to_session === true ||
+                  fieldCfg.save_to_session === 'true';
+                if (!shouldSave) continue;
+                const sessionVarName =
+                  typeof fieldCfg.session_variable === 'string' &&
+                  fieldCfg.session_variable.trim()
+                    ? fieldCfg.session_variable.trim()
+                    : key.replace(/\./g, '_');
+                let val = args[key];
+                if (val === undefined && key.includes('.')) {
+                  val = args[key.split('.').pop()!];
+                }
+                if (val !== undefined) {
+                  saves[sessionVarName] = val;
+                }
+              }
+              return saves;
+            };
+
             connectAgent = async (agent: any, handoffText?: string) => {
               const generation = ++session.providerGeneration;
               const voiceTools =
@@ -747,6 +856,31 @@ export class VoiceGateway
                 description,
                 parameters,
               }));
+
+              // Tool nativa: permite ao assistente salvar dados capturados na
+              // conversa (ex: CPF falado pelo cliente) no estado da sessão
+              voiceToolDeclarations.push({
+                name: 'set_call_variable',
+                description:
+                  'Salva uma variável no estado da sessão do atendimento. ' +
+                  'Use SEMPRE que o cliente informar um dado importante (ex: cpf, codigo_plano, forma_pagamento, status_atendimento) ' +
+                  'para que ele fique disponível para as próximas etapas e integrações.',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    name: {
+                      type: 'string',
+                      description:
+                        'Nome da variável (ex: cpf, codigo_plano, status_atendimento)',
+                    },
+                    value: {
+                      type: 'string',
+                      description: 'Valor a ser salvo (sempre como string)',
+                    },
+                  },
+                  required: ['name', 'value'],
+                },
+              });
 
               const agentName = agent
                 ? String(agent.service_step || agent.id)

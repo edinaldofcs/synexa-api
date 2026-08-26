@@ -2,7 +2,6 @@ generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
-
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
@@ -39,6 +38,7 @@ model companies {
   credential_audit_logs credential_audit_logs[]
   workflow_versions   workflow_versions[]
   voice_session_telemetry voice_session_telemetry[]
+  painel_interactions painel_interactions[]
 }
 
 model users {
@@ -134,7 +134,7 @@ model messages {
   response_agent_runs agent_runs[] @relation("AgentRunResponseMessage")
 
   @@index([conversation_id])
-  @@index([idempotency_key])
+  @@unique([company_id, idempotency_key])
   @@index([status])
 }
 
@@ -243,6 +243,7 @@ model painel_clients {
   credential_audit_logs credential_audit_logs[]
   workflow_versions   workflow_versions[]
   voice_session_telemetry voice_session_telemetry[]
+  painel_interactions painel_interactions[]
   voice_name                  String?
   audio_gate_enabled          Boolean?        @default(true)
   audio_gate_threshold        Int?            @default(500)
@@ -278,6 +279,7 @@ model painel_agents {
 
   painel_clients      painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
   painel_apis         painel_apis[]
+  painel_interactions painel_interactions[]
   agent_runs          agent_runs[]
 }
 
@@ -476,7 +478,7 @@ model inbound_events {
   @@index([company_id])
   @@index([client_id])
   @@index([status])
-  @@index([idempotency_key])
+  @@unique([client_id, channel_type, idempotency_key])
 }
 
 model outbox_events {
@@ -834,4 +836,107 @@ model voice_session_telemetry {
   @@index([client_id])
   @@index([conversation_id])
   @@index([created_at])
+}
+
+model painel_interactions {
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  // ── Identificação e Multi-tenancy ──
+  company_id                String    @db.Uuid
+  client_id                 String    @db.Uuid
+  agent_id                  String?   @db.Uuid
+  session_id                String    @unique
+
+  // ── Canal e Direção ──
+  channel                   String    @default("webchat") // voice_webrtc | voice_sip | whatsapp | webchat | telegram
+  direction                 String    @default("inbound") // inbound | outbound
+  interaction_mode          String    @default("both")    // voice | text | both
+
+  // ── Interlocutores ──
+  client_identifier         String?   // CPF, Telefone E.164, Remote JID
+  company_identifier        String?   // DID / Ramal / Número de Origem
+  client_name               String?
+  agent_name                String?
+
+  // ── Funil de Atendimento e Cobrança ──
+  /// 1. Alô / Detecção Humana
+  has_human_answer          Boolean   @default(false)
+  human_answered_at         DateTime? @db.Timestamptz(6)
+
+  /// 2. CPC: Contato com a Pessoa Certa (Right Party Contact)
+  is_right_party            Boolean   @default(false)
+  right_party_at            DateTime? @db.Timestamptz(6)
+
+  /// 3. CPCA: Contato com a Pessoa Certa com Apresentação da Dívida (Debt Presented)
+  is_debt_presented         Boolean   @default(false)
+  debt_presented_at         DateTime? @db.Timestamptz(6)
+  debt_amount               Decimal?  @db.Decimal(10, 2)
+
+  /// 4. Acordo Fechado / Formalizado (Agreement / Deal Closed)
+  is_agreement_reached      Boolean   @default(false)
+  agreement_at              DateTime? @db.Timestamptz(6)
+  agreement_id              String?
+  agreement_amount          Decimal?  @db.Decimal(10, 2)
+  payment_method            String?
+
+  /// 5. Promessa de Pagamento (Promise to Pay / PTP)
+  is_promise_to_pay         Boolean   @default(false)
+  promise_to_pay_at         DateTime? @db.Timestamptz(6)
+  promise_due_date          DateTime? @db.Date
+  promise_amount            Decimal?  @db.Decimal(10, 2)
+
+  disposition               String?   // NO_ANSWER | ANSWER_NOT_RPC | CPC_NO_DEAL | CPCA_DEBT_PRESENTED | AGREEMENT_CLOSED | PTP | REFUSAL
+  service_step              String?
+  tagcode                   String?
+  status                    String    @default("ongoing") // ongoing | completed | abandoned | transferred | failed
+
+  // ── Telemetria de Voz e Interrupções (Barge-in) ──
+  barge_in_count            Int       @default(0)
+  avg_barge_in_latency_ms   Int?
+  avg_first_byte_latency_ms Int?
+  is_answering_machine      Boolean   @default(false)
+
+  // ── Telefonia e Gravação ──
+  call_id                   String?
+  call_status               String?   // answered | busy | no_answer | failed
+  recording_url             String?
+  duration_seconds          Int       @default(0)
+  billable_seconds          Int       @default(0)
+  hangup_cause              String?
+
+  // ── Consumo de LLM e Métricas ──
+  llm_provider              String?
+  llm_model                 String?
+  total_tokens              Int       @default(0)
+  prompt_tokens             Int       @default(0)
+  completion_tokens         Int       @default(0)
+  estimated_cost_usd        Decimal?  @db.Decimal(10, 6)
+  avg_latency_ms            Int?
+
+  // ── Análise Pós-Atendimento ──
+  sentiment                 String?   // positive | neutral | negative
+  summary                   String?   @db.Text
+
+  // ── Conteúdo e Contexto ──
+  messages                  Json      @default("[]") @db.JsonB
+  context_variables         Json      @default("{}") @db.JsonB
+
+  // ── Timestamps ──
+  created_at                DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  started_at                DateTime? @db.Timestamptz(6)
+  ended_at                  DateTime? @db.Timestamptz(6)
+
+  // ── Relações ──
+  companies                 companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients            painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  painel_agents             painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
+
+  // ── Índices ──
+  @@index([company_id, client_id, created_at(sort: Desc)])
+  @@index([client_id, has_human_answer, is_right_party, is_debt_presented, is_agreement_reached, is_promise_to_pay])
+  @@index([client_identifier])
+  @@index([disposition])
+  @@index([call_id])
+  @@index([created_at(sort: Desc)])
 }

@@ -28,6 +28,7 @@ import { BillingModule } from './billing/billing.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SubagentsModule } from './subagents/subagents.module';
 import { WorkflowVersionsModule } from './workflow-versions/workflow-versions.module';
+import { InteractionsModule } from './interactions/interactions.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -70,6 +71,7 @@ import { AppService } from './app.service';
     ImportsModule,
     BillingModule,
     AnalyticsModule,
+    InteractionsModule,
   ],
   controllers: [AppController],
   providers: [

@@ -1,7 +1,10 @@
 import { Logger } from '@nestjs/common';
 import { ITelephonyAdapter } from '../adapters/telephony-adapter.interface';
 import { GeminiLiveVoiceProvider } from '../providers/gemini-live-voice.provider';
-import { AudioGateService, AudioGateSession } from '../services/audio-gate.service';
+import {
+  AudioGateService,
+  AudioGateSession,
+} from '../services/audio-gate.service';
 import { VoiceToolsService } from '../voice-tools.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -42,6 +45,8 @@ export class VoiceCallSession {
   private pricingService: ModelPricingService;
   private prisma: PrismaService;
   private config: VoiceCallSessionConfig;
+  /** Estado da sessão (variáveis mapeadas da telefonia + retornos de API) */
+  public sessionState: Record<string, unknown> = {};
 
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
@@ -98,6 +103,7 @@ export class VoiceCallSession {
       inboundConfig,
       'voice',
     );
+    this.sessionState = { ...contextVariables };
 
     // 2. Interpola variáveis no Prompt do Agente
     const systemPrompt = selectedAgent
@@ -138,7 +144,9 @@ export class VoiceCallSession {
           },
         });
       } catch (err: any) {
-        this.logger.error(`Erro ao criar conversa ou estado no banco: ${err.message}`);
+        this.logger.error(
+          `Erro ao criar conversa ou estado no banco: ${err.message}`,
+        );
       }
     }
 
@@ -146,8 +154,14 @@ export class VoiceCallSession {
     let toolsDeclarations: any[] = [];
     if (this.voiceToolsService && clientId && selectedAgent?.id) {
       try {
-        const agentTools = await this.voiceToolsService.getAgentTools(clientId, selectedAgent.id);
-        const agentSubagents = await this.voiceToolsService.getAgentSubagents(clientId, selectedAgent.id);
+        const agentTools = await this.voiceToolsService.getAgentTools(
+          clientId,
+          selectedAgent.id,
+        );
+        const agentSubagents = await this.voiceToolsService.getAgentSubagents(
+          clientId,
+          selectedAgent.id,
+        );
         toolsDeclarations = [...agentTools, ...agentSubagents].map(
           ({ name, description, parameters }) => ({
             name,
@@ -163,11 +177,16 @@ export class VoiceCallSession {
     // Adiciona tool nativa de controle de variáveis de telefonia
     toolsDeclarations.push({
       name: 'set_call_variable',
-      description: 'Define ou atualiza uma variável na telefonia/PBX para o fluxo da chamada ou CRM.',
+      description:
+        'Define ou atualiza uma variável na telefonia/PBX para o fluxo da chamada ou CRM.',
       parameters: {
         type: 'OBJECT',
         properties: {
-          name: { type: 'STRING', description: 'Nome da variável (ex: status_atendimento, cpf_confirmado, motivo_contato)' },
+          name: {
+            type: 'STRING',
+            description:
+              'Nome da variável (ex: status_atendimento, cpf_confirmado, motivo_contato)',
+          },
           value: { type: 'STRING', description: 'Valor a ser gravado' },
         },
         required: ['name', 'value'],
@@ -189,9 +208,13 @@ export class VoiceCallSession {
       model: this.config.model || 'gemini-2.0-flash-exp',
       voiceName: this.config.voiceName || 'Aoede',
       systemPrompt,
-      tools: toolsDeclarations.length ? [{ functionDeclarations: toolsDeclarations }] : undefined,
+      tools: toolsDeclarations.length
+        ? [{ functionDeclarations: toolsDeclarations }]
+        : undefined,
       onSetupComplete: () => {
-        this.logger.log(`🎙️ [VoiceCallSession] Provedor de IA conectado para chamada ${this.id}`);
+        this.logger.log(
+          `🎙️ [VoiceCallSession] Provedor de IA conectado para chamada ${this.id}`,
+        );
       },
       onAudio: (base64Audio) => {
         const pcm24k = Buffer.from(base64Audio, 'base64');
@@ -252,20 +275,67 @@ export class VoiceCallSession {
               const varName = call.args?.name;
               const varVal = call.args?.value;
               if (varName && varVal && this.telephonyAdapter.setVariable) {
-                await this.telephonyAdapter.setVariable(String(varName), String(varVal));
-                return { id: call.id, name: call.name, response: { ok: true, saved: { [varName]: varVal } } };
+                await this.telephonyAdapter.setVariable(
+                  String(varName),
+                  String(varVal),
+                );
+                return {
+                  id: call.id,
+                  name: call.name,
+                  response: { ok: true, saved: { [varName]: varVal } },
+                };
               }
-              return { id: call.id, name: call.name, response: { ok: false, error: 'Telephony does not support setVariable' } };
+              return {
+                id: call.id,
+                name: call.name,
+                response: {
+                  ok: false,
+                  error: 'Telephony does not support setVariable',
+                },
+              };
             }
 
             if (!this.voiceToolsService) {
-              return { id: call.id, name: call.name, response: { ok: false, error: 'Tools service unavailable' } };
+              return {
+                id: call.id,
+                name: call.name,
+                response: { ok: false, error: 'Tools service unavailable' },
+              };
             }
 
             const isSubagent = call.name.startsWith('subagent_');
             const response = isSubagent
-              ? await this.voiceToolsService.executeSubagent(clientId, selectedAgent.id, call.name, call.args || {})
-              : await this.voiceToolsService.execute(clientId, selectedAgent.id, call.name, call.args || {});
+              ? await this.voiceToolsService.executeSubagent(
+                  clientId,
+                  selectedAgent.id,
+                  call.name,
+                  call.args || {},
+                )
+              : await this.voiceToolsService.execute(
+                  clientId,
+                  selectedAgent.id,
+                  call.name,
+                  call.args || {},
+                  this.sessionState,
+                );
+
+            if (
+              response &&
+              typeof response === 'object' &&
+              (response as Record<string, unknown>).ok !== false
+            ) {
+              const apiResponse = response as Record<string, any>;
+              const returnedState =
+                apiResponse?.data && typeof apiResponse.data === 'object'
+                  ? apiResponse.data
+                  : Object.fromEntries(
+                      Object.entries(apiResponse).filter(
+                        ([key]) =>
+                          !['ok', 'status', 'message', 'error'].includes(key),
+                      ),
+                    );
+              this.sessionState = { ...this.sessionState, ...returnedState };
+            }
 
             return { id: call.id, name: call.name, response };
           }),
@@ -278,10 +348,14 @@ export class VoiceCallSession {
         this.outputTokens = meta.candidatesTokenCount || 0;
       },
       onError: (err) => {
-        this.logger.error(`❌ [VoiceCallSession] Erro no Gemini Live: ${err.message}`);
+        this.logger.error(
+          `❌ [VoiceCallSession] Erro no Gemini Live: ${err.message}`,
+        );
       },
       onClose: () => {
-        this.logger.log(`🛑 [VoiceCallSession] Sessão IA encerrada para chamada ${this.id}`);
+        this.logger.log(
+          `🛑 [VoiceCallSession] Sessão IA encerrada para chamada ${this.id}`,
+        );
       },
     });
 
@@ -320,7 +394,10 @@ export class VoiceCallSession {
       this.liveProvider.close();
       this.telephonyAdapter.close();
 
-      const durationSeconds = Math.max(1, Math.round((Date.now() - this.startTime) / 1000));
+      const durationSeconds = Math.max(
+        1,
+        Math.round((Date.now() - this.startTime) / 1000),
+      );
       const stats = this.gateSession?.getStats();
       const rawCost = this.pricingService.calculateVoiceLiveCost({
         durationSeconds,
@@ -328,7 +405,11 @@ export class VoiceCallSession {
         outputTokens: this.outputTokens,
       });
 
-      if (this.config.clientId && this.config.companyId && this.conversationId) {
+      if (
+        this.config.clientId &&
+        this.config.companyId &&
+        this.conversationId
+      ) {
         await this.prisma.voice_session_telemetry.create({
           data: {
             company_id: this.config.companyId,
@@ -361,6 +442,53 @@ export class VoiceCallSession {
             },
           },
         });
+
+        // Sincroniza interação unificada (painel_interactions)
+        if (this.config.clientId && this.config.companyId) {
+          try {
+            await this.prisma.painel_interactions.upsert({
+              where: { session_id: this.conversationId },
+              create: {
+                company_id: this.config.companyId,
+                client_id: this.config.clientId,
+                agent_id: this.config.agentId || null,
+                session_id: this.conversationId,
+                channel: 'voice_webrtc',
+                direction: 'inbound',
+                interaction_mode: 'voice',
+                has_human_answer: true,
+                human_answered_at: new Date(this.startTime),
+                barge_in_count: this.interruptedCount,
+                duration_seconds: durationSeconds,
+                billable_seconds: durationSeconds,
+                total_tokens: this.totalTokens,
+                prompt_tokens: this.inputTokens,
+                completion_tokens: this.outputTokens,
+                estimated_cost_usd: rawCost as any,
+                llm_model: this.config.model || 'gemini-2.0-flash-exp',
+                started_at: new Date(this.startTime),
+                ended_at: new Date(),
+                status: 'completed',
+              },
+              update: {
+                has_human_answer: true,
+                barge_in_count: this.interruptedCount,
+                duration_seconds: durationSeconds,
+                billable_seconds: durationSeconds,
+                total_tokens: this.totalTokens,
+                prompt_tokens: this.inputTokens,
+                completion_tokens: this.outputTokens,
+                estimated_cost_usd: rawCost as any,
+                ended_at: new Date(),
+                status: 'completed',
+              },
+            });
+          } catch (intErr: any) {
+            this.logger.warn(
+              `Falha ao registrar painel_interactions na sessão de voz: ${intErr.message}`,
+            );
+          }
+        }
       }
 
       this.logger.log(

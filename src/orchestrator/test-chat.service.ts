@@ -128,7 +128,7 @@ export class TestChatService {
       k.includes('...') ||
       k.startsWith('enc:');
 
-    let finalKey = isMaskedOrPlaceholder(apiKey) ? '' : (apiKey?.trim() || '');
+    let finalKey = isMaskedOrPlaceholder(apiKey) ? '' : apiKey?.trim() || '';
 
     if (!finalKey) {
       finalKey = await this.providerKeyResolver.resolveApiKey(
@@ -205,9 +205,14 @@ export class TestChatService {
       companyId = client.company_id;
 
       const metadata = (client.metadata as any) || {};
-      const inboundConfig = metadata.inbound_variable_mapping as InboundMappingConfig;
+      const inboundConfig =
+        metadata.inbound_variable_mapping as InboundMappingConfig;
       const mapper = new InboundDataMapperService();
-      const mappedInbound = mapper.mapInboundData(metadata, inboundConfig, originChannel || 'webchat');
+      const mappedInbound = mapper.mapInboundData(
+        metadata,
+        inboundConfig,
+        originChannel || 'webchat',
+      );
 
       contextVariables = {
         ...this.sanitizeContextVariables(metadata),
@@ -286,7 +291,9 @@ export class TestChatService {
       }
 
       if (agent?.interaction_mode === 'voice') {
-        throw new Error('Este agente está configurado apenas para atendimento por voz.');
+        throw new Error(
+          'Este agente está configurado apenas para atendimento por voz.',
+        );
       }
 
       if (agent) {
@@ -327,21 +334,28 @@ export class TestChatService {
             : [];
         if (allowedSubagents.length > 0) {
           const isUuid = (val: string) =>
-            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+              val,
+            );
           const uuids = allowedSubagents.filter(isUuid);
           const names = allowedSubagents.filter((val) => !isUuid(val));
-          const orConditions: Array<{ id?: { in: string[] }; name?: { in: string[] } }> = [];
+          const orConditions: Array<{
+            id?: { in: string[] };
+            name?: { in: string[] };
+          }> = [];
           if (uuids.length > 0) orConditions.push({ id: { in: uuids } });
           if (names.length > 0) orConditions.push({ name: { in: names } });
 
           if (orConditions.length > 0) {
-            const subagentRecords = await this.prisma.painel_subagents.findMany({
-              where: {
-                client_id: clientId,
-                is_active: true,
-                OR: orConditions,
+            const subagentRecords = await this.prisma.painel_subagents.findMany(
+              {
+                where: {
+                  client_id: clientId,
+                  is_active: true,
+                  OR: orConditions,
+                },
               },
-            });
+            );
             for (const sub of subagentRecords) {
               apiTools.push(this.buildSubagentApiTool(sub));
             }
@@ -662,6 +676,22 @@ export class TestChatService {
               current_agent_id: activation.agent.id,
               pending_agent_id: null,
             });
+            await this.syncPainelInteraction({
+              companyId,
+              clientId,
+              agentId: activation.agent.id,
+              agentName: activation.agent.service_step || activation.agent.id,
+              sessionId: conversationId,
+              channel: originChannel || 'webchat',
+              userMessage: inboundContent,
+              assistantMessage: immediateResult.result.text,
+              contextVariables: immediateResult.contextVariables,
+              toolCalls: immediateResult.result.toolCalls || [],
+              usage: immediateResult.result.usage,
+              provider: immediateResult.provider,
+              model: immediateResult.model,
+            });
+
             return {
               ...immediateResult.result,
               agentName: activation.agent.service_step || activation.agent.id,
@@ -705,12 +735,12 @@ export class TestChatService {
                 select: { metadata: true },
               })
             : null;
-          const clientMeta = (client?.metadata as Record<string, unknown>) || {};
+          const clientMeta =
+            (client?.metadata as Record<string, unknown>) || {};
           const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
 
-          const freshState = await this.conversationsService.getState(
-            conversationId,
-          );
+          const freshState =
+            await this.conversationsService.getState(conversationId);
           const combinedState = {
             ...contextVariables,
             ...freshState,
@@ -726,7 +756,9 @@ export class TestChatService {
               originChannel: originChannel,
               toolNames: (result.toolCalls || [])
                 .map((call: any) => call?.name)
-                .filter((name: unknown): name is string => typeof name === 'string'),
+                .filter(
+                  (name: unknown): name is string => typeof name === 'string',
+                ),
               state: combinedState,
             });
           }
@@ -759,7 +791,7 @@ export class TestChatService {
         }
       }
 
-      return {
+      const finalResponse = {
         ...result,
         agentName: resolvedAgentName,
         debug: {
@@ -779,6 +811,25 @@ export class TestChatService {
           crmRecord,
         },
       };
+
+      // Sincroniza interação unificada (painel_interactions)
+      await this.syncPainelInteraction({
+        companyId,
+        clientId,
+        agentId: resolvedAgentId || agentId,
+        agentName: resolvedAgentName,
+        sessionId: conversationId,
+        channel: originChannel || 'webchat',
+        userMessage: inboundContent,
+        assistantMessage: result.text,
+        contextVariables,
+        toolCalls: result.toolCalls || [],
+        usage: result.usage,
+        provider,
+        model,
+      });
+
+      return finalResponse;
     } finally {
       await this.redisService.releaseLock(lockKey);
     }
@@ -1082,9 +1133,13 @@ export class TestChatService {
       if (agent.id === currentAgentId || agent.interaction_mode === 'voice') {
         continue;
       }
-      const conditions = agent.activation_conditions as ActivationConditionGroup | null;
+      const conditions =
+        agent.activation_conditions as ActivationConditionGroup | null;
       if (!conditions?.conditions?.length) continue;
-      const evaluation = evaluateConditionsWithDetails(conditions, contextVariables);
+      const evaluation = evaluateConditionsWithDetails(
+        conditions,
+        contextVariables,
+      );
       if (evaluation.matched) {
         return { agent, mode: agent.activation_mode || 'on_next_message' };
       }
@@ -1164,10 +1219,15 @@ export class TestChatService {
         : [];
     if (allowedSubagents.length > 0) {
       const isUuid = (val: string) =>
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          val,
+        );
       const uuids = allowedSubagents.filter(isUuid);
       const names = allowedSubagents.filter((val) => !isUuid(val));
-      const orConditions: Array<{ id?: { in: string[] }; name?: { in: string[] } }> = [];
+      const orConditions: Array<{
+        id?: { in: string[] };
+        name?: { in: string[] };
+      }> = [];
       if (uuids.length > 0) orConditions.push({ id: { in: uuids } });
       if (names.length > 0) orConditions.push({ name: { in: names } });
 
@@ -1253,7 +1313,8 @@ export class TestChatService {
     systemPrompt: string | undefined,
     contextVariables: Record<string, unknown>,
   ) {
-    const schema = (contextVariables._variable_schema as Record<string, unknown>) || null;
+    const schema =
+      (contextVariables._variable_schema as Record<string, unknown>) || null;
     let crmInstruction = '';
     if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {
       const fieldList = schema.fields
@@ -1272,7 +1333,10 @@ export class TestChatService {
     if (!entries.length && !crmInstruction) return systemPrompt;
 
     const basePrompt = (systemPrompt || '') + crmInstruction;
-    const replacedPrompt = resolvePromptTemplateString(basePrompt, contextVariables);
+    const replacedPrompt = resolvePromptTemplateString(
+      basePrompt,
+      contextVariables,
+    );
 
     if (!entries.length) return replacedPrompt;
 
@@ -1538,11 +1602,13 @@ export class TestChatService {
         properties: {
           task: {
             type: 'string',
-            description: 'Instrução ou pergunta detalhada a ser resolvida pelo subagente especialista.',
+            description:
+              'Instrução ou pergunta detalhada a ser resolvida pelo subagente especialista.',
           },
           context_data: {
             type: 'string',
-            description: 'Dados adicionais de contexto do cliente ou da conversa relevantes para a tarefa.',
+            description:
+              'Dados adicionais de contexto do cliente ou da conversa relevantes para a tarefa.',
           },
         },
         required: ['task'],
@@ -1560,8 +1626,12 @@ export class TestChatService {
   ): Promise<Record<string, unknown>> {
     const cleanName = subagentFnName.replace(/^subagent_/, '').toLowerCase();
     const isUuid = (val: string) =>
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
-    const orConditions: Array<{ id?: string; name?: string }> = [{ name: cleanName }];
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        val,
+      );
+    const orConditions: Array<{ id?: string; name?: string }> = [
+      { name: cleanName },
+    ];
     if (isUuid(cleanName)) {
       orConditions.push({ id: cleanName });
     }
@@ -1599,7 +1669,10 @@ export class TestChatService {
         provider,
       );
       if (!apiKey) {
-        apiKey = await this.providerKeyResolver.resolveApiKey('default', provider);
+        apiKey = await this.providerKeyResolver.resolveApiKey(
+          'default',
+          provider,
+        );
       }
       if (!apiKey) {
         if (provider.toLowerCase() === 'gemini') {
@@ -1787,16 +1860,19 @@ export class TestChatService {
       if (cfg.source !== 'ai') continue;
 
       let paramType = 'string';
-      let description = typeof cfg.value === 'string' && cfg.value.trim()
-        ? cfg.value
-        : `Valor do campo ${key} preenchido pela IA.`;
+      let description =
+        typeof cfg.value === 'string' && cfg.value.trim()
+          ? cfg.value
+          : `Valor do campo ${key} preenchido pela IA.`;
 
       if (cfg.type === 'number') {
         paramType = 'string';
-        description += ' (Deve ser um valor numérico formatado como string, ex: "123")';
+        description +=
+          ' (Deve ser um valor numérico formatado como string, ex: "123")';
       } else if (cfg.type === 'stringDecimal') {
         paramType = 'string';
-        description += ' (Deve ser um valor decimal formatado como string, ex: "123.45")';
+        description +=
+          ' (Deve ser um valor decimal formatado como string, ex: "123.45")';
       } else if (cfg.type === 'boolean') {
         paramType = 'boolean';
       } else if (cfg.type === 'raw' || cfg.type === 'json') {
@@ -1834,9 +1910,10 @@ export class TestChatService {
       if (cfg.source && cfg.source !== 'ai') continue;
 
       let paramType = 'string';
-      let description = typeof cfg.value === 'string' && cfg.value.trim()
-        ? cfg.value
-        : `Parametro ${key} para executar a API.`;
+      let description =
+        typeof cfg.value === 'string' && cfg.value.trim()
+          ? cfg.value
+          : `Parametro ${key} para executar a API.`;
 
       if (cfg.type === 'number' || cfg.type === 'stringDecimal') {
         paramType = 'string';
@@ -1874,6 +1951,17 @@ export class TestChatService {
       required: [...required],
       additionalProperties: false,
     };
+  }
+
+  private lookupSessionValue(
+    state: Record<string, unknown> | undefined,
+    path: string,
+  ): unknown {
+    if (!state || !path) return undefined;
+    return path.split('.').reduce<unknown>((current, part) => {
+      if (!current || typeof current !== 'object') return undefined;
+      return (current as Record<string, unknown>)[part];
+    }, state);
   }
 
   private extractUrlParams(url: string) {
@@ -2059,12 +2147,16 @@ export class TestChatService {
     return message;
   }
 
-  private async executeApiTool(tool: ApiTool, args: Record<string, unknown>) {
+  private async executeApiTool(
+    tool: ApiTool,
+    args: Record<string, unknown>,
+    sessionState?: Record<string, unknown>,
+  ) {
     if (!tool.url) throw new Error(`Tool ${tool.name} sem URL configurada`);
 
     let url = tool.url;
     for (const param of this.extractUrlParams(url)) {
-      const value = args[param];
+      const value = args[param] ?? this.lookupSessionValue(sessionState, param);
       if (value === undefined || value === null || value === '') {
         throw new Error(`Parametro obrigatorio ausente: ${param}`);
       }
@@ -2074,7 +2166,7 @@ export class TestChatService {
     const method = (tool.method || 'GET').toUpperCase();
     const headers = this.asRecord(tool.headers);
     const init: RequestInit = { method, headers: headers as HeadersInit };
-    const body = this.buildRequestBody(tool, args);
+    const body = this.buildRequestBody(tool, args, sessionState);
     if (method !== 'GET' && method !== 'HEAD' && body !== undefined) {
       init.body = typeof body === 'string' ? body : JSON.stringify(body);
       if (
@@ -2113,15 +2205,13 @@ export class TestChatService {
     }
 
     // Suporte a API encadeada (next_api_id ou next_tool)
-    const nextApiId = (headers.next_api_id as string) || (tool as any).next_tool;
+    const nextApiId =
+      (headers.next_api_id as string) || (tool as any).next_tool;
     if (response.ok && nextApiId) {
       try {
         const nextApi = await this.prisma.painel_apis.findFirst({
           where: {
-            OR: [
-              { id: nextApiId },
-              { name: nextApiId },
-            ],
+            OR: [{ id: nextApiId }, { name: nextApiId }],
             active: true,
           },
         });
@@ -2140,14 +2230,27 @@ export class TestChatService {
           };
           const nextArgs = {
             ...args,
-            ...(typeof extracted === 'object' && extracted !== null ? extracted : {}),
-            ...(typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}),
+            ...(typeof extracted === 'object' && extracted !== null
+              ? extracted
+              : {}),
+            ...(typeof raw === 'object' && raw !== null
+              ? (raw as Record<string, unknown>)
+              : {}),
           };
-          const nextResult = await this.executeApiTool(nextTool, nextArgs);
+          const nextResult = await this.executeApiTool(
+            nextTool,
+            nextArgs,
+            sessionState,
+          );
           if (nextResult && nextResult.ok) {
             result.data = {
-              ...(typeof result.data === 'object' && result.data !== null ? result.data : {}),
-              ...(typeof nextResult.data === 'object' && nextResult.data !== null ? nextResult.data : {}),
+              ...(typeof result.data === 'object' && result.data !== null
+                ? result.data
+                : {}),
+              ...(typeof nextResult.data === 'object' &&
+              nextResult.data !== null
+                ? nextResult.data
+                : {}),
               tem_ofertas: true,
             };
             result.chained_result = nextResult;
@@ -2328,7 +2431,11 @@ export class TestChatService {
     }
   }
 
-  private buildRequestBody(tool: ApiTool, args: Record<string, unknown>) {
+  private buildRequestBody(
+    tool: ApiTool,
+    args: Record<string, unknown>,
+    sessionState?: Record<string, unknown>,
+  ) {
     const body = this.asRecord(tool.body);
     if (!Object.keys(body).length) return undefined;
 
@@ -2349,14 +2456,43 @@ export class TestChatService {
             resolvedValue = args[leafKey];
           }
         }
+        if (resolvedValue === undefined) {
+          resolvedValue = this.lookupSessionValue(sessionState, key);
+        }
       } else if (cfg.source === 'system') {
-        const varName = typeof cfg.value === 'string' ? cfg.value.replace(/[{}]/g, '').trim() : '';
-        resolvedValue = (args as any)[varName] ?? (args as any)[key] ?? (args as any)['cliente_cpf'] ?? (args as any)['cpf'] ?? cfg.value;
+        // "Dado de Outra API / Sessão": resolve na ordem estado da sessão ->
+        // argumentos da IA. Se nada for encontrado, o campo é OMITIDO
+        // (nunca enviar o nome da variável literal como valor).
+        const varName =
+          typeof cfg.value === 'string'
+            ? cfg.value.replace(/[{}]/g, '').trim()
+            : '';
+        const isCpfField =
+          varName.toLowerCase().includes('cpf') ||
+          key.toLowerCase().includes('cpf');
+        resolvedValue =
+          this.lookupSessionValue(sessionState, varName) ??
+          this.lookupSessionValue(sessionState, key) ??
+          (isCpfField
+            ? this.lookupSessionValue(sessionState, 'cliente_cpf')
+            : undefined) ??
+          (args as any)[varName] ??
+          (args as any)[key] ??
+          (args as any)['cliente_cpf'] ??
+          (args as any)['cpf'];
       } else if ('value' in cfg) {
         const rawVal = cfg.value;
-        if (typeof rawVal === 'string' && rawVal.startsWith('{{') && rawVal.endsWith('}}')) {
+        if (
+          typeof rawVal === 'string' &&
+          rawVal.startsWith('{{') &&
+          rawVal.endsWith('}}')
+        ) {
           const varName = rawVal.replace(/[{}]/g, '').trim();
-          resolvedValue = (args as any)[varName] ?? (args as any)[key] ?? rawVal;
+          resolvedValue =
+            (args as any)[varName] ??
+            (args as any)[key] ??
+            this.lookupSessionValue(sessionState, varName) ??
+            rawVal;
         } else {
           resolvedValue = rawVal;
         }
@@ -2540,11 +2676,19 @@ export class TestChatService {
 
       if (value === null || value === undefined) continue;
 
-      if (operator === '==' && Array.isArray(value) && (compare_value === '[]' || compare_value === '')) {
+      if (
+        operator === '==' &&
+        Array.isArray(value) &&
+        (compare_value === '[]' || compare_value === '')
+      ) {
         if (value.length === 0) return return_value;
         continue;
       }
-      if (operator === '!=' && Array.isArray(value) && (compare_value === '[]' || compare_value === '')) {
+      if (
+        operator === '!=' &&
+        Array.isArray(value) &&
+        (compare_value === '[]' || compare_value === '')
+      ) {
         if (value.length > 0) return return_value;
         continue;
       }
@@ -2601,7 +2745,12 @@ export class TestChatService {
     if (res !== null && res !== undefined) return res;
 
     // Fallback: se o objeto possui encapsulamento .data (comum em n8n e APIs REST)
-    if (typeof value === 'object' && value !== null && 'data' in value && !path.startsWith('data.')) {
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      'data' in value &&
+      !path.startsWith('data.')
+    ) {
       const dataRes = this.resolveByPathDirect((value as any).data, path);
       if (dataRes !== null && dataRes !== undefined) return dataRes;
     }
@@ -3245,7 +3394,10 @@ export class TestChatService {
               result,
             });
           } else if (tool) {
-            result = await this.executeApiTool(tool, args);
+            const sessionState = nativeRagContext?.conversationId
+              ? await this.loadState(nativeRagContext.conversationId)
+              : {};
+            result = await this.executeApiTool(tool, args, sessionState);
             toolCalls.push({ name: tool.name, arguments: args, result });
           } else {
             result = { error: `Tool ${functionName} nao encontrada` };
@@ -3271,7 +3423,8 @@ export class TestChatService {
                 role: 'tool',
                 tool_call_id: remaining.id,
                 content: JSON.stringify({
-                  error: 'Execução cancelada: a tool anterior falhou (Fail-Fast).',
+                  error:
+                    'Execução cancelada: a tool anterior falhou (Fail-Fast).',
                 }),
               });
             }
@@ -3301,7 +3454,8 @@ export class TestChatService {
               role: 'tool',
               tool_call_id: remaining.id,
               content: JSON.stringify({
-                error: 'Execução cancelada: a tool anterior falhou (Fail-Fast).',
+                error:
+                  'Execução cancelada: a tool anterior falhou (Fail-Fast).',
               }),
             });
           }
@@ -3426,5 +3580,186 @@ export class TestChatService {
       .filter((model: any) => model.id)
       .map((model: any) => model.id)
       .sort();
+  }
+
+  private async syncPainelInteraction(params: {
+    companyId: string;
+    clientId: string;
+    agentId?: string;
+    agentName?: string;
+    sessionId: string;
+    channel: string;
+    userMessage?: string;
+    assistantMessage?: string;
+    contextVariables?: Record<string, any>;
+    toolCalls?: any[];
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+    };
+    provider?: string;
+    model?: string;
+  }) {
+    try {
+      const vars = params.contextVariables || {};
+      const isRightParty = !!(
+        vars.cliente_cpf ||
+        vars.cpf ||
+        vars.cliente_nome
+      );
+      const debtAmount = vars.valor_divida ? Number(vars.valor_divida) : null;
+      const isDebtPresented = debtAmount !== null && debtAmount > 0;
+      const isAgreementReached = !!(vars.acordo_confirmado || vars.acordo_id);
+      const isPromiseToPay = !!(vars.promessa_pagamento || vars.data_promessa);
+
+      let disposition = 'IN_PROGRESS';
+      if (isAgreementReached) disposition = 'AGREEMENT_CLOSED';
+      else if (isPromiseToPay) disposition = 'PTP';
+      else if (isDebtPresented) disposition = 'DEBT_PRESENTED';
+      else if (isRightParty) disposition = 'RPC_NO_DEAL';
+      else if (params.userMessage) disposition = 'HUMAN_ANSWERED';
+
+      const existing = await this.prisma.painel_interactions.findUnique({
+        where: { session_id: params.sessionId },
+      });
+
+      const currentMessages = Array.isArray(existing?.messages)
+        ? (existing.messages as any[])
+        : [];
+
+      const newMsgs = [...currentMessages];
+      const now = new Date();
+
+      if (params.userMessage) {
+        newMsgs.push({
+          id: `msg_u_${Date.now()}`,
+          role: 'user',
+          content: params.userMessage,
+          timestamp: now.toISOString(),
+        });
+      }
+
+      if (params.assistantMessage) {
+        newMsgs.push({
+          id: `msg_a_${Date.now()}`,
+          role: 'assistant',
+          content: params.assistantMessage,
+          tool_calls: params.toolCalls || [],
+          timestamp: new Date(now.getTime() + 100).toISOString(),
+        });
+      }
+
+      const totalTokens =
+        (existing?.total_tokens || 0) + (params.usage?.total_tokens || 0);
+      const promptTokens =
+        (existing?.prompt_tokens || 0) + (params.usage?.input_tokens || 0);
+      const completionTokens =
+        (existing?.completion_tokens || 0) + (params.usage?.output_tokens || 0);
+
+      const clientIdentifier =
+        (vars.cliente_cpf as string) ||
+        (vars.cpf as string) ||
+        existing?.client_identifier ||
+        null;
+      const clientName =
+        (vars.cliente_nome as string) || existing?.client_name || null;
+
+      await this.prisma.painel_interactions.upsert({
+        where: { session_id: params.sessionId },
+        create: {
+          company_id: params.companyId,
+          client_id: params.clientId,
+          agent_id: params.agentId,
+          agent_name: params.agentName,
+          session_id: params.sessionId,
+          channel: params.channel || 'webchat',
+          direction: 'inbound',
+          interaction_mode: 'both',
+          client_identifier: clientIdentifier,
+          client_name: clientName,
+          has_human_answer: true,
+          human_answered_at: existing?.human_answered_at || now,
+          is_right_party: isRightParty,
+          right_party_at: isRightParty ? existing?.right_party_at || now : null,
+          is_debt_presented: isDebtPresented,
+          debt_presented_at: isDebtPresented
+            ? existing?.debt_presented_at || now
+            : null,
+          debt_amount: debtAmount !== null ? (debtAmount as any) : null,
+          is_agreement_reached: isAgreementReached,
+          agreement_at: isAgreementReached
+            ? existing?.agreement_at || now
+            : null,
+          agreement_id: (vars.acordo_id as string) || null,
+          agreement_amount: vars.valor_total
+            ? Number(vars.valor_total)
+            : debtAmount !== null
+              ? (debtAmount as any)
+              : null,
+          is_promise_to_pay: isPromiseToPay,
+          promise_to_pay_at: isPromiseToPay
+            ? existing?.promise_to_pay_at || now
+            : null,
+          disposition,
+          service_step: vars.service_step || null,
+          llm_provider: params.provider,
+          llm_model: params.model,
+          total_tokens: totalTokens,
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          context_variables: vars as any,
+          messages: newMsgs as any,
+          started_at: existing?.started_at || now,
+          status: isAgreementReached ? 'completed' : 'ongoing',
+        },
+        update: {
+          agent_id: params.agentId || existing?.agent_id,
+          agent_name: params.agentName || existing?.agent_name,
+          client_identifier: clientIdentifier || existing?.client_identifier,
+          client_name: clientName || existing?.client_name,
+          has_human_answer: true,
+          is_right_party: isRightParty || existing?.is_right_party || false,
+          right_party_at: isRightParty
+            ? existing?.right_party_at || now
+            : existing?.right_party_at,
+          is_debt_presented:
+            isDebtPresented || existing?.is_debt_presented || false,
+          debt_presented_at: isDebtPresented
+            ? existing?.debt_presented_at || now
+            : existing?.debt_presented_at,
+          debt_amount:
+            debtAmount !== null ? (debtAmount as any) : existing?.debt_amount,
+          is_agreement_reached:
+            isAgreementReached || existing?.is_agreement_reached || false,
+          agreement_at: isAgreementReached
+            ? existing?.agreement_at || now
+            : existing?.agreement_at,
+          agreement_id:
+            (vars.acordo_id as string) || existing?.agreement_id || null,
+          is_promise_to_pay:
+            isPromiseToPay || existing?.is_promise_to_pay || false,
+          promise_to_pay_at: isPromiseToPay
+            ? existing?.promise_to_pay_at || now
+            : existing?.promise_to_pay_at,
+          disposition,
+          llm_provider: params.provider || existing?.llm_provider,
+          llm_model: params.model || existing?.llm_model,
+          total_tokens: totalTokens,
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          context_variables: vars as any,
+          messages: newMsgs as any,
+          status: isAgreementReached
+            ? 'completed'
+            : existing?.status || 'ongoing',
+          ended_at: isAgreementReached ? now : existing?.ended_at,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Falha ao sincronizar painel_interactions no test-chat: ${err}`,
+      );
+    }
   }
 }
