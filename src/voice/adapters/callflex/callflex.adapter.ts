@@ -20,7 +20,7 @@ export class CallFlexAdapter implements ITelephonyAdapter {
   public readonly id: string;
   public readonly providerName = 'callflex';
   public readonly sampleRate = 8000;
-  public readonly metadata: TelephonyCallMetadata;
+  public metadata: TelephonyCallMetadata;
 
   private ws: WebSocket | null = null;
   private audioFormat: 'g711_ulaw' | 'g711_alaw' | 'pcm_8k' | 'pcm_16k';
@@ -43,6 +43,23 @@ export class CallFlexAdapter implements ITelephonyAdapter {
       this.ws = config.wsSocket;
       this.setupWebSocketListeners();
     }
+  }
+
+  /**
+   * Aguarda o frame de identificação (start/connected) com metadados da
+   * chamada. Cumpre o contrato opcional de adapters em streaming.
+   */
+  public async waitForIdentification(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (
+      Date.now() < deadline &&
+      !this.metadata.callerNumber &&
+      !this.metadata.didNumber
+    ) {
+      if (this.isClosed || this.ws?.readyState !== WebSocket.OPEN) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return Boolean(this.metadata.callerNumber || this.metadata.didNumber);
   }
 
   private setupWebSocketListeners(): void {
@@ -97,8 +114,10 @@ export class CallFlexAdapter implements ITelephonyAdapter {
 
   private handleControlMessage(msg: Record<string, any>): void {
     switch (msg.type || msg.event) {
+      case 'start':
       case 'call_started':
       case 'connected':
+        this.applyIncomingMetadata(msg);
         this.callStartCallback?.();
         break;
       case 'call_ended':
@@ -111,6 +130,40 @@ export class CallFlexAdapter implements ITelephonyAdapter {
         }
         break;
     }
+  }
+
+  /**
+   * Absorve metadados do frame de identificação do discador.
+   * Formato esperado (contrato Synexa v1):
+   * { type: 'start', call_id, from, did, variables: {...} }
+   */
+  private applyIncomingMetadata(msg: Record<string, any>): void {
+    const incoming = msg.metadata || {};
+    const patch: TelephonyCallMetadata = {
+      ...(msg.call_id || msg.uniqueid
+        ? { uniqueId: String(msg.call_id || msg.uniqueid) }
+        : {}),
+      ...(incoming.callerNumber
+        ? { callerNumber: String(incoming.callerNumber) }
+        : msg.from || msg.caller
+          ? { callerNumber: String(msg.from || msg.caller) }
+          : {}),
+      ...(incoming.didNumber || msg.did
+        ? { didNumber: String(incoming.didNumber ?? msg.did) }
+        : {}),
+      ...(incoming.customVariables || incoming.variables || msg.variables
+        ? {
+            customVariables: {
+              ...((this.metadata.customVariables as Record<string, unknown>) ||
+                {}),
+              ...((incoming.customVariables ||
+                incoming.variables ||
+                msg.variables) as Record<string, unknown>),
+            },
+          }
+        : {}),
+    };
+    this.metadata = { ...this.metadata, ...patch } as TelephonyCallMetadata;
   }
 
   public async start(): Promise<void> {

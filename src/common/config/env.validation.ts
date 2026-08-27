@@ -236,6 +236,17 @@ export class EnvironmentVariables {
   @IsOptional()
   FASTAGI_ENABLED?: boolean = false;
 
+  @IsNumber({}, { message: 'AUDIOSOCKET_PORT must be a valid number' })
+  @IsOptional()
+  AUDIOSOCKET_PORT?: number = 8090;
+
+  @IsOptional()
+  AUDIOSOCKET_ENABLED?: boolean = false;
+
+  @IsString()
+  @IsOptional()
+  TELEPHONY_WS_TOKEN_PEPPER?: string;
+
   @IsString()
   @IsOptional()
   ASTERISK_AMI_HOST?: string;

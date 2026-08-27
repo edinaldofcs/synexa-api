@@ -29,9 +29,10 @@ export interface ITelephonyAdapter {
   readonly providerName: string;
 
   /**
-   * Metadados e variáveis recebidas da chamada/URA.
+   * Metadados e variáveis da chamada/URA. Mutável: adapters em streaming
+   * (WS de discador) enriquecem os metadados após o frame de identificação.
    */
-  readonly metadata: TelephonyCallMetadata;
+  metadata: TelephonyCallMetadata;
 
   /**
    * Taxa de amostragem nativa de áudio enviada pelo transporte (geralmente 8000 para telefonia ou 16000 para Web).
@@ -107,4 +108,11 @@ export interface ITelephonyAdapter {
    * Encerra e limpa todos os recursos e sockets do adapter.
    */
   close(): Promise<void> | void;
+
+  /**
+   * Opcional: aguarda o provedor identificar a chamada (frame/handshake de
+   * metadados). Usado por ingressos em streaming (WS de discador) antes de
+   * rotear a chamada. Retorna false se expirar sem identificação.
+   */
+  waitForIdentification?(timeoutMs: number): Promise<boolean>;
 }

@@ -10,6 +10,12 @@ import { HybridSttService } from './services/hybrid-stt.service';
 import { RtpGatewayService } from './telephony/rtp-gateway.service';
 import { AsteriskAmiService } from './telephony/asterisk-ami.service';
 import { FastAgiServerService } from './telephony/fastagi-server.service';
+import { AudioSocketServerService } from './telephony/audiosocket-server.service';
+import { DialerWsIngress } from './telephony/dialer-ws.gateway';
+import { TelephonyAdapterFactory } from './adapters/telephony-adapter.factory';
+import { TelephonyEndpointResolverService } from './services/telephony-endpoint-resolver.service';
+import { VoiceSessionFactory } from './services/voice-session.factory';
+import { TelephonyEndpointsController } from './telephony-endpoints.controller';
 import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
 import { VoiceToolsService } from './voice-tools.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
@@ -18,7 +24,7 @@ import { SessionService } from '../common/auth/session.service';
 
 @Module({
   imports: [CommonModule, AnalyticsModule],
-  controllers: [VoiceController],
+  controllers: [VoiceController, TelephonyEndpointsController],
   providers: [
     VoiceGateway,
     VoiceService,
@@ -30,6 +36,11 @@ import { SessionService } from '../common/auth/session.service';
     RtpGatewayService,
     AsteriskAmiService,
     FastAgiServerService,
+    AudioSocketServerService,
+    DialerWsIngress,
+    TelephonyAdapterFactory,
+    TelephonyEndpointResolverService,
+    VoiceSessionFactory,
     ModelPricingService,
     ProviderKeyResolverService,
     VoiceToolsService,
@@ -44,6 +55,10 @@ import { SessionService } from '../common/auth/session.service';
     RtpGatewayService,
     AsteriskAmiService,
     FastAgiServerService,
+    AudioSocketServerService,
+    TelephonyAdapterFactory,
+    TelephonyEndpointResolverService,
+    VoiceSessionFactory,
   ],
 })
 export class VoiceModule {}
