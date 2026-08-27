@@ -155,7 +155,7 @@ describe('Agent Flow (e2e)', () => {
       expect(res.status).toBe(201);
       expect(res.body).toHaveProperty('user');
       expect(res.body.user.email).toBe('admin@synexa.com.br');
-      expect(res.body.user.role).toBe('admin');
+      expect(res.body.user.role).toBe('platform_admin');
       expect(res.headers['set-cookie']).toEqual(
         expect.arrayContaining([
           expect.stringContaining('synexa_session='),

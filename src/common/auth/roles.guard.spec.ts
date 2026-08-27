@@ -29,7 +29,7 @@ describe('RolesGuard', () => {
 
   it('should return true when no roles are required', () => {
     reflector.getAllAndOverride.mockReturnValue(undefined);
-    const ctx = mockContext(undefined, { id: '1', role: 'admin' });
+    const ctx = mockContext(undefined, { id: '1', role: 'platform_admin' });
 
     const result = guard.canActivate(ctx);
     expect(result).toBe(true);
@@ -37,30 +37,33 @@ describe('RolesGuard', () => {
 
   it('should return true when required roles array is empty', () => {
     reflector.getAllAndOverride.mockReturnValue([]);
-    const ctx = mockContext([], { id: '1', role: 'admin' });
+    const ctx = mockContext([], { id: '1', role: 'platform_admin' });
 
     const result = guard.canActivate(ctx);
     expect(result).toBe(true);
   });
 
   it('should return true when user has the required role', () => {
-    reflector.getAllAndOverride.mockReturnValue(['admin']);
-    const ctx = mockContext(['admin'], { id: '1', role: 'admin' });
+    reflector.getAllAndOverride.mockReturnValue(['platform_admin']);
+    const ctx = mockContext(['platform_admin'], {
+      id: '1',
+      role: 'platform_admin',
+    });
 
     const result = guard.canActivate(ctx);
     expect(result).toBe(true);
   });
 
   it('should throw ForbiddenException when user has insufficient role', () => {
-    reflector.getAllAndOverride.mockReturnValue(['admin']);
-    const ctx = mockContext(['admin'], { id: '1', role: 'operator' });
+    reflector.getAllAndOverride.mockReturnValue(['platform_admin']);
+    const ctx = mockContext(['platform_admin'], { id: '1', role: 'operator' });
 
     expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
   });
 
   it('should return true when user has one of multiple required roles', () => {
-    reflector.getAllAndOverride.mockReturnValue(['admin', 'operator']);
-    const ctx = mockContext(['admin', 'operator'], {
+    reflector.getAllAndOverride.mockReturnValue(['platform_admin', 'operator']);
+    const ctx = mockContext(['platform_admin', 'operator'], {
       id: '1',
       role: 'operator',
     });
@@ -70,15 +73,15 @@ describe('RolesGuard', () => {
   });
 
   it('should throw ForbiddenException when user is null', () => {
-    reflector.getAllAndOverride.mockReturnValue(['admin']);
-    const ctx = mockContext(['admin'], null);
+    reflector.getAllAndOverride.mockReturnValue(['platform_admin']);
+    const ctx = mockContext(['platform_admin'], null);
 
     expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
   });
 
   it('should throw ForbiddenException when user is undefined', () => {
-    reflector.getAllAndOverride.mockReturnValue(['admin']);
-    const ctx = mockContext(['admin'], undefined);
+    reflector.getAllAndOverride.mockReturnValue(['platform_admin']);
+    const ctx = mockContext(['platform_admin'], undefined);
 
     expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
   });
@@ -92,15 +95,15 @@ describe('RolesGuard', () => {
   });
 
   it('should throw ForbiddenException when user has no id', () => {
-    reflector.getAllAndOverride.mockReturnValue(['admin']);
-    const ctx = mockContext(['admin'], { role: 'admin' });
+    reflector.getAllAndOverride.mockReturnValue(['platform_admin']);
+    const ctx = mockContext(['platform_admin'], { role: 'platform_admin' });
 
     expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
   });
 
   it('should call reflector with correct metadata key and targets', () => {
     reflector.getAllAndOverride.mockReturnValue([]);
-    const ctx = mockContext([], { id: '1', role: 'admin' });
+    const ctx = mockContext([], { id: '1', role: 'platform_admin' });
     const handler = ctx.getHandler();
     const cls = ctx.getClass();
 

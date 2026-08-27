@@ -1,16 +1,17 @@
 import {
-  IsString,
+  IsEmail,
+  IsIn,
   IsNotEmpty,
   IsOptional,
-  IsIn,
-  IsEmail,
+  IsString,
+  Matches,
   MinLength,
-  IsUUID,
 } from 'class-validator';
+import { ASSIGNABLE_ROLES } from '../../common/auth/roles.constants';
+import { UUID_SHAPE_REGEX } from '../../common/validators/uuid-shape';
 
 export class AdminCreateUserDto {
   @IsEmail({}, { message: 'Email inválido' })
-  @IsNotEmpty({ message: 'Email é obrigatório' })
   email: string;
 
   @IsOptional()
@@ -19,12 +20,16 @@ export class AdminCreateUserDto {
   password?: string;
 
   @IsOptional()
-  @IsIn(['admin', 'operator', 'viewer'], { message: 'Role inválida' })
+  @IsIn(ASSIGNABLE_ROLES, {
+    message: `Role deve ser um de: ${ASSIGNABLE_ROLES.join(', ')}`,
+  })
   role?: string;
 
-  @IsUUID('4', { message: 'company_id deve ser um UUID válido' })
-  @IsNotEmpty({ message: 'company_id é obrigatório' })
-  company_id: string;
+  @IsOptional()
+  @Matches(UUID_SHAPE_REGEX, {
+    message: 'company_id deve ser um UUID válido',
+  })
+  company_id?: string;
 
   @IsOptional()
   @IsString()

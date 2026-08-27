@@ -31,12 +31,10 @@ async function main() {
   // ── 1. Empresa B (Multi-tenancy Isolation Test) ───────────────
   await prisma.companies.upsert({
     where: { id: COMPANY_B_ID },
-    update: { name: 'Empresa Beta Ltda', plan: 'enterprise', status: 'active' },
+    update: { name: 'Empresa Beta Ltda', status: 'active' },
     create: {
       id: COMPANY_B_ID,
       name: 'Empresa Beta Ltda',
-      cnpj: '98.765.432/0001-10',
-      plan: 'enterprise',
       status: 'active',
     },
   });
@@ -44,14 +42,18 @@ async function main() {
   const password_hash = await bcrypt.hash('BetaAdmin2026!', 10);
   await prisma.users.upsert({
     where: { id: USER_B_ID },
-    update: { name: 'Admin Beta', email: 'admin@beta.com.br', role: 'admin' },
+    update: {
+      name: 'Admin Beta',
+      email: 'admin@beta.com.br',
+      role: 'company_admin',
+    },
     create: {
       id: USER_B_ID,
       company_id: COMPANY_B_ID,
       name: 'Admin Beta',
       email: 'admin@beta.com.br',
       password_hash,
-      role: 'admin',
+      role: 'company_admin',
     },
   });
 

@@ -96,13 +96,13 @@ describe('Enterprise Synexa (e2e)', () => {
     authToken = jwtService.sign({
       sub: '00000000-0000-0000-0000-000000000005',
       email: 'admin@synexa.com.br',
-      role: 'admin',
+      role: 'company_admin',
       company_id: 'test-company',
     });
     noTenantToken = jwtService.sign({
       sub: '00000000-0000-0000-0000-000000000005',
       email: 'admin@synexa.com.br',
-      role: 'admin',
+      role: 'company_admin',
     });
 
     await app.init();

@@ -4,6 +4,8 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  ForbiddenException,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -15,6 +17,7 @@ import { RedisService } from '../redis/redis.service';
 import { MailService } from '../mail/mail.service';
 import { SessionService } from './session.service';
 import type { SessionUser } from './session.service';
+import { ROLES } from './roles.constants';
 
 @Injectable()
 export class AuthService {
@@ -160,6 +163,68 @@ export class AuthService {
       role: user.role,
       company_id: user.company_id,
       company_name: user.companies?.name ?? null,
+    };
+  }
+
+  /**
+   * platform_admin passa a enxergar o sistema como membro da empresa alvo
+   * (visualização temporária dentro da MESMA sessão). A identidade real é
+   * preservada nos campos `original_*` e restaurável via exitImpersonation.
+   */
+  async enterImpersonation(
+    user: SessionUser,
+    companyId: string,
+  ): Promise<SessionUser> {
+    if (user.role !== ROLES.PLATFORM_ADMIN) {
+      throw new ForbiddenException(
+        'Apenas platform_admin pode usar esta função',
+      );
+    }
+    if (user.original_role) {
+      throw new BadRequestException(
+        'Já existe uma visualização ativa — encerre-a antes de trocar',
+      );
+    }
+
+    const company = await this.prisma.companies.findUnique({
+      where: { id: companyId },
+      select: { id: true, name: true, status: true },
+    });
+    if (!company) {
+      throw new NotFoundException('Empresa não encontrada');
+    }
+    if (company.status !== 'active') {
+      throw new BadRequestException('Empresa suspensa não pode ser acessada');
+    }
+    if (user.company_id === company.id && !user.original_role) {
+      // Já é a empresa de origem do admin; nada a fazer.
+      return user;
+    }
+
+    return {
+      ...user,
+      original_role: user.role,
+      original_company_id: user.company_id,
+      original_company_name: user.company_name ?? null,
+      role: ROLES.COMPANY_ADMIN,
+      company_id: company.id,
+      company_name: company.name,
+    };
+  }
+
+  /** Restaura a identidade real do platform_admin. */
+  exitImpersonation(user: SessionUser): SessionUser {
+    if (!user.original_role || !user.original_company_id) {
+      throw new BadRequestException('Nenhuma visualização de empresa ativa');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.original_role,
+      company_id: user.original_company_id,
+      company_name: user.original_company_name ?? null,
     };
   }
 

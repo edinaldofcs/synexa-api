@@ -12,11 +12,15 @@ describe('tenant-access.helper', () => {
 
   describe('extractTenantContext', () => {
     it('should extract userId, companyId, and role from full user object', () => {
-      const user = { id: 'user-1', company_id: 'company-1', role: 'admin' };
+      const user = {
+        id: 'user-1',
+        company_id: 'company-1',
+        role: 'company_admin',
+      };
       expect(extractTenantContext(user)).toEqual({
         userId: 'user-1',
         companyId: 'company-1',
-        role: 'admin',
+        role: 'company_admin',
       });
     });
 
@@ -24,12 +28,12 @@ describe('tenant-access.helper', () => {
       const user = {
         sub: 'sub-user-1',
         company_id: 'company-1',
-        role: 'admin',
+        role: 'company_admin',
       };
       expect(extractTenantContext(user)).toEqual({
         userId: 'sub-user-1',
         companyId: 'company-1',
-        role: 'admin',
+        role: 'company_admin',
       });
     });
 
@@ -64,7 +68,7 @@ describe('tenant-access.helper', () => {
     });
 
     it('should throw ForbiddenException when user has no id or sub', () => {
-      const user = { role: 'admin' };
+      const user = { role: 'company_admin' };
       expect(() => extractTenantContext(user)).toThrow(ForbiddenException);
       expect(() => extractTenantContext(user)).toThrow(
         'Acesso negado: ID do usuário não encontrado no token',

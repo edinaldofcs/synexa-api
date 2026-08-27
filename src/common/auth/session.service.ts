@@ -11,6 +11,10 @@ export interface SessionUser {
   role: string;
   company_id: string | null;
   company_name?: string | null;
+  /** Presentes apenas durante impersonação de tenant (platform_admin). */
+  original_role?: string | null;
+  original_company_id?: string | null;
+  original_company_name?: string | null;
 }
 
 export interface AuthSession {
@@ -41,6 +45,15 @@ export class SessionService {
     await this.redis.addToSet(this.userKey(user.id), session.id);
     await this.redis.expire(this.userKey(user.id), SESSION_TTL_SECONDS);
     return session;
+  }
+
+  /** Persiste alterações na sessão preservando o TTL restante. */
+  async save(session: AuthSession): Promise<void> {
+    const remainingSeconds = Math.max(
+      1,
+      Math.ceil((session.expiresAt - Date.now()) / 1000),
+    );
+    await this.redis.set(this.key(session.id), session, remainingSeconds);
   }
 
   async get(sessionId: string): Promise<AuthSession | null> {

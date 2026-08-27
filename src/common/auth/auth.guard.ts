@@ -82,17 +82,43 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
         name: true,
         role: true,
         company_id: true,
-        companies: { select: { status: true } },
+        companies: { select: { name: true, status: true } },
       },
     });
 
     if (!user || user.companies.status !== 'active') return null;
-    return {
+
+    const base = {
       id: user.id,
       email: user.email ?? sessionUser.email,
-      name: user.name,
+      name: user.name ?? sessionUser.name ?? null,
       role: user.role,
       company_id: user.company_id,
+      company_name: user.companies?.name ?? sessionUser.company_name ?? null,
+    };
+
+    const isImpersonating =
+      !!sessionUser.original_role &&
+      !!sessionUser.original_company_id &&
+      !!sessionUser.company_id;
+
+    if (!isImpersonating) return base;
+
+    // Visualização válida somente enquanto a empresa alvo estiver ativa.
+    const target = await this.prisma!.companies.findUnique({
+      where: { id: sessionUser.company_id as string },
+      select: { status: true },
+    });
+    if (!target || target.status !== 'active') return base;
+
+    return {
+      ...base,
+      role: sessionUser.role,
+      company_id: sessionUser.company_id,
+      company_name: sessionUser.company_name ?? base.company_name,
+      original_role: sessionUser.original_role,
+      original_company_id: sessionUser.original_company_id,
+      original_company_name: sessionUser.original_company_name ?? null,
     };
   }
 

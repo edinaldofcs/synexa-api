@@ -20,8 +20,10 @@ import { LoginDto } from './dto/login.dto';
 import { MagicLinkDto } from './dto/magic-link.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ImpersonateDto } from './dto/impersonate.dto';
 import { ConfigService } from '@nestjs/config';
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import type { AuthSession } from './session.service';
 
 @Controller('auth')
 export class AuthController {
@@ -88,6 +90,47 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: SessionUser) {
     return { user };
+  }
+
+  /**
+   * platform_admin "transita" para enxergar o painel como a empresa alvo.
+   * A troca acontece dentro da mesma sessão (identidade real preservada).
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('impersonate')
+  async impersonate(@Body() body: ImpersonateDto, @Req() request: Request) {
+    const session = await this.requireMutableSession(request);
+    const effective = await this.authService.enterImpersonation(
+      session.user,
+      body.company_id,
+    );
+    session.user = effective;
+    await this.sessionService.save(session);
+    return { user: effective };
+  }
+
+  /** Volta para a identidade real do platform_admin. */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('impersonation/exit')
+  async exitImpersonation(@Req() request: Request) {
+    const session = await this.requireMutableSession(request);
+    const restored = this.authService.exitImpersonation(session.user);
+    session.user = restored;
+    await this.sessionService.save(session);
+    return { user: restored };
+  }
+
+  private async requireMutableSession(request: Request): Promise<AuthSession> {
+    const sessionId = getSessionId(request);
+    const session = sessionId ? await this.sessionService.get(sessionId) : null;
+    if (
+      !session ||
+      !hasTrustedOrigin(request, this.configService) ||
+      !hasValidCsrfToken(request, session.csrfToken)
+    ) {
+      throw new ForbiddenException('Proteção CSRF inválida');
+    }
+    return session;
   }
 
   @Public()

@@ -116,7 +116,7 @@ describe('Multi-tenant isolation (e2e)', () => {
           company_id: companyId,
           email,
           name: `User ${companyId.slice(0, 2)}`,
-          role: 'admin',
+          role: 'company_admin',
           password_hash: passwordHash,
         },
       });

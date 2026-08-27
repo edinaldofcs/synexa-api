@@ -25,7 +25,7 @@ describe('AuthController', () => {
     const user = {
       id: 'user-1',
       email: 'user@example.com',
-      role: 'admin',
+      role: 'platform_admin',
       company_id: 'company-1',
     };
     const session = { id: 'session-id', csrfToken: 'csrf-token' };

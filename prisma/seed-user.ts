@@ -15,18 +15,22 @@ const supabase = createClient(
 async function main() {
   console.log('Iniciando o seed da empresa e do usuário administrador...');
 
-  // 1. Criar Empresa Padrão
-  const company = await prisma.companies.upsert({
-    where: { cnpj: '12.345.678/0001-90' },
-    update: {},
-    create: {
-      name: 'Synexa Admin',
-      cnpj: '12.345.678/0001-90',
-      plan: 'scale',
-      status: 'active',
-    },
+  // 1. Criar Empresa Padrão (liberação por contrato formal: sem CNPJ/plan)
+  let company = await prisma.companies.findFirst({
+    where: { name: 'Synexa Admin' },
   });
-  console.log(`Empresa criada/encontrada: ${company.name} | ID: ${company.id}`);
+
+  if (!company) {
+    company = await prisma.companies.create({
+      data: {
+        name: 'Synexa Admin',
+        status: 'active',
+      },
+    });
+    console.log(`Empresa criada: ${company.name} | ID: ${company.id}`);
+  } else {
+    console.log(`Empresa encontrada: ${company.name} | ID: ${company.id}`);
+  }
 
   // 2. Criar Usuário no Supabase Auth
   const email = 'admin@synexa.com.br';
@@ -74,16 +78,17 @@ async function main() {
       id: userId,
       company_id: company.id,
       name: 'Administrador Synexa',
-      role: 'admin',
+      role: 'platform_admin',
     },
   });
   console.log(
     `Perfil de Usuário criado/encontrado no banco: ${userProfile.name}`,
   );
   console.log('\n🎉 Seed finalizado com sucesso!');
-  console.log(`Utilize os dados abaixo para fazer login no localhost:`);
-  console.log(`📧 E-mail: ${email}`);
-  console.log(`🔒 Senha: ${password}`);
+  console.log(`📧 E-mail para login: ${email}`);
+  console.log(
+    '🔒 Senha: definida via SEED_ADMIN_PASSWORD (não exibida em log)',
+  );
 }
 
 main()
