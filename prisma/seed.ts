@@ -34,12 +34,10 @@ async function main() {
   // ── 1. Company ───────────────────────────────────────────────
   await prisma.companies.upsert({
     where: { id: COMPANY_ID },
-    update: { name: 'Synexa Admin', plan: 'scale', status: 'active' },
+    update: { name: 'Synexa Admin', status: 'active' },
     create: {
       id: COMPANY_ID,
       name: 'Synexa Admin',
-      cnpj: '12.345.678/0001-90',
-      plan: 'scale',
       status: 'active',
     },
   });
@@ -64,7 +62,7 @@ async function main() {
       userId = existingUser.id;
       await prisma.users.update({
         where: { id: userId },
-        data: { name: userName, password_hash, role: 'admin' },
+        data: { name: userName, password_hash, role: 'platform_admin' },
       });
     } else {
       await prisma.users.create({
@@ -74,7 +72,7 @@ async function main() {
           name: userName,
           email,
           password_hash,
-          role: 'admin',
+          role: 'platform_admin',
         },
       });
     }
@@ -101,13 +99,13 @@ async function main() {
 
     await prisma.users.upsert({
       where: { id: userId },
-      update: { name: userName, email, role: 'admin' },
+      update: { name: userName, email, role: 'platform_admin' },
       create: {
         id: userId,
         company_id: COMPANY_ID,
         name: userName,
         email,
-        role: 'admin',
+        role: 'platform_admin',
       },
     });
   }

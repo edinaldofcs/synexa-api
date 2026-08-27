@@ -11,8 +11,6 @@ datasource db {
 model companies {
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name       String
-  cnpj       String?    @unique
-  plan       String?    @default("starter")
   status     String?    @default("active")
   created_at DateTime?  @default(now()) @db.Timestamptz(6)
   updated_at DateTime?  @default(now()) @db.Timestamptz(6)

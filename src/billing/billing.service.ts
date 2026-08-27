@@ -19,7 +19,6 @@ export interface BillingSummaryResponse {
   isByok: boolean;
   markupPercent: number;
   exchangeRate: number;
-  plan: string;
   totals: {
     totalInteractions: number;
     textInteractions: number;
@@ -73,12 +72,6 @@ export class BillingService {
       59,
       999,
     );
-
-    // Consulta empresa para obter o plano
-    const company = await this.prisma.companies.findUnique({
-      where: { id: companyId },
-      select: { id: true, name: true, plan: true },
-    });
 
     const isByok = false; // Pode ser estendido baseado em provider_credentials ativos do tenant
     const markupPercent = this.pricingService.getMarkupPercent();
@@ -203,7 +196,6 @@ export class BillingService {
       isByok,
       markupPercent,
       exchangeRate,
-      plan: company?.plan || 'starter',
       totals: {
         totalInteractions: runs.length,
         textInteractions,

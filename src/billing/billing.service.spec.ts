@@ -7,13 +7,6 @@ describe('BillingService', () => {
   let service: BillingService;
 
   const mockPrismaService = {
-    companies: {
-      findUnique: jest.fn().mockResolvedValue({
-        id: '00000000-0000-0000-0000-000000000001',
-        name: 'Empresa Teste',
-        plan: 'scale',
-      }),
-    },
     agent_runs: {
       findMany: jest.fn().mockResolvedValue([
         {
@@ -74,7 +67,6 @@ describe('BillingService', () => {
     );
 
     expect(summary.companyId).toBe('00000000-0000-0000-0000-000000000001');
-    expect(summary.plan).toBe('scale');
     expect(summary.totals.totalInteractions).toBe(2);
     expect(summary.totals.textInteractions).toBe(1);
     expect(summary.totals.voiceInteractions).toBe(1);
