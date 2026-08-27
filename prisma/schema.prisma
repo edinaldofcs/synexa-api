@@ -38,6 +38,7 @@ model companies {
   credential_audit_logs credential_audit_logs[]
   workflow_versions   workflow_versions[]
   voice_session_telemetry voice_session_telemetry[]
+  telephony_endpoints telephony_endpoints[]
   painel_interactions painel_interactions[]
 }
 
@@ -243,6 +244,7 @@ model painel_clients {
   credential_audit_logs credential_audit_logs[]
   workflow_versions   workflow_versions[]
   voice_session_telemetry voice_session_telemetry[]
+  telephony_endpoints telephony_endpoints[]
   painel_interactions painel_interactions[]
   voice_name                  String?
   audio_gate_enabled          Boolean?        @default(true)
@@ -836,6 +838,36 @@ model voice_session_telemetry {
   @@index([client_id])
   @@index([conversation_id])
   @@index([created_at])
+}
+
+// ── Telefonia Plug-and-Play ──────────────────────────────────────────────
+// Cada linha roteia um DID/origem de um discador (NexCore, CallFlex, Twilio
+// SIP, PABX próprio...) para empresa/cliente/agente. A IA fica plug-and-play:
+// novo discador SIP = nova linha aqui; protocolo proprietário = adapter novo.
+model telephony_endpoints {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id          String    @db.Uuid
+  client_id           String?   @db.Uuid
+  provider            String    // 'asterisk_fastagi' | 'audiosocket' | 'callflex_ws' | 'nexcore_sip' | 'twilio_sip' | ...
+  did_number          String
+  label               String?
+  agent_step          String?
+  audio_format        String    @default("g711_ulaw") // g711_ulaw | g711_alaw | pcm_16k | slin_8k
+  interaction_mode    String    @default("voice")     // voice | text | both
+  inbound_secret_hash String?   // SHA-256 hex do token de autenticação do ingresso (WS do discador)
+  config              Json?     @default("{}") @db.JsonB
+  enabled             Boolean   @default(true)
+  created_by          String?   @db.Uuid
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime  @default(now()) @db.Timestamptz(6)
+
+  companies      companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
+
+  @@unique([did_number, provider])
+  @@index([company_id])
+  @@index([client_id])
+  @@index([provider])
 }
 
 model painel_interactions {
