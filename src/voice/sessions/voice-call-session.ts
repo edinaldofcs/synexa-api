@@ -14,6 +14,13 @@ import {
   InboundMappingConfig,
 } from '../../common/services/inbound-data-mapper.service';
 
+export interface VoiceGateRuntimeConfig {
+  enabled?: boolean;
+  threshold?: number;
+  hangoverMarginMs?: number;
+  prerollMs?: number;
+}
+
 export interface VoiceCallSessionConfig {
   companyId?: string;
   clientId?: string;
@@ -22,6 +29,15 @@ export interface VoiceCallSessionConfig {
   model?: string;
   voiceName?: string;
   apiKey?: string;
+  /** Config de audio gate resolvida (por padrão usa valores do cliente/env) */
+  gateConfig?: VoiceGateRuntimeConfig;
+  /** Canal usado na sincronização com painel_interactions (ex: voice_sip, voice_webrtc) */
+  channel?: string;
+  /**
+   * Handler chamado quando a IA solicita o encerramento da chamada
+   * (tool `finalizar_chamada`). Ex: AMI hangupChannel no Asterisk.
+   */
+  onAiHangupRequest?: () => Promise<void> | void;
 }
 
 export class VoiceCallSession {
@@ -47,6 +63,10 @@ export class VoiceCallSession {
   private config: VoiceCallSessionConfig;
   /** Estado da sessão (variáveis mapeadas da telefonia + retornos de API) */
   public sessionState: Record<string, unknown> = {};
+  /** Metadados persistidos na criação da conversa (mantidos no fechamento) */
+  private conversationMetadata: Record<string, unknown> = {};
+  /** Motivo do encerramento (remoto ou solicitado pela IA) */
+  public hangupCause: string | null = null;
 
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
@@ -113,24 +133,26 @@ export class VoiceCallSession {
     // 3. Inicializa Conversa Omnichannel no Banco de Dados
     if (companyId) {
       try {
+        const convMetadata = {
+          telephony_provider: this.telephonyAdapter.providerName,
+          call_id: this.telephonyAdapter.id,
+          caller: this.telephonyAdapter.metadata.callerNumber,
+          did: this.telephonyAdapter.metadata.didNumber,
+          context_variables: contextVariables,
+          model: this.config.model,
+          voice_name: this.config.voiceName,
+        } as Record<string, unknown>;
         const conv = await this.prisma.conversations.create({
           data: {
             company_id: companyId,
             client_id: clientId,
             origin_channel: 'voice',
             status: 'active',
-            metadata: {
-              telephony_provider: this.telephonyAdapter.providerName,
-              call_id: this.telephonyAdapter.id,
-              caller: this.telephonyAdapter.metadata.callerNumber,
-              did: this.telephonyAdapter.metadata.didNumber,
-              context_variables: contextVariables,
-              model: this.config.model,
-              voice_name: this.config.voiceName,
-            } as any,
+            metadata: convMetadata as any,
           },
         });
         this.conversationId = conv.id;
+        this.conversationMetadata = convMetadata;
 
         // Persiste variáveis mapeadas no estado da conversa
         await this.prisma.conversation_state.upsert({
@@ -193,12 +215,25 @@ export class VoiceCallSession {
       },
     });
 
+    // Tool nativa de encerramento da chamada (quando há controle do canal)
+    if (this.config.onAiHangupRequest) {
+      toolsDeclarations.push({
+        name: 'finalizar_chamada',
+        description:
+          'Encerra a chamada telefônica atual de forma educada. Use apenas quando a conversa estiver concluída.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {},
+        },
+      });
+    }
+
     // 5. Configura o Audio Gate (VAD / Supressão de Ruído)
     this.gateSession = this.audioGateService.createSession({
-      enabled: true,
-      threshold: 500,
-      hangoverMarginMs: 500,
-      prerollMs: 300,
+      enabled: this.config.gateConfig?.enabled ?? true,
+      threshold: this.config.gateConfig?.threshold ?? 500,
+      hangoverMarginMs: this.config.gateConfig?.hangoverMarginMs ?? 500,
+      prerollMs: this.config.gateConfig?.prerollMs ?? 300,
       sampleRate: 16000,
     });
 
@@ -271,6 +306,27 @@ export class VoiceCallSession {
         if (!clientId || !selectedAgent?.id) return;
         const responses = await Promise.all(
           functionCalls.map(async (call) => {
+            if (call.name === 'finalizar_chamada') {
+              this.logger.log(
+                `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}`,
+              );
+              this.hangupCause = 'ai_requested';
+              try {
+                await this.config.onAiHangupRequest?.();
+              } catch (err: any) {
+                this.logger.warn(
+                  `Falha ao solicitar hangup do canal: ${err.message}`,
+                );
+              }
+              // Fallback: encerra a sessão de IA mesmo sem confirmação do canal
+              setTimeout(() => void this.end('ai_requested'), 2500);
+              return {
+                id: call.id,
+                name: call.name,
+                response: { ok: true },
+              };
+            }
+
             if (call.name === 'set_call_variable') {
               const varName = call.args?.name;
               const varVal = call.args?.value;
@@ -376,8 +432,9 @@ export class VoiceCallSession {
       }
     });
 
-    this.telephonyAdapter.onCallEnd(() => {
-      this.end();
+    this.telephonyAdapter.onCallEnd((reason) => {
+      if (reason) this.hangupCause = String(reason);
+      void this.end(reason ? `remote_${reason}` : 'remote_hangup');
     });
 
     await this.telephonyAdapter.start();
@@ -386,9 +443,13 @@ export class VoiceCallSession {
   /**
    * Encerra a sessão, desliga o canal e persiste telemetria.
    */
-  public async end(): Promise<void> {
+  public async end(reason?: string): Promise<void> {
     if (this.isEnded) return;
     this.isEnded = true;
+    if (reason) this.hangupCause = String(reason);
+    const channelId = this.telephonyAdapter.metadata.channelId as
+      | string
+      | undefined;
 
     try {
       this.liveProvider.close();
@@ -415,17 +476,29 @@ export class VoiceCallSession {
             company_id: this.config.companyId,
             client_id: this.config.clientId,
             conversation_id: this.conversationId,
+            asterisk_unique_id: this.telephonyAdapter.metadata.uniqueId ?? null,
+            caller_number:
+              (this.telephonyAdapter.metadata.callerNumber as string) || null,
+            did_number:
+              (this.telephonyAdapter.metadata.didNumber as string) || null,
+            hangup_cause: this.hangupCause,
             duration_sec: durationSeconds,
             audio_gate_forwarded_sec: stats?.forwardedSec || 0,
             audio_gate_suppressed_sec: stats?.suppressedSec || 0,
+            audio_gate_closes: stats?.closes || 0,
             interrupted_count: this.interruptedCount,
             total_tokens: this.totalTokens,
             audio_input_tokens: this.inputTokens,
             audio_output_tokens: this.outputTokens,
             cost_usd: rawCost,
             cost_brl: Number((rawCost * 5.5).toFixed(4)),
+            model: this.config.model || null,
             voice_name: this.config.voiceName || 'Aoede',
             audio_gate_enabled: this.gateSession?.enabled ?? true,
+            metadata: {
+              telephony_provider: this.telephonyAdapter.providerName,
+              channel_id: channelId,
+            } as any,
           },
         });
       }
@@ -435,11 +508,14 @@ export class VoiceCallSession {
           where: { id: this.conversationId },
           data: {
             status: 'closed',
+            closed_at: new Date(),
             metadata: {
+              ...this.conversationMetadata,
+              hangup_cause: this.hangupCause,
               duration_sec: durationSeconds,
               cost_usd: rawCost,
               interrupted_count: this.interruptedCount,
-            },
+            } as any,
           },
         });
 
@@ -453,7 +529,7 @@ export class VoiceCallSession {
                 client_id: this.config.clientId,
                 agent_id: this.config.agentId || null,
                 session_id: this.conversationId,
-                channel: 'voice_webrtc',
+                channel: this.config.channel || 'voice_webrtc',
                 direction: 'inbound',
                 interaction_mode: 'voice',
                 has_human_answer: true,
@@ -492,7 +568,7 @@ export class VoiceCallSession {
       }
 
       this.logger.log(
-        `📊 [VoiceCallSession] Chamada ${this.id} finalizada: ${durationSeconds}s | Custo: $${rawCost}`,
+        `📊 [VoiceCallSession] Chamada ${this.id} finalizada: ${durationSeconds}s | Custo: $${rawCost} | Motivo: ${this.hangupCause || 'normal'}`,
       );
     } catch (err: any) {
       this.logger.error(`Erro ao finalizar sessão de voz: ${err.message}`);
