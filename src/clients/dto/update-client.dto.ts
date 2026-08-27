@@ -2,13 +2,17 @@ import {
   IsString,
   IsOptional,
   MaxLength,
-  IsUUID,
+  Matches,
   ValidateIf,
   Allow,
+  IsBoolean,
 } from 'class-validator';
+import { UUID_SHAPE_REGEX } from '../../common/validators/uuid-shape';
 
 export class UpdateClientDto {
-  @IsUUID('4')
+  @Matches(UUID_SHAPE_REGEX, {
+    message: 'company_id deve ser um UUID válido',
+  })
   @IsOptional()
   company_id?: string;
 
@@ -95,4 +99,9 @@ export class UpdateClientDto {
   @Allow()
   @IsOptional()
   metadata?: Record<string, unknown> | null;
+
+  // FALSE = IA de texto roda inline no processo da API (sem fila BullMQ)
+  @IsOptional()
+  @IsBoolean()
+  queue_enabled?: boolean | null;
 }

@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WebhooksService } from '../../webhooks/services/webhooks.service';
-import { QueueService } from '../../queue/queue.service';
+import { TextAiExecutionService } from '../../queue/text-ai-execution.service';
 import {
   ChannelAdapter,
   NormalizedMessage,
@@ -36,7 +36,7 @@ export class ChannelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly webhooksService: WebhooksService,
-    private readonly queueService: QueueService,
+    private readonly textAiExecutionService: TextAiExecutionService,
     whatsappAdapter: WhatsappAdapter,
     apiAdapter: ApiAdapter,
   ) {
@@ -95,7 +95,7 @@ export class ChannelsService {
 
     const text = dto.message?.text || '';
 
-    await this.queueService.addIngestionJob({
+    const dispatch = await this.textAiExecutionService.dispatchIngestion({
       inbound_event_id: inboundEvent.id,
       client_id: dto.client_id,
       company_id: connection.company_id,
@@ -116,8 +116,9 @@ export class ChannelsService {
       {
         client_id: sanitize(dto.client_id),
         origin_channel: dto.origin_channel,
+        execution_mode: dispatch.mode,
       },
-      'Inbound message processed',
+      'Inbound message accepted',
     );
 
     return {
@@ -125,7 +126,7 @@ export class ChannelsService {
       inbound_event_id: inboundEvent.id,
       conversation_id: '',
       message_id: '',
-      status: 'queued',
+      status: dispatch.mode === 'inline' ? 'processing' : 'queued',
     };
   }
 

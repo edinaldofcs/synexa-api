@@ -22,10 +22,11 @@ import {
 } from './queue.constants';
 import { Roles } from '../common/auth/roles.decorator';
 import { RolesGuard } from '../common/auth/roles.guard';
+import { ROLES } from '../common/auth/roles.constants';
 import { sanitize } from '../common/utils/sanitize-log.util';
 
 @UseGuards(RolesGuard)
-@Roles('admin')
+@Roles(ROLES.PLATFORM_ADMIN, ROLES.COMPANY_ADMIN)
 @Controller('admin/queue')
 export class QueueController {
   private readonly logger = new Logger(QueueController.name);

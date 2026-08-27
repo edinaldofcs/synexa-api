@@ -4,6 +4,7 @@ import {
   MaxLength,
   ValidateIf,
   Allow,
+  IsBoolean,
 } from 'class-validator';
 
 export class CreateClientDto {
@@ -95,4 +96,9 @@ export class CreateClientDto {
   @Allow()
   @IsOptional()
   metadata?: Record<string, unknown> | null;
+
+  // FALSE = IA de texto roda inline no processo da API (sem fila BullMQ)
+  @IsOptional()
+  @IsBoolean()
+  queue_enabled?: boolean;
 }

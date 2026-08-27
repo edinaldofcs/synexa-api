@@ -2,6 +2,7 @@ import { Module, Global } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bull';
 import { QueueService } from './queue.service';
+import { TextAiExecutionService } from './text-ai-execution.service';
 import {
   QUEUE_INGESTION,
   QUEUE_DISPATCHER,
@@ -43,7 +44,7 @@ import {
       { name: QUEUE_DEAD_LETTER },
     ),
   ],
-  providers: [QueueService],
-  exports: [QueueService, BullModule],
+  providers: [QueueService, TextAiExecutionService],
+  exports: [QueueService, TextAiExecutionService, BullModule],
 })
 export class QueueInfrastructureModule {}

@@ -216,6 +216,8 @@ model painel_clients {
   inbox_id     String?
   logo_url     String?
   logo_icon    String?
+  // Processamento da IA de texto: TRUE = BullMQ (durável); FALSE = execução inline na API
+  queue_enabled Boolean @default(true)
 
   companies           companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_agents       painel_agents[]
@@ -273,7 +275,7 @@ model painel_agents {
   allowed_tool_names    Json?     @db.JsonB
   persona_blocks        Json?     @db.JsonB
   allow_interrupted     Boolean?  @default(true)
-  voice_name            String?
+  voice_name                  String?
   hybrid_audio_enabled  Boolean?  @default(false)
   interaction_mode      String    @default("both")
 
