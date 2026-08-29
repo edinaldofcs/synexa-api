@@ -5,6 +5,7 @@ import { CallFlexAdapter } from './callflex/callflex.adapter';
 import { AudioSocketAdapter } from './audiosocket/audiosocket.adapter';
 import { TwilioMediaStreamsAdapter } from './twilio/twilio-media-streams.adapter';
 import { VonageVoiceAdapter } from './vonage/vonage-voice.adapter';
+import { WebRtcAdapter } from './webrtc/web-webrtc.adapter';
 
 export type TelephonyAdapterConstructor = new (
   ...args: any[]
@@ -61,5 +62,7 @@ export class TelephonyAdapterFactory {
     this.register('twilio', TwilioMediaStreamsAdapter);
     this.register('vonage_voice', VonageVoiceAdapter);
     this.register('vonage', VonageVoiceAdapter);
+    // Canal Web do painel: o mesmo contrato de telefonia para o navegador
+    this.register('web_webrtc', WebRtcAdapter);
   }
 }

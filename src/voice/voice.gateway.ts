@@ -14,14 +14,12 @@ import { GeminiLiveVoiceProvider } from './providers/gemini-live-voice.provider'
 import { AudioGateService } from './services/audio-gate.service';
 import { HybridSttService } from './services/hybrid-stt.service';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { buildAgentPromptFromBlocks } from '../agents/utils/agent-prompt-builder.util';
 import { VoiceToolsService } from './voice-tools.service';
 import {
   evaluateConditionsWithDetails,
   describeEvaluation,
   type ActivationConditionGroup,
 } from '../orchestrator/utils/condition-evaluator.util';
-import { resolvePromptTemplateString } from '../common/utils/prompt-variables.util';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { NativeToolsService } from '../common/services/native-tools.service';
 import { getSessionId } from '../common/auth/auth-cookie';
@@ -31,6 +29,11 @@ import {
   summarizeState,
 } from './sessions/voice-client-session';
 import { VoiceTelemetryService } from './services/voice-telemetry.service';
+import { WebRtcAdapter } from './adapters/webrtc/web-webrtc.adapter';
+import {
+  resolveAudioGateConfig,
+  buildVoiceSystemPrompt,
+} from './services/voice-runtime.util';
 
 @WebSocketGateway({ path: '/ws/voice' })
 export class VoiceGateway
@@ -262,12 +265,46 @@ export class VoiceGateway
             });
             session.conversationId = conversation.id;
 
-            // Inicializa Audio Gate Session
+            // Canal Web sob o mesmo contrato ITelephonyAdapter da telefonia:
+            // o pipeline de áudio (gate → provider → retorno) é único.
+            const callAdapter = new WebRtcAdapter({
+              id: conversation.id,
+              socket: clientWs,
+              metadata: {
+                channelId: conversation.id,
+                customVariables: {
+                  client_id: session.clientId,
+                  agent_id: session.agentId,
+                },
+              },
+            });
+            session.callAdapter = callAdapter;
+
+            // Áudio do usuário: adapter → Audio Gate → provider (como em
+            // VoiceCallSession)
+            callAdapter.onAudio((pcm16) => {
+              if (!session.liveProvider) return;
+              if (!session.gateSession) {
+                session.liveProvider.sendAudio(pcm16.toString('base64'));
+                return;
+              }
+              const result = session.gateSession.processChunk(
+                pcm16.toString('base64'),
+                session.isAiSpeaking,
+              );
+              if (result) {
+                for (const chunk of result.forwardChunks) {
+                  session.liveProvider.sendAudio(chunk);
+                }
+                if (result.shouldSendStreamEnd) {
+                  session.liveProvider.sendAudioStreamEnd();
+                }
+              }
+            });
+
+            // Inicializa Audio Gate Session (config compartilhada com telefonia)
             session.gateSession = this.audioGateService.createSession({
-              enabled: clientDb?.audio_gate_enabled ?? true,
-              threshold: clientDb?.audio_gate_threshold ?? 500,
-              hangoverMarginMs: clientDb?.audio_gate_hangover_margin_ms ?? 500,
-              prerollMs: clientDb?.audio_gate_preroll_ms ?? 300,
+              ...resolveAudioGateConfig(clientDb),
               sampleRate: 16000,
             });
 
@@ -723,15 +760,18 @@ export class VoiceGateway
               session.liveProvider = provider;
 
               // Resolve variáveis {{chave}} do prompt com o estado da sessão
-              // (incluindo retornos de APIs) + dados do cliente
-              const basePrompt =
-                (agent
-                  ? buildAgentPromptFromBlocks(agent)
-                  : msg.systemPrompt || msg.prompt) ||
-                'Você é um assistente de voz inteligente e natural do Synexa. Responda com clareza e empatia.';
-              const systemPrompt = resolvePromptTemplateString(basePrompt, {
-                nome_agente: clientDb?.agent_name || '',
-                ...session.state,
+              // (incluindo retornos de APIs) + dados do cliente — pipeline
+              // compartilhado com a telefonia
+              const systemPrompt = buildVoiceSystemPrompt({
+                agent,
+                fallbackPrompt:
+                  msg.systemPrompt ||
+                  msg.prompt ||
+                  'Você é um assistente de voz inteligente e natural do Synexa. Responda com clareza e empatia.',
+                variables: {
+                  nome_agente: clientDb?.agent_name || '',
+                  ...session.state,
+                },
               });
 
               provider.connect({
@@ -770,7 +810,8 @@ export class VoiceGateway
                   if (generation !== session.providerGeneration) return;
                   session.isAiSpeaking = true;
                   session.gateSession?.notifyAiSpeakingChanged(true);
-                  sendToClient({ type: 'audio', data: base64Audio });
+                  // Áudio da IA volta pelo adapter (frame JSON ao navegador)
+                  callAdapter.sendAudio(Buffer.from(base64Audio, 'base64'));
                 },
                 onAiTranscript: async (text) => {
                   if (generation !== session.providerGeneration) return;
@@ -924,23 +965,9 @@ export class VoiceGateway
               return;
             }
 
-            if (session.liveProvider && msg.data) {
-              if (session.gateSession) {
-                const { forwardChunks, shouldSendStreamEnd } =
-                  session.gateSession.processChunk(
-                    msg.data,
-                    session.isAiSpeaking,
-                  );
-
-                for (const chunk of forwardChunks) {
-                  session.liveProvider.sendAudio(chunk);
-                }
-                if (shouldSendStreamEnd) {
-                  session.liveProvider.sendAudioStreamEnd();
-                }
-              } else {
-                session.liveProvider.sendAudio(msg.data);
-              }
+            // Pipeline unificado: frame do navegador → adapter → gate → provider
+            if (msg.data && session.callAdapter) {
+              session.callAdapter.handleClientAudio(msg.data);
             }
             break;
           }

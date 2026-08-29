@@ -8,12 +8,11 @@ import {
 import { VoiceToolsService } from '../voice-tools.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { buildAgentPromptFromBlocks } from '../../agents/utils/agent-prompt-builder.util';
-import { resolvePromptTemplateString } from '../../common/utils/prompt-variables.util';
 import {
   InboundDataMapperService,
   InboundMappingConfig,
 } from '../../common/services/inbound-data-mapper.service';
+import { buildVoiceSystemPrompt } from '../services/voice-runtime.util';
 
 export interface VoiceGateRuntimeConfig {
   enabled?: boolean;
@@ -142,18 +141,21 @@ export class VoiceCallSession {
     );
     this.sessionState = { ...contextVariables };
 
-    // 2. Interpola variáveis no Prompt do Agente
-    const basePrompt = selectedAgent
-      ? buildAgentPromptFromBlocks(selectedAgent, contextVariables)
-      : 'Você é um assistente de voz inteligente e natural. Responda com clareza e empatia.';
-
-    const systemPrompt = resolvePromptTemplateString(basePrompt, {
-      ...contextVariables,
-      nome_agente: contextVariables.nome_agente || fallbackAgentName,
-      agent_name: contextVariables.agent_name || fallbackAgentName,
-      nome_cliente: contextVariables.nome_cliente || fallbackCompanyName,
-      company_name: contextVariables.company_name || fallbackCompanyName,
-      empresa: contextVariables.empresa || fallbackCompanyName,
+    // 2. Interpola variáveis no Prompt do Agente (pipeline compartilhado
+    //    com o canal Web do painel)
+    const systemPrompt = buildVoiceSystemPrompt({
+      agent: selectedAgent,
+      agentVariables: contextVariables,
+      fallbackPrompt:
+        'Você é um assistente de voz inteligente e natural. Responda com clareza e empatia.',
+      variables: {
+        ...contextVariables,
+        nome_agente: contextVariables.nome_agente || fallbackAgentName,
+        agent_name: contextVariables.agent_name || fallbackAgentName,
+        nome_cliente: contextVariables.nome_cliente || fallbackCompanyName,
+        company_name: fallbackCompanyName,
+        empresa: fallbackCompanyName,
+      },
     });
 
     // 3. Inicializa Conversa Omnichannel no Banco de Dados

@@ -12,6 +12,7 @@ import { VoiceToolsService } from '../voice-tools.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
 import { ProviderKeyResolverService } from '../../orchestrator/services/provider-key-resolver.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { resolveAudioGateConfig } from './voice-runtime.util';
 
 export type VoiceSessionFactoryDeps = VoiceCallSessionConfig;
 
@@ -73,13 +74,7 @@ export class VoiceSessionFactory {
         (client.voice_name as string) ||
         this.configService.get<string>('GEMINI_LIVE_DEFAULT_VOICE') ||
         'Aoede',
-      gateConfig: {
-        enabled: (client.audio_gate_enabled as boolean) ?? true,
-        threshold: (client.audio_gate_threshold as number) ?? 500,
-        hangoverMarginMs:
-          (client.audio_gate_hangover_margin_ms as number) ?? 500,
-        prerollMs: (client.audio_gate_preroll_ms as number) ?? 300,
-      },
+      gateConfig: resolveAudioGateConfig(client),
       channel: overrides?.channel || 'voice_sip',
     };
 
