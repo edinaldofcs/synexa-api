@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { UUID_SHAPE_REGEX } from '../common/validators/uuid-shape';
 import {
   evaluateConditionsWithDetails,
   describeEvaluation,
@@ -349,6 +351,34 @@ export class AnalyticsService {
 
   // ── BI Dashboard & Funil Consolidado ────────────────────────────
 
+  /** Fuso horário do servidor, usado para reproduzir o agrupamento horário
+   *  anteriormente feito com Date#getHours() em JavaScript. */
+  private readonly serverTimeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+  private buildInteractionWhere(
+    companyId: string,
+    opts: {
+      clientId?: string;
+      channel?: string;
+      status?: string;
+      disposition?: string;
+      from?: Date;
+      to?: Date;
+    },
+  ): Prisma.Sql {
+    const conditions: Prisma.Sql[] = [Prisma.sql`company_id = ${companyId}`];
+    if (opts.clientId)
+      conditions.push(Prisma.sql`client_id = ${opts.clientId}`);
+    if (opts.channel) conditions.push(Prisma.sql`channel = ${opts.channel}`);
+    if (opts.status) conditions.push(Prisma.sql`status = ${opts.status}`);
+    if (opts.disposition)
+      conditions.push(Prisma.sql`disposition = ${opts.disposition}`);
+    if (opts.from) conditions.push(Prisma.sql`created_at >= ${opts.from}`);
+    if (opts.to) conditions.push(Prisma.sql`created_at <= ${opts.to}`);
+    return Prisma.join(conditions, ' AND ');
+  }
+
   async getBiDashboard(
     companyId: string,
     opts: {
@@ -358,214 +388,167 @@ export class AnalyticsService {
       to?: Date;
     } = {},
   ) {
-    const where: Record<string, unknown> = { company_id: companyId };
-    if (opts.clientId) where.client_id = opts.clientId;
-    if (opts.channel) where.channel = opts.channel;
-    if (opts.from || opts.to) {
-      where.created_at = {
-        ...(opts.from ? { gte: opts.from } : {}),
-        ...(opts.to ? { lte: opts.to } : {}),
-      };
-    }
+    const where = this.buildInteractionWhere(companyId, opts);
 
-    // Busca todas as interações do período selecionado
-    const interactions = await this.prisma.painel_interactions.findMany({
-      where: where as any,
-      select: {
-        id: true,
-        channel: true,
-        agent_name: true,
-        has_human_answer: true,
-        is_right_party: true,
-        is_debt_presented: true,
-        is_agreement_reached: true,
-        is_promise_to_pay: true,
-        debt_amount: true,
-        agreement_amount: true,
-        promise_amount: true,
-        duration_seconds: true,
-        barge_in_count: true,
-        total_tokens: true,
-        estimated_cost_usd: true,
-        status: true,
-        disposition: true,
-        created_at: true,
-      },
-      orderBy: { created_at: 'asc' },
-    });
+    const [
+      kpiRows,
+      dailyRows,
+      hourlyRows,
+      monthlyRows,
+      channelRows,
+      agentRows,
+    ] = await Promise.all([
+      this.prisma.$queryRaw<
+        Array<{
+          total: number;
+          human_answers: number;
+          cpc: number;
+          cpca: number;
+          agreements: number;
+          promises: number;
+          agreement_value: number;
+          promise_value: number;
+          debt_value: number;
+          total_duration: number;
+          barge_ins: number;
+          total_tokens: number;
+          cost_usd: number;
+        }>
+      >(Prisma.sql`
+          /* bi_kpi */
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
+            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+            COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
+            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+            COUNT(*) FILTER (WHERE is_promise_to_pay)::int AS promises,
+            COALESCE(SUM(agreement_amount), 0)::float8 AS agreement_value,
+            COALESCE(SUM(promise_amount), 0)::float8 AS promise_value,
+            COALESCE(SUM(debt_amount), 0)::float8 AS debt_value,
+            COALESCE(SUM(duration_seconds), 0)::int AS total_duration,
+            COALESCE(SUM(barge_in_count), 0)::int AS barge_ins,
+            COALESCE(SUM(total_tokens), 0)::int AS total_tokens,
+            COALESCE(SUM(estimated_cost_usd), 0)::float8 AS cost_usd
+          FROM painel_interactions
+          WHERE ${where}
+        `),
+      this.prisma.$queryRaw<
+        Array<{
+          date: string;
+          total: number;
+          human_answers: number;
+          cpc: number;
+          cpca: number;
+          agreements: number;
+          promises: number;
+          agreement_value: number;
+        }>
+      >(Prisma.sql`
+          /* bi_by_day */
+          SELECT
+            to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
+            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+            COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
+            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+            COUNT(*) FILTER (WHERE is_promise_to_pay)::int AS promises,
+            COALESCE(SUM(agreement_amount) FILTER (WHERE is_agreement_reached), 0)::float8 AS agreement_value
+          FROM painel_interactions
+          WHERE ${where}
+          GROUP BY 1
+        `),
+      this.prisma.$queryRaw<
+        Array<{
+          hour: number;
+          total: number;
+          human_answers: number;
+          cpc: number;
+          cpca: number;
+          agreements: number;
+        }>
+      >(Prisma.sql`
+          /* bi_by_hour */
+          SELECT
+            EXTRACT(HOUR FROM created_at AT TIME ZONE ${this.serverTimeZone})::int AS hour,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
+            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+            COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
+            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements
+          FROM painel_interactions
+          WHERE ${where}
+          GROUP BY 1
+        `),
+      this.prisma.$queryRaw<
+        Array<{
+          month: string;
+          total: number;
+          cpc: number;
+          agreements: number;
+          agreement_value: number;
+        }>
+      >(Prisma.sql`
+          /* bi_by_month */
+          SELECT
+            to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+            COALESCE(SUM(agreement_amount) FILTER (WHERE is_agreement_reached), 0)::float8 AS agreement_value
+          FROM painel_interactions
+          WHERE ${where}
+          GROUP BY 1
+        `),
+      this.prisma.$queryRaw<
+        Array<{ channel: string; total: number; agreements: number }>
+      >(Prisma.sql`
+          /* bi_by_channel */
+          SELECT
+            COALESCE(channel, 'webchat') AS channel,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements
+          FROM painel_interactions
+          WHERE ${where}
+          GROUP BY 1
+        `),
+      this.prisma.$queryRaw<
+        Array<{ agent: string; total: number; agreements: number }>
+      >(Prisma.sql`
+          /* bi_by_agent */
+          SELECT
+            COALESCE(agent_name, 'Agente Padrão') AS agent,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements
+          FROM painel_interactions
+          WHERE ${where}
+          GROUP BY 1
+        `),
+    ]);
 
-    let totalInteractions = interactions.length;
-    let humanAnswers = 0;
-    let rightParties = 0; // CPC
-    let debtsPresented = 0; // CPCA
-    let agreementsReached = 0;
-    let promisesToPay = 0;
-    let totalAgreementAmount = 0;
-    let totalPromiseAmount = 0;
-    let totalDebtAmount = 0;
-    let totalDurationSec = 0;
-    let totalBargeIns = 0;
-    let totalTokens = 0;
-    let totalCostUsd = 0;
+    const kpi = kpiRows[0] ?? {
+      total: 0,
+      human_answers: 0,
+      cpc: 0,
+      cpca: 0,
+      agreements: 0,
+      promises: 0,
+      agreement_value: 0,
+      promise_value: 0,
+      debt_value: 0,
+      total_duration: 0,
+      barge_ins: 0,
+      total_tokens: 0,
+      cost_usd: 0,
+    };
 
-    // Agrupadores
-    const dailyMap = new Map<
-      string,
-      {
-        date: string;
-        total: number;
-        human_answers: number;
-        cpc: number;
-        cpca: number;
-        agreements: number;
-        promises: number;
-        agreement_value: number;
-      }
-    >();
-
-    const hourlyMap = new Map<
-      number,
-      {
-        hour: number;
-        hourLabel: string;
-        total: number;
-        human_answers: number;
-        cpc: number;
-        cpca: number;
-        agreements: number;
-      }
-    >();
-
-    // Inicializa as 24 horas do dia
-    for (let h = 0; h < 24; h++) {
-      const label = `${String(h).padStart(2, '0')}:00`;
-      hourlyMap.set(h, {
-        hour: h,
-        hourLabel: label,
-        total: 0,
-        human_answers: 0,
-        cpc: 0,
-        cpca: 0,
-        agreements: 0,
-      });
-    }
-
-    const monthlyMap = new Map<
-      string,
-      {
-        month: string;
-        total: number;
-        cpc: number;
-        agreements: number;
-        agreement_value: number;
-      }
-    >();
-
-    const channelMap = new Map<
-      string,
-      { channel: string; total: number; agreements: number }
-    >();
-    const agentMap = new Map<
-      string,
-      { agent: string; total: number; agreements: number }
-    >();
-
-    for (const item of interactions) {
-      if (item.has_human_answer) humanAnswers++;
-      if (item.is_right_party) rightParties++;
-      if (item.is_debt_presented) debtsPresented++;
-      if (item.is_agreement_reached) agreementsReached++;
-      if (item.is_promise_to_pay) promisesToPay++;
-
-      const agAmount = item.agreement_amount
-        ? Number(item.agreement_amount)
-        : 0;
-      const prAmount = item.promise_amount ? Number(item.promise_amount) : 0;
-      const dbAmount = item.debt_amount ? Number(item.debt_amount) : 0;
-
-      totalAgreementAmount += agAmount;
-      totalPromiseAmount += prAmount;
-      totalDebtAmount += dbAmount;
-      totalDurationSec += item.duration_seconds || 0;
-      totalBargeIns += item.barge_in_count || 0;
-      totalTokens += item.total_tokens || 0;
-      totalCostUsd += item.estimated_cost_usd
-        ? Number(item.estimated_cost_usd)
-        : 0;
-
-      const dateObj = new Date(item.created_at);
-      const dayKey = dateObj.toISOString().slice(0, 10); // YYYY-MM-DD
-      const hourKey = dateObj.getHours(); // 0 - 23
-      const monthKey = dateObj.toISOString().slice(0, 7); // YYYY-MM
-
-      // Agrupamento Diário
-      const dayEntry = dailyMap.get(dayKey) || {
-        date: dayKey,
-        total: 0,
-        human_answers: 0,
-        cpc: 0,
-        cpca: 0,
-        agreements: 0,
-        promises: 0,
-        agreement_value: 0,
-      };
-      dayEntry.total++;
-      if (item.has_human_answer) dayEntry.human_answers++;
-      if (item.is_right_party) dayEntry.cpc++;
-      if (item.is_debt_presented) dayEntry.cpca++;
-      if (item.is_agreement_reached) {
-        dayEntry.agreements++;
-        dayEntry.agreement_value += agAmount;
-      }
-      if (item.is_promise_to_pay) dayEntry.promises++;
-      dailyMap.set(dayKey, dayEntry);
-
-      // Agrupamento Horário
-      const hourEntry = hourlyMap.get(hourKey)!;
-      hourEntry.total++;
-      if (item.has_human_answer) hourEntry.human_answers++;
-      if (item.is_right_party) hourEntry.cpc++;
-      if (item.is_debt_presented) hourEntry.cpca++;
-      if (item.is_agreement_reached) hourEntry.agreements++;
-
-      // Agrupamento Mensal
-      const monthEntry = monthlyMap.get(monthKey) || {
-        month: monthKey,
-        total: 0,
-        cpc: 0,
-        agreements: 0,
-        agreement_value: 0,
-      };
-      monthEntry.total++;
-      if (item.is_right_party) monthEntry.cpc++;
-      if (item.is_agreement_reached) {
-        monthEntry.agreements++;
-        monthEntry.agreement_value += agAmount;
-      }
-      monthlyMap.set(monthKey, monthEntry);
-
-      // Agrupamento Canal
-      const ch = item.channel || 'webchat';
-      const chEntry = channelMap.get(ch) || {
-        channel: ch,
-        total: 0,
-        agreements: 0,
-      };
-      chEntry.total++;
-      if (item.is_agreement_reached) chEntry.agreements++;
-      channelMap.set(ch, chEntry);
-
-      // Agrupamento Agente
-      const ag = item.agent_name || 'Agente Padrão';
-      const agEntry = agentMap.get(ag) || {
-        agent: ag,
-        total: 0,
-        agreements: 0,
-      };
-      agEntry.total++;
-      if (item.is_agreement_reached) agEntry.agreements++;
-      agentMap.set(ag, agEntry);
-    }
+    const totalInteractions = kpi.total;
+    const humanAnswers = kpi.human_answers;
+    const rightParties = kpi.cpc;
+    const debtsPresented = kpi.cpca;
+    const agreementsReached = kpi.agreements;
+    const promisesToPay = kpi.promises;
 
     const cpcRate = humanAnswers > 0 ? (rightParties / humanAnswers) * 100 : 0;
     const cpcaRate =
@@ -651,6 +634,30 @@ export class AnalyticsService {
       },
     ];
 
+    // Garante as 24 horas do dia (paridade com a implementação anterior)
+    const hourMap = new Map(hourlyRows.map((r) => [r.hour, r]));
+    const byHour: Array<{
+      hour: number;
+      hourLabel: string;
+      total: number;
+      human_answers: number;
+      cpc: number;
+      cpca: number;
+      agreements: number;
+    }> = [];
+    for (let h = 0; h < 24; h++) {
+      const row = hourMap.get(h);
+      byHour.push({
+        hour: h,
+        hourLabel: `${String(h).padStart(2, '0')}:00`,
+        total: row?.total ?? 0,
+        human_answers: row?.human_answers ?? 0,
+        cpc: row?.cpc ?? 0,
+        cpca: row?.cpca ?? 0,
+        agreements: row?.agreements ?? 0,
+      });
+    }
+
     return {
       kpis: {
         total_interactions: totalInteractions,
@@ -659,36 +666,247 @@ export class AnalyticsService {
         cpca: debtsPresented,
         agreements: agreementsReached,
         promises: promisesToPay,
-        total_agreement_value: totalAgreementAmount,
-        total_promise_value: totalPromiseAmount,
-        total_debt_value: totalDebtAmount,
+        total_agreement_value: kpi.agreement_value,
+        total_promise_value: kpi.promise_value,
+        total_debt_value: kpi.debt_value,
         cpc_rate_pct: Number(cpcRate.toFixed(1)),
         cpca_rate_pct: Number(cpcaRate.toFixed(1)),
         agreement_conversion_pct: Number(agreementRate.toFixed(1)),
         promise_rate_pct: Number(promiseRate.toFixed(1)),
         avg_duration_sec:
           totalInteractions > 0
-            ? Math.round(totalDurationSec / totalInteractions)
+            ? Math.round(kpi.total_duration / totalInteractions)
             : 0,
-        total_barge_ins: totalBargeIns,
-        total_tokens: totalTokens,
-        total_cost_usd: Number(totalCostUsd.toFixed(4)),
-        total_cost_brl: Number((totalCostUsd * 5.5).toFixed(2)),
+        total_barge_ins: kpi.barge_ins,
+        total_tokens: kpi.total_tokens,
+        total_cost_usd: Number(kpi.cost_usd.toFixed(4)),
+        total_cost_brl: Number((kpi.cost_usd * 5.5).toFixed(2)),
       },
       funnel: funnelSteps,
-      by_day: [...dailyMap.values()].sort((a, b) =>
-        a.date.localeCompare(b.date),
-      ),
-      by_hour: [...hourlyMap.values()].sort((a, b) => a.hour - b.hour),
-      by_month: [...monthlyMap.values()].sort((a, b) =>
-        a.month.localeCompare(b.month),
-      ),
-      by_channel: [...channelMap.values()].sort((a, b) => b.total - a.total),
-      by_agent: [...agentMap.values()].sort((a, b) => b.total - a.total),
+      by_day: [...dailyRows].sort((a, b) => a.date.localeCompare(b.date)),
+      by_hour: byHour.sort((a, b) => a.hour - b.hour),
+      by_month: [...monthlyRows].sort((a, b) => a.month.localeCompare(b.month)),
+      by_channel: [...channelRows].sort((a, b) => b.total - a.total),
+      by_agent: [...agentRows].sort((a, b) => b.total - a.total),
     };
   }
 
   // ── Relatório Detalhado de Interações ───────────────────────────
+
+  /** Campos escalares listados no relatório (exclui o JSONB pesado de messages). */
+  private readonly interactionListArgs =
+    Prisma.validator<Prisma.painel_interactionsDefaultArgs>()({
+      select: {
+        id: true,
+        company_id: true,
+        client_id: true,
+        agent_id: true,
+        session_id: true,
+        channel: true,
+        direction: true,
+        interaction_mode: true,
+        client_identifier: true,
+        company_identifier: true,
+        client_name: true,
+        agent_name: true,
+        has_human_answer: true,
+        human_answered_at: true,
+        is_right_party: true,
+        right_party_at: true,
+        is_debt_presented: true,
+        debt_presented_at: true,
+        debt_amount: true,
+        is_agreement_reached: true,
+        agreement_at: true,
+        agreement_id: true,
+        agreement_amount: true,
+        payment_method: true,
+        is_promise_to_pay: true,
+        promise_to_pay_at: true,
+        promise_due_date: true,
+        promise_amount: true,
+        disposition: true,
+        service_step: true,
+        tagcode: true,
+        status: true,
+        barge_in_count: true,
+        avg_barge_in_latency_ms: true,
+        avg_first_byte_latency_ms: true,
+        is_answering_machine: true,
+        call_id: true,
+        call_status: true,
+        recording_url: true,
+        duration_seconds: true,
+        billable_seconds: true,
+        hangup_cause: true,
+        llm_provider: true,
+        llm_model: true,
+        total_tokens: true,
+        prompt_tokens: true,
+        completion_tokens: true,
+        estimated_cost_usd: true,
+        avg_latency_ms: true,
+        sentiment: true,
+        summary: true,
+        context_variables: true,
+        created_at: true,
+        updated_at: true,
+        started_at: true,
+        ended_at: true,
+      },
+    });
+
+  /** Deriva de messages (no banco) os campos exibidos na listagem, evitando
+   *  transportar o JSONB completo de mensagens para a API. */
+  private async attachInteractionDerivedFields<
+    T extends { id: string; context_variables?: unknown },
+  >(
+    companyId: string,
+    items: T[],
+  ): Promise<
+    (T & {
+      messages_count: number;
+      first_user_message: string | null;
+      last_user_message: string | null;
+      last_assistant_message: string | null;
+      full_transcript: string | null;
+      executed_tools: string[];
+    })[]
+  > {
+    const ids = items
+      .map((i) => i.id)
+      .filter((id) => UUID_SHAPE_REGEX.test(id));
+    if (ids.length === 0) {
+      return items.map((it) => ({
+        ...it,
+        messages_count: 0,
+        first_user_message: null,
+        last_user_message: null,
+        last_assistant_message: null,
+        full_transcript: null,
+        executed_tools: [],
+      }));
+    }
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        messages_count: number;
+        first_user_message: string | null;
+        last_user_message: string | null;
+        last_assistant_message: string | null;
+        full_transcript: string | null;
+        message_tools: string[];
+      }>
+    >(
+      Prisma.sql`
+        SELECT
+          id,
+          jsonb_array_length(messages) AS messages_count,
+          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
+            WHERE m->>'role' = 'user' ORDER BY ord LIMIT 1) AS first_user_message,
+          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
+            WHERE m->>'role' = 'user' ORDER BY ord DESC LIMIT 1) AS last_user_message,
+          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
+            WHERE m->>'role' = 'assistant' ORDER BY ord DESC LIMIT 1) AS last_assistant_message,
+          (SELECT string_agg(
+              CASE WHEN m->>'role' = 'user' THEN '[Cliente]: ' ELSE '[IA]: ' END || (m->>'content'),
+              ' | ' ORDER BY ord)
+            FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)) AS full_transcript,
+          (SELECT COALESCE(jsonb_agg(DISTINCT name), '[]'::jsonb) FROM (
+              SELECT m->'metadata'->>'tool_name' AS name
+                FROM jsonb_array_elements(messages) m
+                WHERE m->'metadata'->>'tool_name' IS NOT NULL AND m->'metadata'->>'tool_name' <> ''
+              UNION
+              SELECT CASE WHEN jsonb_typeof(tc) = 'string' THEN tc#>>'{}' ELSE tc->>'name' END AS name
+                FROM jsonb_array_elements(messages) m,
+                     jsonb_array_elements(COALESCE(m->'tool_calls', '[]'::jsonb)) tc
+                WHERE (jsonb_typeof(tc) = 'string' AND tc#>>'{}' <> '')
+                   OR (jsonb_typeof(tc) = 'object' AND tc->>'name' IS NOT NULL AND tc->>'name' <> '')
+              UNION
+              SELECT tc->'function'->>'name' AS name
+                FROM jsonb_array_elements(messages) m,
+                     jsonb_array_elements(COALESCE(m->'tool_calls', '[]'::jsonb)) tc
+                WHERE tc->'function'->>'name' IS NOT NULL AND tc->'function'->>'name' <> ''
+              UNION
+              SELECT CASE WHEN jsonb_typeof(m->'function_call') = 'string' THEN m->>'function_call'
+                          ELSE m->'function_call'->>'name' END AS name
+                FROM jsonb_array_elements(messages) m
+                WHERE m->'function_call' IS NOT NULL
+                  AND jsonb_typeof(m->'function_call') IN ('string', 'object')
+                  AND COALESCE(m->'function_call'->>'name', CASE WHEN jsonb_typeof(m->'function_call') = 'string' THEN m->>'function_call' END, '') <> ''
+              UNION
+              SELECT m->>'name' AS name
+                FROM jsonb_array_elements(messages) m
+                WHERE m->>'role' IN ('tool', 'function') AND m->>'name' IS NOT NULL AND m->>'name' <> ''
+              UNION
+              SELECT m->>'tool_name' AS name
+                FROM jsonb_array_elements(messages) m
+                WHERE m->>'role' IN ('tool', 'function') AND m->>'tool_name' IS NOT NULL AND m->>'tool_name' <> ''
+            ) s WHERE name IS NOT NULL) AS message_tools
+        FROM painel_interactions
+        WHERE company_id = ${companyId} AND id IN (${Prisma.join(ids)})
+      `,
+    );
+
+    const derivedById = new Map(rows.map((r) => [r.id, r]));
+    return items.map((it) => {
+      const derived = derivedById.get(it.id);
+      const messageTools = derived?.message_tools ?? [];
+      return {
+        ...it,
+        messages_count: derived?.messages_count ?? 0,
+        first_user_message: derived?.first_user_message ?? null,
+        last_user_message: derived?.last_user_message ?? null,
+        last_assistant_message: derived?.last_assistant_message ?? null,
+        full_transcript: derived?.full_transcript ?? null,
+        executed_tools: this.computeExecutedTools(
+          messageTools,
+          it.context_variables,
+          it as unknown as Record<string, unknown>,
+        ),
+      };
+    });
+  }
+
+  /** Réplica server-side das etapas 2 e 3 de extractSessionTools do frontend:
+   *  inferência de ferramentas via context_variables e heurísticas de negócio. */
+  private computeExecutedTools(
+    messageTools: string[],
+    contextVariables: unknown,
+    item: Record<string, unknown>,
+  ): string[] {
+    const vars = (contextVariables || {}) as Record<string, any>;
+    const tools = new Set<string>(
+      messageTools.filter((t) => typeof t === 'string' && t.trim()),
+    );
+
+    const rawVarsTools =
+      vars.tool_calls || vars.toolCalls || vars.executed_tools || vars.tools;
+    if (Array.isArray(rawVarsTools)) {
+      for (const t of rawVarsTools) {
+        const name =
+          typeof t === 'string' ? t : t?.name || t?.function?.name || t?.tool;
+        if (name) tools.add(String(name));
+      }
+    }
+
+    if (vars.cpf || vars.cliente_cpf || item.client_identifier)
+      tools.add('buscar_cpf');
+    if (vars.offers || vars.ofertas || vars.selected_offer || vars.propostas)
+      tools.add('offers');
+    if (
+      vars.acordo_id ||
+      vars.agreement_id ||
+      item.agreement_id ||
+      item.is_agreement_reached
+    )
+      tools.add('agreement');
+    if (vars.pix_code || vars.codigo_pix || vars.chave_pix)
+      tools.add('gerar_pix');
+
+    return Array.from(tools).filter(Boolean);
+  }
 
   async getInteractionsReport(
     companyId: string,
@@ -729,18 +947,23 @@ export class AnalyticsService {
       ];
     }
 
-    const [items, total] = await Promise.all([
-      this.prisma.painel_interactions.findMany({
-        where: where as any,
-        orderBy: { created_at: 'desc' },
-        skip,
-        take: limit,
-      }),
+    // Lista enxuta: apenas colunas escalares + context_variables (sem o JSONB
+    // pesado de messages). Os campos derivados de diálogo são calculados no banco.
+    const items = await this.prisma.painel_interactions.findMany({
+      where: where as any,
+      ...this.interactionListArgs,
+      orderBy: { created_at: 'desc' },
+      skip,
+      take: limit,
+    });
+
+    const [enrichedItems, total] = await Promise.all([
+      this.attachInteractionDerivedFields(companyId, items),
       this.prisma.painel_interactions.count({ where: where as any }),
     ]);
 
     return {
-      items,
+      items: enrichedItems,
       pagination: {
         page,
         limit,
@@ -748,6 +971,32 @@ export class AnalyticsService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /** Detalhe completo de uma interação (inclui messages e context_variables)
+   *  para o modal do relatório, sempre validado por company_id. */
+  async getInteractionDetail(companyId: string, id: string) {
+    if (!UUID_SHAPE_REGEX.test(id)) return null;
+    return this.prisma.painel_interactions.findFirst({
+      where: { id, company_id: companyId },
+    });
+  }
+
+  /** Mensagens completas de um lote de interações da página atual
+   *  (usado pela visualização de curadoria e exportação CSV no frontend). */
+  async getInteractionsMessages(companyId: string, ids: string[]) {
+    const validIds = Array.from(
+      new Set(ids.filter((id) => UUID_SHAPE_REGEX.test(id))),
+    ).slice(0, 200);
+    if (validIds.length === 0) return [];
+
+    return this.prisma.$queryRaw<Array<{ id: string; messages: unknown }>>(
+      Prisma.sql`
+        SELECT id, messages
+        FROM painel_interactions
+        WHERE company_id = ${companyId} AND id IN (${Prisma.join(validIds)})
+      `,
+    );
   }
 
   // ── Relatório de Consumo e Custos ───────────────────────────────

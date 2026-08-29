@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Put,
+  Query,
+} from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsConfigDto } from './dto/analytics.dto';
 import { CurrentUser } from '../common/auth/current-user.decorator';
@@ -67,6 +75,30 @@ export class AnalyticsController {
       page: page ? Number(page) : 1,
       limit: limit ? Number(limit) : 25,
     });
+  }
+
+  @Get('interactions/:id')
+  async interactionDetail(@CurrentUser() user: any, @Param('id') id: string) {
+    const ctx = extractTenantContext(user);
+    const item = await this.analyticsService.getInteractionDetail(
+      ctx.companyId,
+      id,
+    );
+    if (!item) throw new NotFoundException('Interação não encontrada');
+    return item;
+  }
+
+  @Get('interactions-messages')
+  async interactionsMessages(
+    @CurrentUser() user: any,
+    @Query('ids') ids?: string,
+  ) {
+    const ctx = extractTenantContext(user);
+    const idList = (ids || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return this.analyticsService.getInteractionsMessages(ctx.companyId, idList);
   }
 
   @Get('consumption-costs')
