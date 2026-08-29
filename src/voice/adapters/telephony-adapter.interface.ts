@@ -55,6 +55,12 @@ export interface ITelephonyAdapter {
   sendDTMF?(digit: string): Promise<void> | void;
 
   /**
+   * Descarta áudio ainda não reproduzido (fila de saída). Chamado em
+   * barge-in/interrupção para que a IA pare imediatamente de falar.
+   */
+  clearQueuedAudio?(): void;
+
+  /**
    * Encerra e desliga a chamada no PBX/Telefonia.
    */
   hangup(reason?: string): Promise<void> | void;
@@ -115,4 +121,11 @@ export interface ITelephonyAdapter {
    * rotear a chamada. Retorna false se expirar sem identificação.
    */
   waitForIdentification?(timeoutMs: number): Promise<boolean>;
+
+  /**
+   * Opcional: ingestão direta de mensagens do transporte. Usado pelo
+   * ingresso WS para reproduzir mensagens recebidas antes da criação do
+   * adapter (ex.: Twilio envia connected/start imediatamente ao abrir o WS).
+   */
+  handleRawMessage?(data: unknown, isBinary?: boolean): void;
 }

@@ -18,71 +18,75 @@ export class AgentsController {
   constructor(private readonly agentsService: AgentsService) {}
 
   @Get('agents')
-  findAll(@CurrentUser() user: { id: string }) {
-    return this.agentsService.findAll(user.id);
+  findAll(@CurrentUser() user: { company_id: string }) {
+    return this.agentsService.findAll(user.company_id);
   }
 
   @Post('clients/:clientId/agents')
   create(
     @Param('clientId') clientId: string,
     @Body() createAgentDto: CreateAgentDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.agentsService.create(clientId, createAgentDto, user.id);
+    return this.agentsService.create(clientId, createAgentDto, user.company_id);
   }
 
   @Get('clients/:clientId/agents')
   findAllByClient(
     @Param('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.agentsService.findAllByClient(clientId, user.id);
+    return this.agentsService.findAllByClient(clientId, user.company_id);
   }
 
   @Get('agents/web-search')
-  getAllWebSearchConfigs(@CurrentUser() user: { id: string }) {
-    return this.agentsService.getAllWebSearchConfigs(user.id);
+  getAllWebSearchConfigs(@CurrentUser() user: { company_id: string }) {
+    return this.agentsService.getAllWebSearchConfigs(user.company_id);
   }
 
   @Get('agents/:agentId')
   findOne(
     @Param('agentId') agentId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.agentsService.findOne(agentId, user.id);
+    return this.agentsService.findOne(agentId, user.company_id);
   }
 
   @Get('agents/:agentId/web-search')
   getWebSearchConfig(
     @Param('agentId') agentId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.agentsService.getWebSearchConfig(agentId, user.id);
+    return this.agentsService.getWebSearchConfig(agentId, user.company_id);
   }
 
   @Patch('agents/:agentId/web-search')
   updateWebSearchConfig(
     @Param('agentId') agentId: string,
     @Body() dto: WebSearchConfigDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.agentsService.updateWebSearchConfig(agentId, dto, user.id);
+    return this.agentsService.updateWebSearchConfig(
+      agentId,
+      dto,
+      user.company_id,
+    );
   }
 
   @Patch('agents/:agentId')
   update(
     @Param('agentId') agentId: string,
     @Body() updateAgentDto: UpdateAgentDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.agentsService.update(agentId, updateAgentDto, user.id);
+    return this.agentsService.update(agentId, updateAgentDto, user.company_id);
   }
 
   @Delete('agents/:agentId')
   remove(
     @Param('agentId') agentId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.agentsService.remove(agentId, user.id);
+    return this.agentsService.remove(agentId, user.company_id);
   }
 }

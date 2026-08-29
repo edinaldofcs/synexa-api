@@ -10,13 +10,14 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { AgentsRepository } from '../agents/repositories/agents.repository';
 import { ApisRepository } from '../apis/repositories/apis.repository';
-import { IntentionsRepository } from '../intentions/repositories/intentions.repository';
+import { TracksRepository } from '../tracks/repositories/tracks.repository';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
 import { ClientsRepository } from './repositories/clients.repository';
 import { encrypt, decrypt } from '../common/utils/crypto.util';
 import { CredentialAuditService } from '../common/services/credential-audit.service';
+import { TelephonyEndpointResolverService } from '../voice/services/telephony-endpoint-resolver.service';
 
 @Injectable()
 export class ClientsService {
@@ -25,24 +26,14 @@ export class ClientsService {
   constructor(
     private readonly clientsRepository: ClientsRepository,
     private readonly agentsRepository: AgentsRepository,
-    private readonly intentionsRepository: IntentionsRepository,
+    private readonly tracksRepository: TracksRepository,
     private readonly apisRepository: ApisRepository,
     private readonly metadataService: ClientMetadataService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly credentialAuditService: CredentialAuditService,
+    private readonly telephonyResolver: TelephonyEndpointResolverService,
   ) {}
-
-  private async getUserCompanyId(userId: string): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) {
-      throw new ForbiddenException('Usuário sem empresa vinculada');
-    }
-    return user.company_id;
-  }
 
   private async validateClientAccess(clientId: string, companyId: string) {
     const client = await this.prisma.painel_clients.findUnique({
@@ -54,82 +45,212 @@ export class ClientsService {
     }
   }
 
-  async create(
-    createClientDto: CreateClientDto,
-    userId: string,
-    userCompanyId: string | null,
-  ) {
-    const { user_id, ...rest } = createClientDto;
-
-    const companyId = userCompanyId;
-
+  async create(createClientDto: CreateClientDto, companyId: string) {
     if (!companyId) {
-      if (!user_id) throw new BadRequestException('User ID is required');
+      throw new ForbiddenException('Usuário sem empresa vinculada');
+    }
 
-      const user = await this.prisma.users.findUnique({
-        where: { id: user_id },
-        select: { company_id: true },
-      });
+    const { user_id, sip_extension, telephony_provider, ...rest } =
+      createClientDto;
 
-      if (!user?.company_id) {
-        throw new NotFoundException(
-          `User with ID ${user_id} not found or has no company associated.`,
+    const client = await this.clientsRepository.create({
+      ...rest,
+      company_id: companyId,
+    });
+
+    // Se informado ramal telefônico/SIP, cria o endpoint de roteamento
+    if (client && sip_extension?.trim()) {
+      const ext = sip_extension.trim();
+      const provider = (
+        telephony_provider?.trim() || 'audiosocket'
+      ).toLowerCase();
+      try {
+        await this.prisma.telephony_endpoints.upsert({
+          where: {
+            did_number_provider: {
+              did_number: ext,
+              provider,
+            },
+          },
+          create: {
+            company_id: companyId,
+            client_id: client.id,
+            provider,
+            did_number: ext,
+            label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
+            audio_format: 'g711_ulaw',
+            enabled: true,
+          },
+          update: {
+            company_id: companyId,
+            client_id: client.id,
+            label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
+            enabled: true,
+            updated_at: new Date(),
+          },
+        });
+        await this.telephonyResolver.invalidate(ext);
+      } catch (err: any) {
+        this.logger.error(
+          `Falha ao provisionar ramal ${ext} para cliente ${client.id}: ${err.message}`,
         );
       }
     }
 
-    const finalCompanyId = companyId || (await this.getUserCompanyId(userId));
-
-    const client = await this.clientsRepository.create({
-      ...rest,
-      company_id: finalCompanyId,
-    });
-
     if (client) void this.metadataService.refresh(client.id);
-    return client;
+    return {
+      ...client,
+      sip_extension: sip_extension?.trim() || null,
+      telephony_provider: telephony_provider?.trim() || 'audiosocket',
+    };
   }
 
-  async findAll(userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
-    return this.prisma.painel_clients.findMany({
+  async findAll(companyId: string) {
+    const clients = await this.prisma.painel_clients.findMany({
       where: { company_id: companyId },
+      include: {
+        telephony_endpoints: {
+          select: {
+            id: true,
+            did_number: true,
+            provider: true,
+            agent_step: true,
+            label: true,
+            enabled: true,
+          },
+        },
+      },
       orderBy: { id: 'asc' },
     });
+
+    return clients.map((c) => {
+      const primaryEndpoint = c.telephony_endpoints?.[0];
+      return {
+        ...c,
+        sip_extension: primaryEndpoint?.did_number || null,
+        telephony_provider: primaryEndpoint?.provider || null,
+      };
+    });
   }
 
-  async findOne(id: string, userId?: string) {
-    const client = await this.clientsRepository.findOne(id);
-    if (userId) {
-      const companyId = await this.getUserCompanyId(userId);
+  async findOne(id: string, companyId?: string) {
+    const client = await this.prisma.painel_clients.findUnique({
+      where: { id },
+      include: {
+        telephony_endpoints: {
+          select: {
+            id: true,
+            did_number: true,
+            provider: true,
+            agent_step: true,
+            label: true,
+            enabled: true,
+          },
+        },
+      },
+    });
+    if (!client) throw new NotFoundException(`Client with ID ${id} not found`);
+    if (companyId) {
       if (client.company_id !== companyId) {
         throw new NotFoundException(`Client with ID ${id} not found`);
       }
     }
-    return client;
+    const primaryEndpoint = client.telephony_endpoints?.[0];
+    return {
+      ...client,
+      sip_extension: primaryEndpoint?.did_number || null,
+      telephony_provider: primaryEndpoint?.provider || null,
+    };
   }
 
-  async update(id: string, updateClientDto: UpdateClientDto, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async update(
+    id: string,
+    updateClientDto: UpdateClientDto,
+    companyId: string,
+  ) {
     await this.validateClientAccess(id, companyId);
+
+    const { sip_extension, telephony_provider, ...restDto } = updateClientDto;
+
     const client = await this.clientsRepository.update(
       id,
-      updateClientDto as Record<string, unknown>,
+      restDto as Record<string, unknown>,
     );
+
+    // Sincronização do ramal/DID em telephony_endpoints
+    if (sip_extension !== undefined) {
+      const ext = sip_extension ? sip_extension.trim() : '';
+      const provider = (
+        telephony_provider?.trim() || 'audiosocket'
+      ).toLowerCase();
+
+      try {
+        const existing = await this.prisma.telephony_endpoints.findFirst({
+          where: { client_id: id, company_id: companyId },
+        });
+
+        if (ext) {
+          if (
+            existing &&
+            (existing.did_number !== ext || existing.provider !== provider)
+          ) {
+            await this.prisma.telephony_endpoints.delete({
+              where: { id: existing.id },
+            });
+            await this.telephonyResolver.invalidate(existing.did_number);
+          }
+
+          await this.prisma.telephony_endpoints.upsert({
+            where: {
+              did_number_provider: {
+                did_number: ext,
+                provider,
+              },
+            },
+            create: {
+              company_id: companyId,
+              client_id: id,
+              provider,
+              did_number: ext,
+              label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
+              audio_format: 'g711_ulaw',
+              enabled: true,
+            },
+            update: {
+              company_id: companyId,
+              client_id: id,
+              label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
+              enabled: true,
+              updated_at: new Date(),
+            },
+          });
+          await this.telephonyResolver.invalidate(ext);
+        } else if (existing) {
+          await this.prisma.telephony_endpoints.delete({
+            where: { id: existing.id },
+          });
+          await this.telephonyResolver.invalidate(existing.did_number);
+        }
+      } catch (err: any) {
+        this.logger.error(
+          `Falha ao atualizar ramal ${ext} para cliente ${id}: ${err.message}`,
+        );
+      }
+    }
+
     if (client) void this.metadataService.refresh(client.id);
-    return client;
+    return this.findOne(id, companyId);
   }
 
-  async remove(id: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async remove(id: string, companyId: string) {
     await this.validateClientAccess(id, companyId);
     return this.clientsRepository.remove(id);
   }
 
   async duplicate(
     clientId: string,
-    userId: string,
+    companyId: string,
   ): Promise<Record<string, unknown>> {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
 
     const originalClient = await this.findOne(clientId);
@@ -163,15 +284,19 @@ export class ClientsService {
       if (newAgent) agentIdMap.set(String(oldAgentId), String(newAgent.id));
     }
 
-    const originalIntentions =
-      await this.intentionsRepository.findAllByClient(clientId);
-    for (const intention of originalIntentions || []) {
-      const intentionData = {
-        ...(intention as unknown as Record<string, unknown>),
-      };
-      delete intentionData.id;
-      delete intentionData.client_id;
-      await this.intentionsRepository.create(newClient.id, intentionData);
+    const originalTracks =
+      await this.tracksRepository.findAllByClient(clientId);
+    for (const track of originalTracks || []) {
+      const trackData = { ...(track as unknown as Record<string, unknown>) };
+      const oldAgentId = trackData.agent_id;
+      delete trackData.id;
+      delete trackData.client_id;
+      delete trackData.agent_id;
+      const newAgentId = agentIdMap.get(String(oldAgentId));
+      await this.tracksRepository.create(newClient.id, {
+        ...trackData,
+        ...(newAgentId ? { agent_id: newAgentId } : {}),
+      });
     }
 
     const originalApis = await this.apisRepository.findAllByClient(clientId);
@@ -229,8 +354,7 @@ export class ClientsService {
     return newClient;
   }
 
-  async getLlmConfig(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getLlmConfig(clientId: string, companyId: string, userId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     // 1. Busca credenciais da tabela dedicada provider_credentials
@@ -395,11 +519,11 @@ export class ClientsService {
   async saveLlmConfig(
     clientId: string,
     body: LlmConfigDto,
+    companyId: string,
     userId: string,
     ipAddress?: string,
     userAgent?: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
     const client = await this.clientsRepository.findOne(clientId);
     const metadata =

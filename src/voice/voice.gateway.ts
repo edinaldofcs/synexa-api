@@ -11,13 +11,9 @@ import { VoiceService } from './voice.service';
 import { VoiceAuthService } from './voice-auth.service';
 import { MockVoiceProvider } from './providers/mock-voice.provider';
 import { GeminiLiveVoiceProvider } from './providers/gemini-live-voice.provider';
-import {
-  AudioGateService,
-  AudioGateSession,
-} from './services/audio-gate.service';
+import { AudioGateService } from './services/audio-gate.service';
 import { HybridSttService } from './services/hybrid-stt.service';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
 import { buildAgentPromptFromBlocks } from '../agents/utils/agent-prompt-builder.util';
 import { VoiceToolsService } from './voice-tools.service';
 import {
@@ -27,74 +23,21 @@ import {
 } from '../orchestrator/utils/condition-evaluator.util';
 import { resolvePromptTemplateString } from '../common/utils/prompt-variables.util';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { NativeToolsService } from '../common/services/native-tools.service';
 import { getSessionId } from '../common/auth/auth-cookie';
 import type { AuthenticatedWebSocket } from '../common/ws/cookie-ws.adapter';
-
-interface ClientSession {
-  clientWs: WebSocket;
-  liveProvider: GeminiLiveVoiceProvider | null;
-  gateSession: AudioGateSession | null;
-  mockSession?: {
-    handleClientMessage: (msg: any) => void;
-    close: () => void;
-  } | null;
-  isReady: boolean;
-  isAiSpeaking: boolean;
-  companyId?: string;
-  clientId?: string;
-  agentId?: string;
-  conversationId?: string;
-  startTime: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  interruptedCount: number;
-  hybridSttUtterances: number;
-  hybridSttFallbacks: number;
-  aiResponseStarted: boolean;
-  model: string;
-  voiceName: string;
-  bufferedUserPcm: Buffer[];
-  bufferedUserPcmBytes: number;
-  telemetryPersisted: boolean;
-  state: Record<string, unknown>;
-  providerGeneration: number;
-  /** Acumulador do turno atual da IA para persistir a fala como mensagem única */
-  aiMessageBuffer: {
-    messageId: string | null;
-    content: string;
-    lastPersist: number;
-  } | null;
-}
-
-function summarizeState(state: Record<string, unknown>): string {
-  const entries = Object.entries(state || {})
-    .filter(([, value]) => {
-      if (value === undefined || value === null) return false;
-      if (typeof value === 'object') return false;
-      if (typeof value === 'string' && value.length > 80) return false;
-      return true;
-    })
-    .filter(
-      ([key]) =>
-        ![
-          'inbound_variable_mapping',
-          'activation_rules',
-          'llm_providers',
-        ].includes(key),
-    );
-  if (!entries.length) return 'vazio';
-  return entries
-    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-    .join(', ');
-}
+import {
+  VoiceClientSession,
+  summarizeState,
+} from './sessions/voice-client-session';
+import { VoiceTelemetryService } from './services/voice-telemetry.service';
 
 @WebSocketGateway({ path: '/ws/voice' })
 export class VoiceGateway
   implements OnGatewayConnection<WebSocket>, OnGatewayDisconnect<WebSocket>
 {
   private readonly logger = new Logger(VoiceGateway.name);
-  private sessions = new Map<WebSocket, ClientSession>();
+  private sessions = new Map<WebSocket, VoiceClientSession>();
 
   @WebSocketServer()
   server: WsServer;
@@ -107,9 +50,10 @@ export class VoiceGateway
     private readonly hybridSttService: HybridSttService,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
-    private readonly pricingService: ModelPricingService,
     private readonly voiceToolsService: VoiceToolsService,
     private readonly analyticsService: AnalyticsService,
+    private readonly nativeToolsService: NativeToolsService,
+    private readonly telemetryService: VoiceTelemetryService,
   ) {}
 
   handleConnection(clientWs: AuthenticatedWebSocket) {
@@ -124,48 +68,7 @@ export class VoiceGateway
     this.logger.log('🟢 [VoiceGateway] Cliente conectado via WebSocket');
     let telemetryTimer: ReturnType<typeof setInterval> | null = null;
 
-    /**
-     * Persiste o conteúdo final acumulado do turno da IA e encerra o buffer.
-     * Chunks intermediários atualizam sempre a MESMA linha (throttle 1s);
-     * o flush garante que o texto completo fique gravado no fim do turno.
-     */
-    const flushAiMessageBuffer = async () => {
-      const buffer = session.aiMessageBuffer;
-      if (!buffer?.messageId || !buffer.content) return;
-      try {
-        await this.prisma.messages.update({
-          where: { id: buffer.messageId },
-          data: { content: buffer.content },
-        });
-      } catch (e: any) {
-        this.logger.debug(`Erro ao finalizar mensagem AI: ${e.message}`);
-      }
-      session.aiMessageBuffer = null;
-    };
-
-    const session: ClientSession = {
-      clientWs,
-      liveProvider: null,
-      gateSession: null,
-      isReady: false,
-      isAiSpeaking: false,
-      startTime: Date.now(),
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      interruptedCount: 0,
-      hybridSttUtterances: 0,
-      hybridSttFallbacks: 0,
-      aiResponseStarted: false,
-      model: 'gemini-3.1-flash-live-preview',
-      voiceName: 'Aoede',
-      bufferedUserPcm: [],
-      bufferedUserPcmBytes: 0,
-      telemetryPersisted: false,
-      state: {},
-      providerGeneration: 0,
-      aiMessageBuffer: null,
-    };
+    const session = new VoiceClientSession(clientWs);
     this.sessions.set(clientWs, session);
 
     const sendToClient = (payload: any) => {
@@ -194,129 +97,9 @@ export class VoiceGateway
     };
 
     const sendTelemetry = () => {
-      if (!session.conversationId) return;
-
-      const stats = session.gateSession?.getStats();
-      const durationSec = Number(
-        ((Date.now() - session.startTime) / 1000).toFixed(1),
-      );
-      const costUsd = this.pricingService.calculateVoiceLiveCost({
-        durationSeconds: durationSec,
-        inputTokens: session.inputTokens,
-        outputTokens: session.outputTokens,
-      });
-
-      sendToClient({
-        type: 'telemetry',
-        telemetry: {
-          durationSec,
-          forwardedSec: stats?.forwardedSec || 0,
-          suppressedSec: stats?.suppressedSec || 0,
-          interruptedCount: session.interruptedCount,
-          totalTokens: session.totalTokens,
-          audioInputTokens: session.inputTokens,
-          audioOutputTokens: session.outputTokens,
-          costUsd,
-          costBrl: Number((costUsd * 5.5).toFixed(4)),
-          voiceName: session.voiceName,
-          audioGateEnabled: session.gateSession?.enabled ?? true,
-        },
-      });
-    };
-
-    const persistVoiceSessionAndTelemetry = async () => {
-      if (session.telemetryPersisted) return;
-      session.telemetryPersisted = true;
-
-      const durationSeconds = Math.max(
-        1,
-        Math.round((Date.now() - session.startTime) / 1000),
-      );
-
-      if (session.companyId) {
-        try {
-          const rawCost = this.pricingService.calculateVoiceLiveCost({
-            durationSeconds,
-            inputTokens: session.inputTokens,
-            outputTokens: session.outputTokens,
-          });
-
-          // 1. Fecha a conversa omnichannel
-          if (session.conversationId) {
-            await this.prisma.conversations.update({
-              where: { id: session.conversationId },
-              data: {
-                status: 'closed',
-                closed_at: new Date(),
-              },
-            });
-          }
-
-          // 2. Registra agent_runs
-          if (
-            session.totalTokens > 0 &&
-            session.companyId &&
-            session.clientId
-          ) {
-            await this.prisma.agent_runs.create({
-              data: {
-                company_id: session.companyId,
-                client_id: session.clientId,
-                conversation_id: session.conversationId,
-                provider: 'gemini-live',
-                model: session.model,
-                status: 'success',
-                input_tokens: session.inputTokens,
-                output_tokens: session.outputTokens,
-                total_tokens: session.totalTokens,
-                cost: rawCost,
-                latency_ms: durationSeconds * 1000,
-                trace: {
-                  type: 'voice_live_session',
-                  duration_seconds: durationSeconds,
-                  voice_name: session.voiceName,
-                  interrupted_count: session.interruptedCount,
-                } as any,
-              },
-            });
-          }
-
-          // 3. Registra voice_session_telemetry
-          if (session.conversationId && session.gateSession) {
-            const stats = session.gateSession.getStats();
-            await this.prisma.voice_session_telemetry.create({
-              data: {
-                company_id: session.companyId,
-                client_id: session.clientId,
-                conversation_id: session.conversationId,
-                duration_sec: durationSeconds,
-                audio_gate_forwarded_sec: stats.forwardedSec,
-                audio_gate_suppressed_sec: stats.suppressedSec,
-                audio_gate_closes: stats.closes,
-                interrupted_count: session.interruptedCount,
-                hybrid_stt_utterances: session.hybridSttUtterances,
-                hybrid_stt_fallback_count: session.hybridSttFallbacks,
-                total_tokens: session.totalTokens,
-                audio_input_tokens: session.inputTokens,
-                audio_output_tokens: session.outputTokens,
-                cost_usd: rawCost,
-                cost_brl: Number((rawCost * 5.5).toFixed(4)),
-                model: session.model,
-                voice_name: session.voiceName,
-                audio_gate_enabled: session.gateSession.enabled,
-              },
-            });
-
-            this.logger.log(
-              `📊 [VoiceGateway] Telemetria registrada: ${durationSeconds}s | Gate: +${stats.forwardedSec}s / -${stats.suppressedSec}s silêncio | Custo: $${rawCost}`,
-            );
-          }
-        } catch (err: any) {
-          this.logger.error(
-            `Erro ao persistir telemetria de voz: ${err.message}`,
-          );
-        }
-      }
+      const payload = this.telemetryService.buildTelemetryPayload(session);
+      if (!payload) return;
+      sendToClient({ type: 'telemetry', telemetry: payload });
     };
 
     const closeVoiceSession = async () => {
@@ -330,7 +113,7 @@ export class VoiceGateway
         session.liveProvider = null;
         session.isReady = false;
       }
-      await persistVoiceSessionAndTelemetry();
+      await this.telemetryService.persistSessionTelemetry(session);
     };
 
     clientWs.on('message', async (raw: any) => {
@@ -437,21 +220,13 @@ export class VoiceGateway
               session.mockSession = null;
             }
 
-            session.startTime = Date.now();
-            session.companyId = authenticatedUser.company_id;
-            session.agentId = selectedAgent?.id;
-            session.inputTokens = 0;
-            session.outputTokens = 0;
-            session.totalTokens = 0;
-            session.interruptedCount = 0;
-            session.bufferedUserPcm = [];
-            session.bufferedUserPcmBytes = 0;
-            session.telemetryPersisted = false;
-            session.aiResponseStarted = false;
-            session.state = session.agentId
-              ? { current_agent_id: session.agentId }
-              : {};
-            session.providerGeneration++;
+            session.beginSession({
+              companyId: authenticatedUser.company_id,
+              agentId: selectedAgent?.id,
+              state: selectedAgent?.id
+                ? { current_agent_id: selectedAgent.id }
+                : {},
+            });
 
             // Busca configurações salvas do cliente
             let clientDb: any = null;
@@ -500,20 +275,6 @@ export class VoiceGateway
               'VOICE_PROVIDER',
               'gemini',
             );
-            const persistVoiceState = async () => {
-              if (!session.conversationId) return;
-              await this.prisma.conversation_state.upsert({
-                where: { conversation_id: session.conversationId },
-                update: {
-                  state: session.state as any,
-                  version: { increment: 1 },
-                },
-                create: {
-                  conversation_id: session.conversationId,
-                  state: session.state as any,
-                },
-              });
-            };
 
             const findVoiceAgents = async () =>
               this.prisma.painel_agents.findMany({
@@ -593,7 +354,7 @@ export class VoiceGateway
                 text,
                 texto: text,
               };
-              await persistVoiceState();
+              await this.telemetryService.persistConversationState(session);
             };
 
             const handleToolCalls = async (
@@ -642,38 +403,44 @@ export class VoiceGateway
                   arguments: args,
                 });
 
-                if (call.name === 'set_call_variable') {
-                  const varName =
-                    typeof args.name === 'string' ? args.name.trim() : '';
-                  const varVal = args.value;
+                if (
+                  [
+                    'validate_variable_part',
+                    'validate_variable',
+                    'set_session_variable',
+                    'set_call_variable',
+                    'set_variable',
+                    'calculate_financial',
+                    'calculate_discount_installment',
+                  ].includes(call.name)
+                ) {
+                  const nativeRes = this.nativeToolsService.execute(
+                    call.name,
+                    args,
+                    session.state,
+                  );
                   if (
-                    varName &&
-                    varVal !== undefined &&
-                    varVal !== null &&
-                    varVal !== ''
+                    [
+                      'set_session_variable',
+                      'set_call_variable',
+                      'set_variable',
+                    ].includes(call.name) &&
+                    nativeRes.ok
                   ) {
-                    session.state = { ...session.state, [varName]: varVal };
-                    await persistVoiceState();
+                    await this.telemetryService.persistConversationState(
+                      session,
+                    );
                     sendDebug(
                       'session',
-                      `💾 Variável "${varName}" salva na sessão pelo assistente.`,
+                      `💾 Variável salva na sessão pelo assistente.`,
                       { state: summarizeState(session.state) },
                     );
-                    responses.push({
-                      id: call.id,
-                      name: call.name,
-                      response: { ok: true, saved: { [varName]: varVal } },
-                    });
-                  } else {
-                    responses.push({
-                      id: call.id,
-                      name: call.name,
-                      response: {
-                        ok: false,
-                        error: 'Informe "name" e "value".',
-                      },
-                    });
                   }
+                  responses.push({
+                    id: call.id,
+                    name: call.name,
+                    response: nativeRes,
+                  });
                   continue;
                 }
 
@@ -729,7 +496,9 @@ export class VoiceGateway
                         : {}),
                       ...sessionSaves,
                     };
-                    await persistVoiceState();
+                    await this.telemetryService.persistConversationState(
+                      session,
+                    );
                     sendDebug(
                       'session',
                       `📊 Variáveis do estado: ${summarizeState(session.state)}`,
@@ -833,7 +602,7 @@ export class VoiceGateway
             };
 
             connectAgent = async (agent: any, handoffText?: string) => {
-              const generation = ++session.providerGeneration;
+              const generation = session.nextGeneration();
               const voiceTools =
                 agent && session.clientId
                   ? await this.voiceToolsService.getAgentTools(
@@ -857,30 +626,9 @@ export class VoiceGateway
                 parameters,
               }));
 
-              // Tool nativa: permite ao assistente salvar dados capturados na
-              // conversa (ex: CPF falado pelo cliente) no estado da sessão
-              voiceToolDeclarations.push({
-                name: 'set_call_variable',
-                description:
-                  'Salva uma variável no estado da sessão do atendimento. ' +
-                  'Use SEMPRE que o cliente informar um dado importante (ex: cpf, codigo_plano, forma_pagamento, status_atendimento) ' +
-                  'para que ele fique disponível para as próximas etapas e integrações.',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    name: {
-                      type: 'string',
-                      description:
-                        'Nome da variável (ex: cpf, codigo_plano, status_atendimento)',
-                    },
-                    value: {
-                      type: 'string',
-                      description: 'Valor a ser salvo (sempre como string)',
-                    },
-                  },
-                  required: ['name', 'value'],
-                },
-              });
+              // Injeta as ferramentas nativas (validação, gravação de variáveis e cálculos financeiros)
+              const nativeToolDecls = this.nativeToolsService.getDeclarations();
+              voiceToolDeclarations.push(...nativeToolDecls);
 
               const agentName = agent
                 ? String(agent.service_step || agent.id)
@@ -974,7 +722,7 @@ export class VoiceGateway
               const provider = new GeminiLiveVoiceProvider();
               session.liveProvider = provider;
 
-              // Resolve variáveis [[chave]] do prompt com o estado da sessão
+              // Resolve variáveis {{chave}} do prompt com o estado da sessão
               // (incluindo retornos de APIs) + dados do cliente
               const basePrompt =
                 (agent
@@ -1035,78 +783,20 @@ export class VoiceGateway
                       'success',
                     );
                     // Novo turno da IA: abre um buffer zerado
-                    session.aiMessageBuffer = {
-                      messageId: null,
-                      content: '',
-                      lastPersist: 0,
-                    };
+                    session.aiMessageBuffer =
+                      this.telemetryService.createAiBuffer();
                   }
                   sendToClient({ type: 'ai_transcript', text });
-                  if (session.conversationId && session.companyId && text) {
-                    try {
-                      const buffer = session.aiMessageBuffer;
-                      if (buffer) {
-                        // Eventos podem ser deltas ("Vamos", "conversar") ou
-                        // cumulativos; o startsWith detecta o caso cumulativo.
-                        if (buffer.content && text.startsWith(buffer.content)) {
-                          buffer.content = text;
-                        } else {
-                          buffer.content = buffer.content
-                            ? `${buffer.content} ${text}`
-                            : text;
-                        }
-
-                        const now = Date.now();
-                        if (!buffer.messageId) {
-                          const created = await this.prisma.messages.create({
-                            data: {
-                              company_id: session.companyId,
-                              conversation_id: session.conversationId!,
-                              sender_type: 'ai',
-                              channel: 'voice',
-                              direction: 'outbound',
-                              content: buffer.content,
-                            },
-                          });
-                          buffer.messageId = created.id;
-                          buffer.lastPersist = now;
-                        } else if (now - buffer.lastPersist > 1000) {
-                          await this.prisma.messages.update({
-                            where: { id: buffer.messageId },
-                            data: { content: buffer.content },
-                          });
-                          buffer.lastPersist = now;
-                        }
-                      }
-                    } catch (e: any) {
-                      this.logger.debug(
-                        `Erro ao salvar mensagem AI: ${e.message}`,
-                      );
-                    }
-                  }
+                  await this.telemetryService.appendAiTranscript(session, text);
                 },
                 onUserTranscript: async (text) => {
                   if (generation !== session.providerGeneration) return;
                   sendDebug('audio', 'Fala do usuário transcrita.', { text });
                   sendToClient({ type: 'user_transcript', text });
-                  if (session.conversationId && session.companyId && text) {
-                    try {
-                      await this.prisma.messages.create({
-                        data: {
-                          company_id: session.companyId,
-                          conversation_id: session.conversationId,
-                          sender_type: 'customer',
-                          channel: 'voice',
-                          direction: 'inbound',
-                          content: text,
-                        },
-                      });
-                    } catch (e: any) {
-                      this.logger.debug(
-                        `Erro ao salvar mensagem User: ${e.message}`,
-                      );
-                    }
-                  }
+                  await this.telemetryService.persistUserTranscript(
+                    session,
+                    text,
+                  );
                   await handleUserTranscript(text, generation);
                 },
                 onInterrupted: async () => {
@@ -1115,7 +805,7 @@ export class VoiceGateway
                   session.interruptedCount++;
                   session.aiResponseStarted = false;
                   // Preserva o trecho falado antes da interrupção
-                  await flushAiMessageBuffer();
+                  await this.telemetryService.flushAiBuffer(session);
                   session.gateSession?.notifyAiSpeakingChanged(false);
                   sendDebug(
                     'audio',
@@ -1127,7 +817,7 @@ export class VoiceGateway
                   if (generation !== session.providerGeneration) return;
                   session.isAiSpeaking = false;
                   session.aiResponseStarted = false;
-                  await flushAiMessageBuffer();
+                  await this.telemetryService.flushAiBuffer(session);
                   session.gateSession?.notifyAiSpeakingChanged(false);
                   sendDebug(
                     'model',
@@ -1169,7 +859,7 @@ export class VoiceGateway
             switchAgent = async (targetAgent, reason, handoffText) => {
               if (!targetAgent || targetAgent.id === session.agentId) return;
               const previousProvider = session.liveProvider;
-              session.providerGeneration++;
+              session.nextGeneration();
               session.isReady = false;
               previousProvider?.close();
               session.liveProvider = null;
@@ -1187,7 +877,7 @@ export class VoiceGateway
                 current_agent_id: targetAgent.id,
                 switch_reason: reason,
               };
-              await persistVoiceState();
+              await this.telemetryService.persistConversationState(session);
               if (session.conversationId) {
                 const conversation = await this.prisma.conversations.findUnique(
                   {
@@ -1289,7 +979,7 @@ export class VoiceGateway
         session.mockSession.close();
         session.mockSession = null;
       }
-      await flushAiMessageBuffer();
+      await this.telemetryService.flushAiBuffer(session);
       await closeVoiceSession();
       this.sessions.delete(clientWs);
     });

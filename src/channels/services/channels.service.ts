@@ -3,6 +3,8 @@ import {
   Logger,
   BadRequestException,
   NotFoundException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
@@ -36,6 +38,7 @@ export class ChannelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly webhooksService: WebhooksService,
+    @Inject(forwardRef(() => TextAiExecutionService))
     private readonly textAiExecutionService: TextAiExecutionService,
     whatsappAdapter: WhatsappAdapter,
     apiAdapter: ApiAdapter,

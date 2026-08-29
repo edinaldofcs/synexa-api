@@ -127,4 +127,27 @@ describe('TelephonyEndpointResolverService', () => {
     );
     expect(route!.client_id).toBe('client-1');
   });
+
+  it('prioriza o agente marcado como is_initial para chamadas de voz', async () => {
+    const { service, db } = makeService();
+    (db.painel_agents.findFirst as jest.Mock).mockImplementation(
+      async ({ where }: any) => {
+        if (where.is_initial && where.interaction_mode) {
+          return {
+            id: 'agent-reception',
+            is_initial: true,
+            service_step: 'reception',
+          };
+        }
+        return { id: 'agent-random' };
+      },
+    );
+
+    const route = await service.resolve({
+      didNumber: '08001234567',
+      providerName: 'asterisk_fastagi',
+    });
+
+    expect(route!.agent?.id).toBe('agent-reception');
+  });
 });

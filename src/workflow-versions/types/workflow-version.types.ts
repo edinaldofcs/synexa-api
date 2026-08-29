@@ -41,10 +41,17 @@ export interface WorkflowSnapshot {
     next_tool: string | null;
     execution_order: number | null;
   }>;
-  intentions: Array<{
+  tracks: Array<{
     id: string;
     code: string;
+    label: string;
     description: string;
+    category?: string | null;
+    icon?: string | null;
+    color?: string | null;
+    examples?: string[] | null;
+    agent_id?: string | null;
+    display_order?: number;
     is_active: boolean;
   }>;
 }
@@ -71,7 +78,7 @@ export interface WorkflowDiffResult {
     removed: any[];
     modified: DiffItem[];
   };
-  intentions: {
+  tracks: {
     added: any[];
     removed: any[];
     modified: DiffItem[];

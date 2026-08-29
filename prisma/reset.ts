@@ -34,7 +34,7 @@ async function main() {
     'painel_clients',
     'painel_agents',
     'painel_apis',
-    'painel_intentions',
+    'painel_tracks',
     'credential_audit_logs',
     'provider_credentials',
     'users',

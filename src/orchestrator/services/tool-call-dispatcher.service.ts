@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { RedisService } from '../../common/redis/redis.service';
 import { ConversationsService } from '../../conversations/conversations.service';
 import { WebSearchService } from '../../agents/web-search/web-search.service';
+import { NativeToolsService } from '../../common/services/native-tools.service';
 import type { AgentConfig } from '../types/capabilities.types';
 import { sanitize } from '../../common/utils/sanitize-log.util';
 
@@ -16,6 +17,7 @@ export class ToolCallDispatcher {
     private readonly redisService: RedisService,
     private readonly conversationsService: ConversationsService,
     private readonly webSearchService: WebSearchService,
+    private readonly nativeToolsService: NativeToolsService,
   ) {}
 
   async dispatch(
@@ -78,6 +80,14 @@ export class ToolCallDispatcher {
           conversationId,
           String(args.reason || 'solicitação do usuário'),
         );
+      case 'validate_variable_part':
+      case 'validate_variable':
+      case 'set_session_variable':
+      case 'set_call_variable':
+      case 'set_variable':
+      case 'calculate_financial':
+      case 'calculate_discount_installment':
+        return this.nativeToolsService.execute(toolName, args, state);
       default:
         return { result: 'tool_executed', toolName };
     }

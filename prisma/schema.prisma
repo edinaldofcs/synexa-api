@@ -53,9 +53,6 @@ model users {
   conversations conversations[]
 }
 
-/// @deprecated Removed. Use conversations + messages directly.
-/// Table will be dropped from Supabase.
-
 model conversations {
   id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id              String    @db.Uuid
@@ -210,10 +207,7 @@ model painel_clients {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id   String    @db.Uuid
   company_name String?
-  status       String?
   agent_name   String?
-  account_id   String?
-  inbox_id     String?
   logo_url     String?
   logo_icon    String?
   // Processamento da IA de texto: TRUE = BullMQ (durável); FALSE = execução inline na API
@@ -222,7 +216,7 @@ model painel_clients {
   companies           companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_agents       painel_agents[]
   painel_apis         painel_apis[]
-  painel_intentions   painel_intentions[]
+  painel_tracks       painel_tracks[]
   channel_connections channel_connections[]
   webhook_endpoints   webhook_endpoints[]
   end_users           end_users[]
@@ -282,6 +276,7 @@ model painel_agents {
   painel_clients      painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
   painel_apis         painel_apis[]
   painel_interactions painel_interactions[]
+  painel_tracks       painel_tracks[]
   agent_runs          agent_runs[]
 }
 
@@ -306,7 +301,8 @@ model painel_subagents {
   @@index([is_active])
 }
 
-/// @deprecated Use channels/channel-connections instead.
+/// Ferramentas de IA do agente: APIs externas configuráveis por cliente,
+/// executadas pelo LLM via function calling (catálogo do ApiToolExecutorService).
 model painel_apis {
   id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   client_id        String         @db.Uuid
@@ -330,24 +326,34 @@ model painel_apis {
   painel_agents    painel_agents? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 }
 
-/// @deprecated Intentions are now embedded in agent transitions.
-model painel_intentions {
-  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  client_id   String         @db.Uuid
-  code        String
-  description String
-  is_active   Boolean        @default(true)
-  created_at  DateTime       @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime       @default(now()) @db.Timestamptz(6)
-  
+/// Trilhas de Atendimento: situações que o assistente do cliente resolve,
+/// organizadas com contexto visual (ícone, cor, categoria) e frases de exemplo.
+model painel_tracks {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_id     String    @db.Uuid
+  code          String
+  label         String
+  description   String
+  category      String?
+  icon          String?
+  color         String?
+  examples      Json?     @db.JsonB
+  agent_id      String?   @db.Uuid
+  display_order Int       @default(0)
+  is_active     Boolean   @default(true)
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime  @default(now()) @db.Timestamptz(6)
+
   painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  painel_agents  painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 
   @@unique([client_id, code])
+  @@index([client_id])
+  @@index([category])
 }
 
-/// Removed. Use conversations + conversation_state.
-/// @deprecated Removed from schema.
-
+/// Conexões de canal de entrada/saída (WhatsApp, webchat, SIP etc.)
+/// que alimentam o roteamento de eventos de mensageria.
 model channel_connections {
   id                          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id                  String    @db.Uuid

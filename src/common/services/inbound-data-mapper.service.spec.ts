@@ -185,4 +185,36 @@ describe('InboundDataMapperService', () => {
     expect(whatsappResult.whatsapp_only_var).toBe('123');
     expect(whatsappResult.voice_only_var).toBeUndefined();
   });
+
+  it('normaliza regras com colchetes [[target]] e extrai aliases de headers SIP', () => {
+    const rawData = {
+      caller_name: 'Carlos Eduardo',
+      param: '12345678909',
+    };
+
+    const config: InboundMappingConfig = {
+      enabled: true,
+      rules: [
+        {
+          source_channel: 'all',
+          source_field: 'X-CPF',
+          target_variable: '[[cnpj_cpf]]',
+          transform: 'cpf_cnpj',
+        },
+        {
+          source_channel: 'all',
+          source_field: 'X-Cliente-Nome',
+          target_variable: '[[cliente_nome]]',
+          transform: 'text',
+        },
+      ],
+    };
+
+    const result = service.mapInboundData(rawData, config, 'voice');
+
+    expect(result.cnpj_cpf).toBe('123.456.789-09');
+    expect(result.cpf).toBe('123.456.789-09');
+    expect(result.cliente_nome).toBe('Carlos Eduardo');
+    expect(result.nome_cliente).toBe('Carlos Eduardo');
+  });
 });

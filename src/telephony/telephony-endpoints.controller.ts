@@ -16,12 +16,15 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { extractTenantContext } from '../common/utils/tenant-access.helper';
-import { TelephonyEndpointResolverService } from './services/telephony-endpoint-resolver.service';
+import { TelephonyEndpointResolverService } from '../voice/services/telephony-endpoint-resolver.service';
 
 /**
  * API de configuração plug-and-play da telefonia.
  * Cada endpoint roteia um DID/provedor (NexCore, CallFlex, Twilio SIP...)
  * para empresa/cliente/agente sem necessidade de código novo.
+ *
+ * Registrada na API principal (:3000) via TelephonyModule — protegida pelo
+ * AuthGuard global. O processo de voz standalone (:3001) não expõe este CRUD.
  */
 @Controller('voice/telephony-endpoints')
 export class TelephonyEndpointsController {

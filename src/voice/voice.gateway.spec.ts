@@ -35,6 +35,11 @@ describe('VoiceGateway security', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        flushAiBuffer: jest.fn(),
+        persistSessionTelemetry: jest.fn(),
+        buildTelemetryPayload: jest.fn().mockReturnValue(null),
+      } as any,
     );
 
     gateway.handleConnection(client as any);

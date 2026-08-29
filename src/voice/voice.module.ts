@@ -15,7 +15,7 @@ import { DialerWsIngress } from './telephony/dialer-ws.gateway';
 import { TelephonyAdapterFactory } from './adapters/telephony-adapter.factory';
 import { TelephonyEndpointResolverService } from './services/telephony-endpoint-resolver.service';
 import { VoiceSessionFactory } from './services/voice-session.factory';
-import { TelephonyEndpointsController } from './telephony-endpoints.controller';
+import { VoiceTelemetryService } from './services/voice-telemetry.service';
 import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
 import { VoiceToolsService } from './voice-tools.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
@@ -24,7 +24,7 @@ import { SessionService } from '../common/auth/session.service';
 
 @Module({
   imports: [CommonModule, AnalyticsModule],
-  controllers: [VoiceController, TelephonyEndpointsController],
+  controllers: [VoiceController],
   providers: [
     VoiceGateway,
     VoiceService,
@@ -41,6 +41,7 @@ import { SessionService } from '../common/auth/session.service';
     TelephonyAdapterFactory,
     TelephonyEndpointResolverService,
     VoiceSessionFactory,
+    VoiceTelemetryService,
     ModelPricingService,
     ProviderKeyResolverService,
     VoiceToolsService,

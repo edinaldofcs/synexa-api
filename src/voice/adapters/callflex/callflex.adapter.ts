@@ -66,17 +66,7 @@ export class CallFlexAdapter implements ITelephonyAdapter {
     if (!this.ws) return;
 
     this.ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
-      if (isBinary && Buffer.isBuffer(data)) {
-        this.processIncomingAudio(data);
-      } else {
-        try {
-          const text = data.toString();
-          const json = JSON.parse(text);
-          this.handleControlMessage(json);
-        } catch {
-          // Ignora mensagens de texto não-JSON
-        }
-      }
+      this.handleRawMessage(data, isBinary);
     });
 
     this.ws.on('close', () => {
@@ -90,6 +80,24 @@ export class CallFlexAdapter implements ITelephonyAdapter {
       this.logger.error(`❌ [CallFlexAdapter] Erro na conexão: ${err.message}`);
       this.errorCallback?.(err);
     });
+  }
+
+  /**
+   * Ingestão direta de mensagens do transporte — usada pelo ingresso WS
+   * para reproduzir mensagens recebidas antes da criação do adapter.
+   */
+  public handleRawMessage(data: unknown, isBinary = false): void {
+    if (isBinary && Buffer.isBuffer(data)) {
+      this.processIncomingAudio(data);
+    } else {
+      try {
+        const text = (data as Buffer).toString();
+        const json = JSON.parse(text);
+        this.handleControlMessage(json);
+      } catch {
+        // Ignora mensagens de texto não-JSON
+      }
+    }
   }
 
   private processIncomingAudio(rawAudio: Buffer): void {

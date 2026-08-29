@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { encrypt } from '../common/utils/crypto.util';
 
@@ -15,7 +15,7 @@ describe('ClientsService', () => {
     create: jest.fn(),
     findAllByClient: jest.fn(),
   };
-  const intentionsRepository = {
+  const tracksRepository = {
     create: jest.fn(),
     findAllByClient: jest.fn(),
   };
@@ -31,9 +31,16 @@ describe('ClientsService', () => {
   const credentialAuditService = {
     logAction: jest.fn().mockResolvedValue(undefined),
   };
+  const telephonyResolver = {
+    invalidate: jest.fn().mockResolvedValue(undefined),
+  };
   const prisma = {
-    users: { findUnique: jest.fn() },
-    painel_clients: { findUnique: jest.fn() },
+    painel_clients: { findUnique: jest.fn(), findMany: jest.fn() },
+    telephony_endpoints: {
+      upsert: jest.fn().mockResolvedValue({ id: 'ep-1' }),
+      findFirst: jest.fn().mockResolvedValue(null),
+      delete: jest.fn().mockResolvedValue({ id: 'ep-1' }),
+    },
     provider_credentials: {
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
@@ -48,12 +55,13 @@ describe('ClientsService', () => {
   const service = new ClientsService(
     clientsRepository as never,
     agentsRepository as never,
-    intentionsRepository as never,
+    tracksRepository as never,
     apisRepository as never,
     metadata as never,
     prisma as never,
     configService as never,
     credentialAuditService as never,
+    telephonyResolver as never,
   );
 
   const userId = 'user-1';
@@ -61,23 +69,24 @@ describe('ClientsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    prisma.users.findUnique.mockResolvedValue({ company_id: companyId });
     prisma.painel_clients.findUnique.mockResolvedValue({
       company_id: companyId,
     });
   });
 
   it('creates a client using the company from the user', async () => {
-    prisma.users.findUnique.mockResolvedValue({ company_id: 'company-1' });
     clientsRepository.create.mockResolvedValue({ id: 'client-1' });
 
     await expect(
       service.create(
         { user_id: 'user-1', company_name: 'ACME' } as any,
-        'user-1',
         'company-1',
       ),
-    ).resolves.toEqual({ id: 'client-1' });
+    ).resolves.toEqual({
+      id: 'client-1',
+      sip_extension: null,
+      telephony_provider: 'audiosocket',
+    });
 
     expect(clientsRepository.create).toHaveBeenCalledWith({
       company_id: 'company-1',
@@ -86,15 +95,66 @@ describe('ClientsService', () => {
     expect(metadata.refresh).toHaveBeenCalledWith('client-1');
   });
 
-  it('rejects client creation when user has no company', async () => {
-    prisma.users.findUnique.mockResolvedValue(null);
+  it('creates a client with sip_extension and provisions telephony_endpoints', async () => {
+    clientsRepository.create.mockResolvedValue({
+      id: 'client-2',
+      company_name: 'ACME 2',
+      agent_name: 'Ana',
+    });
 
     await expect(
-      service.create({ user_id: 'missing' } as any, 'missing', null),
-    ).rejects.toBeInstanceOf(NotFoundException);
+      service.create(
+        {
+          user_id: 'user-1',
+          company_name: 'ACME 2',
+          agent_name: 'Ana',
+          sip_extension: '2000',
+          telephony_provider: 'audiosocket',
+        } as any,
+        'company-1',
+      ),
+    ).resolves.toEqual({
+      id: 'client-2',
+      company_name: 'ACME 2',
+      agent_name: 'Ana',
+      sip_extension: '2000',
+      telephony_provider: 'audiosocket',
+    });
+
+    expect(prisma.telephony_endpoints.upsert).toHaveBeenCalledWith({
+      where: {
+        did_number_provider: {
+          did_number: '2000',
+          provider: 'audiosocket',
+        },
+      },
+      create: {
+        company_id: 'company-1',
+        client_id: 'client-2',
+        provider: 'audiosocket',
+        did_number: '2000',
+        label: 'Ramal 2000 - ACME 2',
+        audio_format: 'g711_ulaw',
+        enabled: true,
+      },
+      update: {
+        company_id: 'company-1',
+        client_id: 'client-2',
+        label: 'Ramal 2000 - ACME 2',
+        enabled: true,
+        updated_at: expect.any(Date),
+      },
+    });
+    expect(telephonyResolver.invalidate).toHaveBeenCalledWith('2000');
   });
 
-  it('duplicates agents, intentions, apis, subagents and remaps next_api_id', async () => {
+  it('rejects client creation when user has no company', async () => {
+    await expect(
+      service.create({ user_id: 'missing' } as any, null as never),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('duplicates agents, tracks, apis, subagents and remaps next_api_id', async () => {
     clientsRepository.findOne.mockResolvedValue({
       id: 'client-old',
       company_id: companyId,
@@ -106,8 +166,8 @@ describe('ClientsService', () => {
       { id: 'agent-old', client_id: 'client-old', model: 'gpt-4o' },
     ]);
     agentsRepository.create.mockResolvedValue({ id: 'agent-new' });
-    intentionsRepository.findAllByClient.mockResolvedValue([
-      { id: 'intention-old', client_id: 'client-old', code: 'hello' },
+    tracksRepository.findAllByClient.mockResolvedValue([
+      { id: 'track-old', client_id: 'client-old', code: 'hello' },
     ]);
     apisRepository.findAllByClient.mockResolvedValue([
       {
@@ -136,14 +196,14 @@ describe('ClientsService', () => {
       },
     ]);
 
-    await expect(service.duplicate('client-old', userId)).resolves.toEqual({
+    await expect(service.duplicate('client-old', companyId)).resolves.toEqual({
       id: 'client-new',
     });
 
     expect(agentsRepository.create).toHaveBeenCalledWith('client-new', {
       model: 'gpt-4o',
     });
-    expect(intentionsRepository.create).toHaveBeenCalledWith('client-new', {
+    expect(tracksRepository.create).toHaveBeenCalledWith('client-new', {
       code: 'hello',
     });
     expect(apisRepository.update).toHaveBeenCalledWith('api-new', {
@@ -167,7 +227,7 @@ describe('ClientsService', () => {
     clientsRepository.duplicate.mockResolvedValue(null);
 
     await expect(
-      service.duplicate('client-old', userId),
+      service.duplicate('client-old', companyId),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -190,7 +250,7 @@ describe('ClientsService', () => {
       metadata: {},
     });
 
-    const result = await service.getLlmConfig('client-1', userId);
+    const result = await service.getLlmConfig('client-1', companyId, userId);
 
     expect(result.providers.groq).toBeDefined();
     expect(result.providers.groq.hasStoredKey).toBe(true);
@@ -221,6 +281,7 @@ describe('ClientsService', () => {
           },
         },
       } as any,
+      companyId,
       userId,
     );
 

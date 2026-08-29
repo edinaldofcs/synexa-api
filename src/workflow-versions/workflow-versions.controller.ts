@@ -26,41 +26,47 @@ export class WorkflowVersionsController {
   @Get()
   list(
     @Param('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.list(clientId, user.id);
+    return this.workflowVersionsService.list(clientId, user.company_id);
   }
 
   @Get('editing')
   getEditing(
     @Param('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.getEditingVersion(clientId, user.id);
+    return this.workflowVersionsService.getEditingVersion(
+      clientId,
+      user.company_id,
+    );
   }
 
   @Post('save-editing')
   saveEditing(
     @Param('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.saveCurrentEditing(clientId, user.id);
+    return this.workflowVersionsService.saveCurrentEditing(
+      clientId,
+      user.company_id,
+    );
   }
 
   @Get('draft')
   getDraft(
     @Param('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.getDraft(clientId, user.id);
+    return this.workflowVersionsService.getDraft(clientId, user.company_id);
   }
 
   @Get('published')
   getPublished(
     @Param('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.getPublished(clientId, user.id);
+    return this.workflowVersionsService.getPublished(clientId, user.company_id);
   }
 
   @Get('diff')
@@ -68,13 +74,13 @@ export class WorkflowVersionsController {
     @Param('clientId') clientId: string,
     @Query('v1') v1: string,
     @Query('v2') v2: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
     return this.workflowVersionsService.diff(
       clientId,
       v1 || 'published',
       v2 || 'current',
-      user.id,
+      user.company_id,
     );
   }
 
@@ -82,20 +88,25 @@ export class WorkflowVersionsController {
   getById(
     @Param('clientId') clientId: string,
     @Param('versionId') versionId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.getById(clientId, versionId, user.id);
+    return this.workflowVersionsService.getById(
+      clientId,
+      versionId,
+      user.company_id,
+    );
   }
 
   @Post('snapshot')
   createDraftSnapshot(
     @Param('clientId') clientId: string,
     @Body() dto: CreateSnapshotDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string; id: string },
   ) {
     return this.workflowVersionsService.createDraftSnapshot(
       clientId,
       dto,
+      user.company_id,
       user.id,
     );
   }
@@ -105,12 +116,13 @@ export class WorkflowVersionsController {
     @Param('clientId') clientId: string,
     @Param('versionId') versionId: string,
     @Body() dto: PublishVersionDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string; id: string },
   ) {
     return this.workflowVersionsService.publish(
       clientId,
       versionId,
       dto,
+      user.company_id,
       user.id,
     );
   }
@@ -119,18 +131,27 @@ export class WorkflowVersionsController {
   activate(
     @Param('clientId') clientId: string,
     @Param('versionId') versionId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string; id: string },
   ) {
-    return this.workflowVersionsService.activate(clientId, versionId, user.id);
+    return this.workflowVersionsService.activate(
+      clientId,
+      versionId,
+      user.company_id,
+      user.id,
+    );
   }
 
   @Post(':versionId/checkout')
   checkout(
     @Param('clientId') clientId: string,
     @Param('versionId') versionId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.checkout(clientId, versionId, user.id);
+    return this.workflowVersionsService.checkout(
+      clientId,
+      versionId,
+      user.company_id,
+    );
   }
 
   @Post(':versionId/rollback')
@@ -138,12 +159,13 @@ export class WorkflowVersionsController {
     @Param('clientId') clientId: string,
     @Param('versionId') versionId: string,
     @Body() dto: RollbackVersionDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string; id: string },
   ) {
     return this.workflowVersionsService.rollback(
       clientId,
       versionId,
       dto,
+      user.company_id,
       user.id,
     );
   }
@@ -153,13 +175,13 @@ export class WorkflowVersionsController {
     @Param('clientId') clientId: string,
     @Param('versionId') versionId: string,
     @Body() dto: UpdateVersionDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
     return this.workflowVersionsService.update(
       clientId,
       versionId,
       dto,
-      user.id,
+      user.company_id,
     );
   }
 
@@ -167,8 +189,12 @@ export class WorkflowVersionsController {
   remove(
     @Param('clientId') clientId: string,
     @Param('versionId') versionId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.workflowVersionsService.delete(clientId, versionId, user.id);
+    return this.workflowVersionsService.delete(
+      clientId,
+      versionId,
+      user.company_id,
+    );
   }
 }

@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
-import { QueueInfrastructureModule } from './queue-infrastructure.module';
 import { QueueController } from './queue.controller';
 
+/**
+ * Controllers de administração das filas. Os providers (QueueService,
+ * TextAiExecutionService) vivem em QueueInfrastructureModule, que é @Global
+ * e portanto visível aqui sem import — evitando o ciclo de módulos
+ * ChannelsModule → QueueModule → QueueInfrastructureModule → ChannelsModule.
+ */
 @Module({
-  imports: [QueueInfrastructureModule],
   controllers: [QueueController],
-  exports: [QueueInfrastructureModule],
 })
 export class QueueModule {}

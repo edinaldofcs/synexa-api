@@ -83,53 +83,162 @@ export class AsteriskAmiService {
     if (!cleanChannel || !variables.length || !this.secret) return result;
 
     for (const rawVariable of variables) {
-      const variable = sanitize(rawVariable);
-      result[rawVariable] = await new Promise<string | null>((resolveValue) => {
-        const client = net.createConnection({
-          host: this.host,
-          port: this.port,
-        });
-        let authenticated = false;
-        let done = false;
-        const finish = (val: string | null) => {
-          if (done) return;
-          done = true;
-          try {
-            if (authenticated) {
-              client.write('Action: Logoff\r\n\r\n');
-            }
-            client.destroy();
-          } catch {
-            /* noop */
-          }
-          resolveValue(val);
-        };
-
-        client.setTimeout(4000);
-        client.on('connect', () => {
-          client.write(this.loginPayload());
-        });
-        client.on('data', (data) => {
-          const response = data.toString();
-          if (!authenticated && response.includes('Authentication accepted')) {
-            authenticated = true;
-            client.write(
-              `Action: Getvar\r\nChannel: ${cleanChannel}\r\nVariable: ${variable}\r\n\r\n`,
-            );
-            return;
-          }
-          if (authenticated) {
-            const match = response.match(/^Value:\s*(.*)$/m);
-            const value =
-              match?.[1]?.trim() !== undefined ? match?.[1]?.trim() : '';
-            finish(value === '' || value === '<unset>' ? null : value);
-          }
-        });
-        client.on('timeout', () => finish(null));
-        client.on('error', () => finish(null));
-      });
+      result[rawVariable] = await this.queryVariable(cleanChannel, rawVariable);
     }
     return result;
+  }
+
+  /**
+   * Resolve o contexto de uma chamada AudioSocket a partir do UUID recebido.
+   *
+   * O app AudioSocket do Asterisk exige um UUID canônico (rejeita o formato
+   * de ${UNIQUEID}) e o protocolo não transporta o DID. O dialplan padrão do
+   * Synexa grava DB(SYNEXA/<uuid>)=<uniqueid>; aqui resolvemos esse mapa via
+   * ação AMI DBGet (Getvar não avalia a função DB() sem canal) e então lemos
+   * as variáveis do canal real. Fallback: trata o próprio uuid como
+   * canal/uniqueid (compatibilidade com dialplans antigos).
+   */
+  public async resolveAudioSocketContext(
+    uuid: string,
+    variables: string[],
+  ): Promise<{ channel: string | null; vars: Record<string, string | null> }> {
+    const cleanUuid = sanitize(uuid);
+    if (!cleanUuid || !variables.length || !this.secret) {
+      return { channel: null, vars: {} };
+    }
+
+    const mapped = await this.queryDbEntry('SYNEXA', cleanUuid);
+    if (mapped) {
+      return {
+        channel: mapped,
+        vars: await this.getChannelVariables(mapped, variables),
+      };
+    }
+    return {
+      channel: cleanUuid,
+      vars: await this.getChannelVariables(cleanUuid, variables),
+    };
+  }
+
+  /**
+   * Abre uma conexão AMI efêmera, autentica e lê uma única variável.
+   * Com `channel = null`, lê variáveis globais/funções (ex.: DB(família/chave)).
+   */
+  private queryVariable(
+    channel: string | null,
+    variable: string,
+  ): Promise<string | null> {
+    return new Promise<string | null>((resolveValue) => {
+      const client = net.createConnection({
+        host: this.host,
+        port: this.port,
+      });
+      let authenticated = false;
+      let done = false;
+      let buffer = '';
+      const finish = (val: string | null) => {
+        if (done) return;
+        done = true;
+        try {
+          if (authenticated) {
+            client.write('Action: Logoff\r\n\r\n');
+          }
+          client.destroy();
+        } catch {
+          /* noop */
+        }
+        resolveValue(val);
+      };
+
+      client.setTimeout(4000);
+      client.on('connect', () => {
+        client.write(this.loginPayload());
+      });
+      client.on('data', (data) => {
+        const response = data.toString();
+        if (!authenticated && response.includes('Authentication accepted')) {
+          authenticated = true;
+          const getvar =
+            channel && channel.length > 0
+              ? `Action: Getvar\r\nChannel: ${sanitize(channel)}\r\nVariable: ${sanitize(variable)}\r\n\r\n`
+              : `Action: Getvar\r\nVariable: ${sanitize(variable)}\r\n\r\n`;
+          client.write(getvar);
+          return;
+        }
+        if (!authenticated) return;
+        // Eventos AMI (SuccessfulAuth, FullyBooted...) podem chegar antes da
+        // resposta: acumula até encontrar a linha Value: ou um erro.
+        buffer += response;
+        if (/^Response: Error/m.test(buffer)) {
+          finish(null);
+          return;
+        }
+        const match = buffer.match(/^Value:\s*(.*)$/m);
+        if (match) {
+          const value = match[1].trim();
+          finish(value === '' || value === '<unset>' ? null : value);
+        }
+      });
+      client.on('timeout', () => finish(null));
+      client.on('error', () => finish(null));
+    });
+  }
+
+  /**
+   * Lê uma entrada do AsteriskDB via ação AMI DBGet (a resposta chega como
+   * evento DBGetResponse com header `Val:`).
+   */
+  private queryDbEntry(family: string, key: string): Promise<string | null> {
+    return new Promise<string | null>((resolveValue) => {
+      const client = net.createConnection({
+        host: this.host,
+        port: this.port,
+      });
+      let authenticated = false;
+      let done = false;
+      let buffer = '';
+      const finish = (val: string | null) => {
+        if (done) return;
+        done = true;
+        try {
+          if (authenticated) {
+            client.write('Action: Logoff\r\n\r\n');
+          }
+          client.destroy();
+        } catch {
+          /* noop */
+        }
+        resolveValue(val);
+      };
+
+      client.setTimeout(4000);
+      client.on('connect', () => {
+        client.write(this.loginPayload());
+      });
+      client.on('data', (data) => {
+        const response = data.toString();
+        if (!authenticated && response.includes('Authentication accepted')) {
+          authenticated = true;
+          client.write(
+            `Action: DBGet\r\nFamily: ${sanitize(family)}\r\nKey: ${sanitize(key)}\r\n\r\n`,
+          );
+          return;
+        }
+        if (!authenticated) return;
+        buffer += response;
+        if (/^Response: Error/m.test(buffer)) {
+          finish(null);
+          return;
+        }
+        const match = buffer.match(/^Val:\s*(.*)$/m);
+        if (match) {
+          const value = match[1].trim();
+          finish(value === '' ? null : value);
+        }
+      });
+      client.on('timeout', () => finish(null));
+      client.on('error', () => finish(null));
+    });
   }
 
   private loginPayload(): string {

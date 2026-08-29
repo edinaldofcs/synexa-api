@@ -59,12 +59,11 @@ async function main() {
 
   await prisma.painel_clients.upsert({
     where: { id: CLIENT_B_ID },
-    update: { company_name: 'Cliente Beta Teste', status: 'active' },
+    update: { company_name: 'Cliente Beta Teste' },
     create: {
       id: CLIENT_B_ID,
       company_id: COMPANY_B_ID,
       company_name: 'Cliente Beta Teste',
-      status: 'active',
       agent_name: 'Assistente Beta',
     },
   });

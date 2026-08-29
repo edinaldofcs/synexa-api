@@ -22,7 +22,7 @@ export class TablesService {
     'painel_clients',
     'painel_agents',
     'painel_apis',
-    'painel_intentions',
+    'painel_tracks',
   ]);
 
   constructor(private prisma: PrismaService) {}

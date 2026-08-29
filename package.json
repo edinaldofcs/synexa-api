@@ -32,6 +32,7 @@
     "db:reset": "tsx prisma/reset.ts",
     "db:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
+    "telephony:provision": "tsx scripts/provision-telephony.ts",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {

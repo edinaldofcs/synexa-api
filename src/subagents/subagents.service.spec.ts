@@ -1,9 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
 import { SubagentsService } from './subagents.service';
 
 describe('SubagentsService', () => {
   const mockPrisma = {
-    users: { findUnique: jest.fn() },
     painel_clients: { findUnique: jest.fn() },
     painel_subagents: {
       findMany: jest.fn(),
@@ -15,7 +14,6 @@ describe('SubagentsService', () => {
   };
 
   let service: SubagentsService;
-  const userId = 'user-1';
   const companyId = 'company-1';
   const clientId = 'client-1';
 
@@ -23,7 +21,6 @@ describe('SubagentsService', () => {
     jest.clearAllMocks();
     service = new SubagentsService(mockPrisma as never);
 
-    mockPrisma.users.findUnique.mockResolvedValue({ company_id: companyId });
     mockPrisma.painel_clients.findUnique.mockResolvedValue({
       id: clientId,
       company_id: companyId,
@@ -31,21 +28,13 @@ describe('SubagentsService', () => {
   });
 
   describe('Tenant security', () => {
-    it('rejeita listagem quando usuário não tem empresa', async () => {
-      mockPrisma.users.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.findAllByClient(clientId, userId),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-    });
-
     it('rejeita busca de subagente pertencente a outra empresa', async () => {
       mockPrisma.painel_subagents.findUnique.mockResolvedValue({
         id: 'sub-2',
         painel_clients: { company_id: 'company-other' },
       });
 
-      await expect(service.findOne('sub-2', userId)).rejects.toBeInstanceOf(
+      await expect(service.findOne('sub-2', companyId)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
@@ -69,7 +58,7 @@ describe('SubagentsService', () => {
           model: 'gemini-2.5-flash',
           allowed_tool_names: ['exec_query'],
         },
-        userId,
+        companyId,
       );
 
       expect(result.id).toBe('sub-1');
@@ -97,7 +86,7 @@ describe('SubagentsService', () => {
       const result = await service.update(
         'sub-1',
         { name: 'Novo Nome' },
-        userId,
+        companyId,
       );
 
       expect(result.name).toBe('novo_nome');
@@ -116,7 +105,7 @@ describe('SubagentsService', () => {
       });
       mockPrisma.painel_subagents.delete.mockResolvedValue({ id: 'sub-1' });
 
-      const result = await service.remove('sub-1', userId);
+      const result = await service.remove('sub-1', companyId);
 
       expect(result).toEqual({ id: 'sub-1' });
       expect(mockPrisma.painel_subagents.delete).toHaveBeenCalledWith({

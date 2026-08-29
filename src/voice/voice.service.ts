@@ -23,13 +23,15 @@ export class VoiceService {
 
   getDefaultModel(): string {
     return (
-      this.configService.get<string>('GEMINI_LIVE_MODEL') ||
+      this.configService.get<string>('GEMINI_LIVE_VOICE_MODEL') ||
       'gemini-3.1-flash-live-preview'
     );
   }
 
   getDefaultVoice(): string {
-    return this.configService.get<string>('GEMINI_DEFAULT_VOICE') || 'Kore';
+    return (
+      this.configService.get<string>('GEMINI_LIVE_DEFAULT_VOICE') || 'Aoede'
+    );
   }
 
   getConfig(): VoiceConfigResponse {

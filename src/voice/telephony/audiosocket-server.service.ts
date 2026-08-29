@@ -14,12 +14,14 @@ import { AsteriskAmiService } from './asterisk-ami.service';
 /**
  * Ingresso de transporte AudioSocket do Asterisk.
  *
- * Dialplan recomendado:
- *   same => n,Dial(AudioSocket/<host>:<port>/${UNIQUEID})
+ * Dialplan recomendado (deploy/asterisk/conf/extensions.conf):
+ *   same => n,Set(DB(SYNEXA/${SYNEXA_UUID})=${UNIQUEID})
+ *   same => n,AudioSocket(${SYNEXA_UUID},voice:8090)
  *
- * Como o protocolo não entrega variáveis de dialplan, o DID/cliente é
- * resolvido via AMI Getvar (SYNEXA_CLIENT_ID / SYNEXA_AGENT_STEP /
- * SYNEXA_DID) a partir do canal identificado.
+ * O protocolo só entrega o UUID e o app do Asterisk exige UUID canônico;
+ * o DID/cliente é resolvido via AMI (DB(SYNEXA/<uuid>) → canal → Getvar
+ * SYNEXA_CLIENT_ID / SYNEXA_AGENT_STEP / SYNEXA_DID) e roteado por
+ * telephony_endpoints.
  */
 @Injectable()
 export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
@@ -81,20 +83,80 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      // Roteamento: DID/SYNEXA_* via AMI -> telephony_endpoints
-      const channelVars = await this.amiService.getChannelVariables(channelId, [
-        'SYNEXA_CLIENT_ID',
-        'SYNEXA_AGENT_STEP',
-        'SYNEXA_DID',
-        'CDR(dnid)',
-        'EXTEN',
-      ]);
+      // Roteamento: UUID → AsteriskDB → canal real → telephony_endpoints
+      const { channel: asteriskChannel, vars: channelVars } =
+        await this.amiService.resolveAudioSocketContext(channelId, [
+          'SYNEXA_CLIENT_ID',
+          'SYNEXA_AGENT_STEP',
+          'SYNEXA_DID',
+          'CDR(dnid)',
+          'EXTEN',
+          'CALLERID(name)',
+          'CALLERID(num)',
+          'SYNEXA_VARS_JSON',
+          'SYNEXA_CLIENTE_NOME',
+          'SYNEXA_CPF',
+        ]);
 
-      const didNumber =
+      if (channelVars['CALLERID(num)']) {
+        adapter.metadata.callerNumber = channelVars['CALLERID(num)'];
+      }
+      if (channelVars['CALLERID(name)']) {
+        adapter.metadata.callerName = channelVars['CALLERID(name)'];
+      }
+
+      // Suporte a discagem com parâmetros (ex: discar "2000*12345678900")
+      let rawDid =
         channelVars['SYNEXA_DID'] ||
         channelVars['CDR(dnid)'] ||
         channelVars['EXTEN'] ||
-        undefined;
+        '';
+      let dialParam: string | undefined;
+      if (rawDid.includes('*')) {
+        const parts = rawDid.split('*');
+        rawDid = parts[0];
+        dialParam = parts.slice(1).join('*');
+      }
+      const didNumber = rawDid || undefined;
+
+      // Popula variáveis de contexto recebidas na chamada telefônica
+      const customVars: Record<string, any> = {
+        ...(adapter.metadata.customVariables || {}),
+      };
+
+      const callerName = channelVars['CALLERID(name)'];
+      if (callerName && callerName.toLowerCase() !== 'microsip') {
+        customVars.caller_name = callerName;
+        customVars.nome_contato = callerName;
+        customVars.cliente_nome = callerName;
+      }
+      if (channelVars['CALLERID(num)']) {
+        customVars.caller_number = channelVars['CALLERID(num)'];
+      }
+      if (dialParam) {
+        customVars.param = dialParam;
+        customVars.cpf = dialParam;
+        customVars.documento = dialParam;
+        customVars.codigo = dialParam;
+      }
+      if (channelVars['SYNEXA_CLIENTE_NOME']) {
+        customVars.nome_contato = channelVars['SYNEXA_CLIENTE_NOME'];
+        customVars.cliente_nome = channelVars['SYNEXA_CLIENTE_NOME'];
+      }
+      if (channelVars['SYNEXA_CPF']) {
+        customVars.cpf = channelVars['SYNEXA_CPF'];
+      }
+      if (channelVars['SYNEXA_VARS_JSON']) {
+        try {
+          const parsed = JSON.parse(channelVars['SYNEXA_VARS_JSON']);
+          Object.assign(customVars, parsed);
+        } catch {
+          // ignora formato inválido
+        }
+      }
+
+      adapter.metadata.customVariables = customVars;
+      adapter.metadata.didNumber = didNumber;
 
       const route = await this.endpointResolver.resolve({
         didNumber,
@@ -122,13 +184,13 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
         route,
         {
           onAiHangupRequest: async () => {
-            await this.amiService.hangupChannel(channelId);
+            await this.amiService.hangupChannel(asteriskChannel || channelId);
           },
         },
       );
 
       this.logger.log(
-        `📞 [AudioSocket] Sessão iniciada | canal=${channelId} | cliente=${route.client_id} | agente=${route.agent?.id ?? 'default'}`,
+        `📞 [AudioSocket] Sessão iniciada | canal=${channelId} | canal_asterisk=${asteriskChannel ?? 'n/d'} | cliente=${route.client_id} | agente=${route.agent?.id ?? 'default'}`,
       );
       await session.start();
     } catch (err: any) {

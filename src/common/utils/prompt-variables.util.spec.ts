@@ -99,9 +99,9 @@ describe('prompt-variables.util', () => {
   });
 
   describe('resolvePromptTemplateString', () => {
-    it('replaces system and custom variables seamlessly', () => {
+    it('replaces system and custom variables seamlessly with {{key}} syntax', () => {
       const template =
-        'Olá [[nome_cliente]]! [[saudacao_tempo]], hoje é [[dia_semana]] ([[hoje]]), e seu boleto vence em [[dias_uteis+3]]. Horário de atendimento: [[hora_atual]].';
+        'Olá {{nome_cliente}}! {{saudacao_tempo}}, hoje é {{dia_semana}} ({{hoje}}), e seu boleto vence em {{dias_uteis+3}}. Horário de atendimento: {{hora_atual}}.';
       const variables = {
         nome_cliente: 'Carlos Silva',
       };
@@ -116,10 +116,27 @@ describe('prompt-variables.util', () => {
       );
     });
 
+    it('supports backward compatibility with legacy [[key]] syntax', () => {
+      const template =
+        'Olá [[nome_cliente]]! [[saudacao_tempo]], hoje é [[dia_semana]] ([[hoje]]).';
+      const variables = {
+        nome_cliente: 'Carlos Silva',
+      };
+
+      const result = resolvePromptTemplateString(
+        template,
+        variables,
+        fixedDate,
+      );
+      expect(result).toBe(
+        'Olá Carlos Silva! Bom dia, hoje é sexta-feira (21/08/2026).',
+      );
+    });
+
     it('preserves unknown variables without error', () => {
-      const template = 'Campo desconhecido: [[campo_inexistente]].';
+      const template = 'Campo desconhecido: {{campo_inexistente}}.';
       const result = resolvePromptTemplateString(template, {}, fixedDate);
-      expect(result).toBe('Campo desconhecido: [[campo_inexistente]].');
+      expect(result).toBe('Campo desconhecido: {{campo_inexistente}}.');
     });
   });
 });

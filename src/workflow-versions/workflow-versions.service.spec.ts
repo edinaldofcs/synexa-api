@@ -1,18 +1,13 @@
-import {
-  NotFoundException,
-  ForbiddenException,
-  BadRequestException,
-} from '@nestjs/common';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { WorkflowVersionsService } from './workflow-versions.service';
 
 describe('WorkflowVersionsService', () => {
   const mockPrisma = {
-    users: { findUnique: jest.fn() },
     painel_clients: { findUnique: jest.fn(), update: jest.fn() },
     painel_agents: { findMany: jest.fn() },
     painel_subagents: { findMany: jest.fn() },
     painel_apis: { findMany: jest.fn() },
-    painel_intentions: { findMany: jest.fn() },
+    painel_tracks: { findMany: jest.fn() },
     workflow_versions: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
@@ -30,7 +25,6 @@ describe('WorkflowVersionsService', () => {
 
   const companyId = 'company-1';
   const clientId = 'client-1';
-  const userId = 'user-1';
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -39,7 +33,6 @@ describe('WorkflowVersionsService', () => {
       metadata as never,
     );
 
-    mockPrisma.users.findUnique.mockResolvedValue({ company_id: companyId });
     mockPrisma.painel_clients.findUnique.mockResolvedValue({
       id: clientId,
       company_id: companyId,
@@ -48,24 +41,16 @@ describe('WorkflowVersionsService', () => {
     mockPrisma.painel_agents.findMany.mockResolvedValue([]);
     mockPrisma.painel_subagents.findMany.mockResolvedValue([]);
     mockPrisma.painel_apis.findMany.mockResolvedValue([]);
-    mockPrisma.painel_intentions.findMany.mockResolvedValue([]);
+    mockPrisma.painel_tracks.findMany.mockResolvedValue([]);
   });
 
   describe('Tenant isolation & validation', () => {
-    it('rejeita usuário sem empresa vinculada', async () => {
-      mockPrisma.users.findUnique.mockResolvedValue(null);
-
-      await expect(service.list(clientId, userId)).rejects.toBeInstanceOf(
-        ForbiddenException,
-      );
-    });
-
     it('rejeita cliente pertencente a outra empresa', async () => {
       mockPrisma.painel_clients.findUnique.mockResolvedValue({
         company_id: 'company-other',
       });
 
-      await expect(service.list(clientId, userId)).rejects.toBeInstanceOf(
+      await expect(service.list(clientId, companyId)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
@@ -77,7 +62,7 @@ describe('WorkflowVersionsService', () => {
       });
 
       await expect(
-        service.getById(clientId, 'ver-2', userId),
+        service.getById(clientId, 'ver-2', companyId),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
@@ -89,7 +74,7 @@ describe('WorkflowVersionsService', () => {
         { id: 'v1', version: 1 },
       ]);
 
-      const result = await service.list(clientId, userId);
+      const result = await service.list(clientId, companyId);
 
       expect(result).toHaveLength(2);
       expect(mockPrisma.workflow_versions.findMany).toHaveBeenCalledWith({
@@ -105,7 +90,7 @@ describe('WorkflowVersionsService', () => {
         status: 'draft',
       });
 
-      const draft = await service.getDraft(clientId, userId);
+      const draft = await service.getDraft(clientId, companyId);
 
       expect(draft?.id).toBe('draft-1');
       expect(mockPrisma.workflow_versions.findFirst).toHaveBeenCalledWith({
@@ -119,7 +104,7 @@ describe('WorkflowVersionsService', () => {
         status: 'published',
       });
 
-      const pub = await service.getPublished(clientId, userId);
+      const pub = await service.getPublished(clientId, companyId);
 
       expect(pub?.id).toBe('pub-1');
       expect(mockPrisma.workflow_versions.findFirst).toHaveBeenCalledWith({
@@ -155,8 +140,8 @@ describe('WorkflowVersionsService', () => {
           url: 'https://api.com',
         },
       ]);
-      mockPrisma.painel_intentions.findMany.mockResolvedValue([
-        { id: 'int-1', code: 'saudacao', description: 'Oi' },
+      mockPrisma.painel_tracks.findMany.mockResolvedValue([
+        { id: 'tr-1', code: 'saudacao', label: 'Saudação', description: 'Oi' },
       ]);
 
       const snapshot = await service.buildCurrentSnapshot(clientId);
@@ -166,7 +151,7 @@ describe('WorkflowVersionsService', () => {
       expect(snapshot.subagents).toHaveLength(1);
       expect(snapshot.subagents[0].name).toBe('analista');
       expect(snapshot.apis).toHaveLength(1);
-      expect(snapshot.intentions).toHaveLength(1);
+      expect(snapshot.tracks).toHaveLength(1);
     });
 
     it('calcula diff entre duas versões identificando adições e modificações', async () => {
@@ -185,7 +170,7 @@ describe('WorkflowVersionsService', () => {
             ],
             subagents: [],
             apis: [],
-            intentions: [],
+            tracks: [],
           },
         })
         .mockResolvedValueOnce({
@@ -204,11 +189,11 @@ describe('WorkflowVersionsService', () => {
               { id: 'sub-1', name: 'suporte', system_prompt: 'Prompt' },
             ],
             apis: [],
-            intentions: [],
+            tracks: [],
           },
         });
 
-      const diff = await service.diff(clientId, 'v1', 'v2', userId);
+      const diff = await service.diff(clientId, 'v1', 'v2', companyId);
 
       expect(diff.hasChanges).toBe(true);
       expect(diff.agents.modified).toHaveLength(1);
@@ -226,7 +211,7 @@ describe('WorkflowVersionsService', () => {
       mockPrisma.workflow_versions.count.mockResolvedValue(1);
 
       await expect(
-        service.delete(clientId, 'pub-only', userId),
+        service.delete(clientId, 'pub-only', companyId),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -240,7 +225,7 @@ describe('WorkflowVersionsService', () => {
         id: 'draft-del',
       });
 
-      const res = await service.delete(clientId, 'draft-del', userId);
+      const res = await service.delete(clientId, 'draft-del', companyId);
 
       expect(res.id).toBe('draft-del');
       expect(mockPrisma.workflow_versions.delete).toHaveBeenCalledWith({
@@ -261,7 +246,7 @@ describe('WorkflowVersionsService', () => {
         version: 3,
       });
 
-      const result = await service.saveCurrentEditing(clientId, userId);
+      const result = await service.saveCurrentEditing(clientId, companyId);
 
       expect(result.message).toContain('v3');
       expect(mockPrisma.workflow_versions.update).toHaveBeenCalledWith(

@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
+import { resolveChainedApiId } from '../common/utils/api-chaining.util';
+import { LEGACY_TOOL_NAMES } from '../orchestrator/constants/tools.constants';
 
 export interface VoiceToolDeclaration {
   name: string;
@@ -45,8 +47,7 @@ export class VoiceToolsService {
       visible_to_agent: true,
     };
     const customToolNames = allowedNames.filter(
-      (name) =>
-        !['execute_api', 'search_knowledge_base', 'search_web'].includes(name),
+      (name) => !LEGACY_TOOL_NAMES.has(name),
     );
     if (customToolNames.length > 0) {
       where.name = { in: customToolNames };
@@ -135,6 +136,11 @@ export class VoiceToolsService {
       url = url.replace(`{${parameter}}`, encodeURIComponent(String(value)));
     }
 
+    if (url.startsWith('/')) {
+      const port = process.env.PORT || 3000;
+      url = `http://127.0.0.1:${port}${url}`;
+    }
+
     const method = (tool.method || 'GET').toUpperCase();
     const headers = this.asRecord(tool.headers) as Record<string, string>;
     const init: RequestInit = { method, headers };
@@ -196,9 +202,14 @@ export class VoiceToolsService {
         consolidatedData = { ...(raw as Record<string, unknown>) };
       }
 
-      // Suporte a API encadeada (next_api_id ou next_tool)
-      const nextApiId =
+      // Encadeamento: regras condicionais (_chaining) ou direto (next_api_id/next_tool)
+      const legacyNextApiId =
         (headers.next_api_id as string) || (tool as any).next_tool;
+      const nextApiId = resolveChainedApiId(
+        tool.extract_data,
+        consolidatedData,
+        legacyNextApiId,
+      );
       if (response.ok && nextApiId) {
         try {
           const nextApi = await this.prisma.painel_apis.findFirst({
@@ -526,9 +537,12 @@ export class VoiceToolsService {
     const mapping = this.asRecord(extractData);
     const keys = Object.keys(mapping).filter(
       (k) =>
-        !['_fallback_message', 'fallback_message', 'validate_field'].includes(
-          k,
-        ),
+        ![
+          '_fallback_message',
+          'fallback_message',
+          'validate_field',
+          '_chaining',
+        ].includes(k),
     );
     if (!keys.length || !raw || typeof raw !== 'object') return raw;
     const result: Record<string, unknown> = {};

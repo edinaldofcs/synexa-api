@@ -19,17 +19,6 @@ export class AgentsService {
     private readonly prisma: PrismaService,
   ) {}
 
-  private async getUserCompanyId(userId: string): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) {
-      throw new ForbiddenException('Usuário sem empresa vinculada');
-    }
-    return user.company_id;
-  }
-
   private async validateClientAccess(clientId: string, companyId: string) {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
@@ -71,9 +60,8 @@ export class AgentsService {
   async create(
     clientId: string,
     createAgentDto: CreateAgentDto | Record<string, unknown>,
-    userId: string,
+    companyId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
     const [data, transitions] = this.splitLlmProvider(
       createAgentDto as Record<string, unknown>,
@@ -96,8 +84,7 @@ export class AgentsService {
     return this.mergeLlmProvider(agent);
   }
 
-  async findAll(userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async findAll(companyId: string) {
     return this.prisma.painel_agents.findMany({
       where: { painel_clients: { company_id: companyId } },
       include: { painel_clients: { select: { company_name: true } } },
@@ -105,20 +92,18 @@ export class AgentsService {
     });
   }
 
-  async findAllByClient(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async findAllByClient(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
     const agents = await this.agentsRepository.findAllByClient(clientId);
     return agents.map((a) => this.mergeLlmProvider(a));
   }
 
-  async findOne(id: string, userId: string) {
+  async findOne(id: string, companyId: string) {
     const agent = await this.agentsRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
       select: { company_id: true },
     });
-    const companyId = await this.getUserCompanyId(userId);
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`Agent with ID ${id} not found`);
     }
@@ -128,9 +113,8 @@ export class AgentsService {
   async update(
     id: string,
     updateAgentDto: UpdateAgentDto | Record<string, unknown>,
-    userId: string,
+    companyId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     const agent = await this.agentsRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
@@ -164,8 +148,7 @@ export class AgentsService {
     return this.mergeLlmProvider(updated);
   }
 
-  async remove(id: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async remove(id: string, companyId: string) {
     const agent = await this.agentsRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
@@ -180,8 +163,7 @@ export class AgentsService {
     return result;
   }
 
-  async getWebSearchConfig(agentId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getWebSearchConfig(agentId: string, companyId: string) {
     const agent = await this.agentsRepository.findOne(agentId);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
@@ -202,9 +184,8 @@ export class AgentsService {
   async updateWebSearchConfig(
     agentId: string,
     dto: WebSearchConfigDto,
-    userId: string,
+    companyId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     const agent = await this.agentsRepository.findOne(agentId);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
@@ -232,8 +213,7 @@ export class AgentsService {
     };
   }
 
-  async getAllWebSearchConfigs(userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getAllWebSearchConfigs(companyId: string) {
     const agents = await this.prisma.painel_agents.findMany({
       where: { painel_clients: { company_id: companyId } },
       select: {

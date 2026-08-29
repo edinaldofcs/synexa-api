@@ -20,31 +20,34 @@ export class ApisController {
   createForClient(
     @Param('clientId') clientId: string,
     @Body() payload: CreateApiDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.apisService.create(clientId, payload, user.id);
+    return this.apisService.create(clientId, payload, user.company_id);
   }
 
   @Get('clients/:clientId/apis')
   findAllByClient(
     @Param('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.apisService.findAllByClient(clientId, user.id);
+    return this.apisService.findAllByClient(clientId, user.company_id);
   }
 
   @Get('apis/:apiId')
-  findOne(@Param('apiId') apiId: string, @CurrentUser() user: { id: string }) {
-    return this.apisService.findOne(apiId, user.id);
+  findOne(
+    @Param('apiId') apiId: string,
+    @CurrentUser() user: { company_id: string },
+  ) {
+    return this.apisService.findOne(apiId, user.company_id);
   }
 
   @Patch('apis/:apiId')
   update(
     @Param('apiId') apiId: string,
     @Body() payload: UpdateApiDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.apisService.update(apiId, payload, user.id);
+    return this.apisService.update(apiId, payload, user.company_id);
   }
 
   @Post('apis/test-proxy')
@@ -61,7 +64,10 @@ export class ApisController {
   }
 
   @Delete('apis/:apiId')
-  remove(@Param('apiId') apiId: string, @CurrentUser() user: { id: string }) {
-    return this.apisService.remove(apiId, user.id);
+  remove(
+    @Param('apiId') apiId: string,
+    @CurrentUser() user: { company_id: string },
+  ) {
+    return this.apisService.remove(apiId, user.company_id);
   }
 }

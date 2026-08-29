@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateSubagentDto } from './dto/create-subagent.dto';
 import { UpdateSubagentDto } from './dto/update-subagent.dto';
@@ -10,17 +6,6 @@ import { UpdateSubagentDto } from './dto/update-subagent.dto';
 @Injectable()
 export class SubagentsService {
   constructor(private readonly prisma: PrismaService) {}
-
-  private async getUserCompanyId(userId: string): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) {
-      throw new ForbiddenException('Usuário sem empresa vinculada');
-    }
-    return user.company_id;
-  }
 
   private async validateClientAccess(clientId: string, companyId: string) {
     const client = await this.prisma.painel_clients.findUnique({
@@ -32,8 +17,7 @@ export class SubagentsService {
     }
   }
 
-  async findAllByClient(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async findAllByClient(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     return this.prisma.painel_subagents.findMany({
@@ -42,8 +26,7 @@ export class SubagentsService {
     });
   }
 
-  async findOne(id: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async findOne(id: string, companyId: string) {
     const subagent = await this.prisma.painel_subagents.findUnique({
       where: { id },
       include: { painel_clients: { select: { company_id: true } } },
@@ -56,8 +39,7 @@ export class SubagentsService {
     return subagent;
   }
 
-  async create(clientId: string, dto: CreateSubagentDto, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async create(clientId: string, dto: CreateSubagentDto, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     // Normaliza o nome para identificador seguro
@@ -79,8 +61,8 @@ export class SubagentsService {
     });
   }
 
-  async update(id: string, dto: UpdateSubagentDto, userId: string) {
-    await this.findOne(id, userId);
+  async update(id: string, dto: UpdateSubagentDto, companyId: string) {
+    await this.findOne(id, companyId);
 
     const safeName = dto.name
       ? dto.name.trim().toLowerCase().replace(/\s+/g, '_')
@@ -111,8 +93,8 @@ export class SubagentsService {
     });
   }
 
-  async remove(id: string, userId: string) {
-    await this.findOne(id, userId);
+  async remove(id: string, companyId: string) {
+    await this.findOne(id, companyId);
     return this.prisma.painel_subagents.delete({
       where: { id },
     });

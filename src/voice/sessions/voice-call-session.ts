@@ -9,6 +9,7 @@ import { VoiceToolsService } from '../voice-tools.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { buildAgentPromptFromBlocks } from '../../agents/utils/agent-prompt-builder.util';
+import { resolvePromptTemplateString } from '../../common/utils/prompt-variables.util';
 import {
   InboundDataMapperService,
   InboundMappingConfig,
@@ -96,12 +97,16 @@ export class VoiceCallSession {
 
     // 1. Consolida e Mapeia variáveis recebidas da telefonia (ex: Asterisk AGI / CallFlex)
     let inboundConfig: InboundMappingConfig | undefined;
+    let clientAgentName = '';
+    let clientCompanyName = '';
     if (clientId) {
       try {
         const client = await this.prisma.painel_clients.findUnique({
           where: { id: clientId },
-          select: { metadata: true },
+          select: { metadata: true, agent_name: true, company_name: true },
         });
+        clientAgentName = client?.agent_name || '';
+        clientCompanyName = client?.company_name || '';
         const meta = (client?.metadata as Record<string, unknown>) || {};
         inboundConfig = meta.inbound_variable_mapping as InboundMappingConfig;
       } catch (err: any) {
@@ -109,12 +114,24 @@ export class VoiceCallSession {
       }
     }
 
+    const fallbackAgentName =
+      clientAgentName ||
+      (selectedAgent as any)?.agent_name ||
+      (selectedAgent as any)?.name ||
+      'Maria';
+    const fallbackCompanyName = clientCompanyName || 'Cliente';
+
     const rawContextVariables: Record<string, any> = {
       ...(this.telephonyAdapter.metadata.customVariables || {}),
       caller_number: this.telephonyAdapter.metadata.callerNumber,
       caller_name: this.telephonyAdapter.metadata.callerName,
       did_number: this.telephonyAdapter.metadata.didNumber,
       channel_id: this.telephonyAdapter.metadata.channelId,
+      nome_agente: fallbackAgentName,
+      agent_name: fallbackAgentName,
+      nome_cliente: fallbackCompanyName,
+      company_name: fallbackCompanyName,
+      empresa: fallbackCompanyName,
     };
 
     const mapper = new InboundDataMapperService();
@@ -126,9 +143,18 @@ export class VoiceCallSession {
     this.sessionState = { ...contextVariables };
 
     // 2. Interpola variáveis no Prompt do Agente
-    const systemPrompt = selectedAgent
+    const basePrompt = selectedAgent
       ? buildAgentPromptFromBlocks(selectedAgent, contextVariables)
       : 'Você é um assistente de voz inteligente e natural. Responda com clareza e empatia.';
+
+    const systemPrompt = resolvePromptTemplateString(basePrompt, {
+      ...contextVariables,
+      nome_agente: contextVariables.nome_agente || fallbackAgentName,
+      agent_name: contextVariables.agent_name || fallbackAgentName,
+      nome_cliente: contextVariables.nome_cliente || fallbackCompanyName,
+      company_name: contextVariables.company_name || fallbackCompanyName,
+      empresa: contextVariables.empresa || fallbackCompanyName,
+    });
 
     // 3. Inicializa Conversa Omnichannel no Banco de Dados
     if (companyId) {
@@ -296,6 +322,9 @@ export class VoiceCallSession {
       onInterrupted: () => {
         this.isAiSpeaking = false;
         this.interruptedCount++;
+        // Barge-in: descarta o áudio do Gemini ainda enfileirado para que
+        // a IA pare de falar imediatamente (evita cauda obsoleta tocando)
+        this.telephonyAdapter.clearQueuedAudio?.();
         this.gateSession?.notifyAiSpeakingChanged(false);
       },
       onTurnComplete: () => {

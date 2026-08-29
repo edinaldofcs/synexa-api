@@ -2,9 +2,9 @@ import { Injectable, Logger, ConflictException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
-import type { ConversationsService as ConversationsServiceType } from '../conversations/conversations.service';
-import type { OrchestrationService as OrchestrationServiceType } from '../orchestrator/orchestration.service';
-import type { ChannelsService as ChannelsServiceType } from '../channels/services/channels.service';
+import { ConversationsService } from '../conversations/conversations.service';
+import { OrchestrationService } from '../orchestrator/orchestration.service';
+import { ChannelsService } from '../channels/services/channels.service';
 import {
   QueueService,
   IngestJobData,
@@ -30,6 +30,12 @@ const INLINE_LOCK_TTL_SECONDS = 30;
  * A decisão é reavaliada em cada estágio, então alternar a flag funciona
  * inclusive no meio do fluxo (fila desligada durante ingestão enfileira
  * o agente normalmente).
+ *
+ * Dependências: ConversationsService e OrchestrationService são acíclicos e
+ * injetados formalmente; ChannelsService participa do único ciclo real
+ * (ChannelsService ⇄ TextAiExecutionService, via forwardRef no outro lado) e
+ * é resolvido por ModuleRef em tempo de uso — mecanismo formal do NestJS,
+ * sem require() dinâmico.
  */
 @Injectable()
 export class TextAiExecutionService {
@@ -38,47 +44,14 @@ export class TextAiExecutionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
+    private readonly queueService: QueueService,
+    private readonly conversationsService: ConversationsService,
+    private readonly orchestrationService: OrchestrationService,
     private readonly moduleRef: ModuleRef,
   ) {}
 
-  private get queueService(): QueueService {
-    // Resolução tardia evita dependência construtiva circular com os processors.
-    return this.moduleRef.get(QueueService, { strict: false });
-  }
-
-  private get conversationsService(): ConversationsServiceType {
-    return this.resolveLazy<ConversationsServiceType>(
-      '../conversations/conversations.service',
-      'ConversationsService',
-    );
-  }
-
-  private get orchestrationService(): OrchestrationServiceType {
-    return this.resolveLazy<OrchestrationServiceType>(
-      '../orchestrator/orchestration.service',
-      'OrchestrationService',
-    );
-  }
-
-  private get channelsService(): ChannelsServiceType {
-    return this.resolveLazy<ChannelsServiceType>(
-      '../channels/services/channels.service',
-      'ChannelsService',
-    );
-  }
-
-  /**
-   * Resolve providers em tempo de uso: quebra os ciclos de importação
-   * (ex.: ChannelsService ⇄ TextAiExecutionService) e dispensa imports de
-   * módulos de feature dentro da infra global de fila.
-   */
-  private resolveLazy<T>(modulePath: string, exportName: string): T {
-    const mod = require(modulePath) as Record<
-      string,
-      new (...args: never[]) => T
-    >;
-    const token = mod[exportName];
-    return this.moduleRef.get(token as never, { strict: false }) as T;
+  private get channelsService(): ChannelsService {
+    return this.moduleRef.get(ChannelsService, { strict: false });
   }
 
   // ── Pontos de roteamento (usados pelo ingress e pelos estágios internos) ──

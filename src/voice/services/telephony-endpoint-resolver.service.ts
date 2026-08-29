@@ -137,6 +137,7 @@ export class TelephonyEndpointResolverService {
     let clientId = lookup.clientIdHint || undefined;
     let companyId: string | undefined;
     let endpointId: string | null = null;
+    let endpointAgentStep: string | null = null;
     let provider = 'legacy_variables';
     let didNumber: string | null = null;
     let audioFormat = 'g711_ulaw';
@@ -153,6 +154,7 @@ export class TelephonyEndpointResolverService {
 
       if (endpoint) {
         endpointId = endpoint.id;
+        endpointAgentStep = endpoint.agent_step || null;
         provider = endpoint.provider;
         didNumber = endpoint.did_number;
         audioFormat = endpoint.audio_format || 'g711_ulaw';
@@ -171,7 +173,7 @@ export class TelephonyEndpointResolverService {
     });
     if (!client?.company_id) return null;
 
-    const agentStep = lookup.agentStepHint || undefined;
+    const agentStep = lookup.agentStepHint || endpointAgentStep || undefined;
     const agent = await this.resolveAgent(client.id, agentStep);
 
     return {
@@ -209,19 +211,78 @@ export class TelephonyEndpointResolverService {
   }
 
   /**
-   * Carrega o agente alvo respeitando step configurado ou o padrão ativo.
+   * Carrega o agente alvo respeitando step configurado ou o padrão inicial ativo.
+   * Prioridade:
+   * 1. Match por service_step (se informado)
+   * 2. Agente marcado com is_initial: true e interaction_mode != 'text'
+   * 3. Agente marcado com is_initial: true
+   * 4. Primeiro agente ativo para voz por execution_order ASC
+   * 5. Primeiro agente ativo geral por execution_order ASC
    */
   private async resolveAgent(
     clientId: string,
     agentStep?: string,
   ): Promise<Record<string, unknown> | null> {
-    const agent = await this.prisma.painel_agents.findFirst({
+    if (agentStep) {
+      const stepAgent = await this.prisma.painel_agents.findFirst({
+        where: {
+          client_id: clientId,
+          service_step: agentStep,
+          is_active: true,
+        },
+      });
+      if (stepAgent) return stepAgent as unknown as Record<string, unknown>;
+    }
+
+    // 1. Agente inicial de voz/ambos
+    const initialVoiceAgent = await this.prisma.painel_agents.findFirst({
       where: {
         client_id: clientId,
-        ...(agentStep ? { service_step: agentStep } : { is_active: true }),
+        is_active: true,
+        is_initial: true,
+        interaction_mode: { not: 'text' },
       },
+      orderBy: { execution_order: 'asc' },
     });
-    return agent as unknown as Record<string, unknown> | null;
+    if (initialVoiceAgent) {
+      return initialVoiceAgent as unknown as Record<string, unknown>;
+    }
+
+    // 2. Agente inicial geral
+    const initialAgent = await this.prisma.painel_agents.findFirst({
+      where: {
+        client_id: clientId,
+        is_active: true,
+        is_initial: true,
+      },
+      orderBy: { execution_order: 'asc' },
+    });
+    if (initialAgent) {
+      return initialAgent as unknown as Record<string, unknown>;
+    }
+
+    // 3. Primeiro agente ativo de voz ordenado por execution_order
+    const firstVoiceAgent = await this.prisma.painel_agents.findFirst({
+      where: {
+        client_id: clientId,
+        is_active: true,
+        interaction_mode: { not: 'text' },
+      },
+      orderBy: { execution_order: 'asc' },
+    });
+    if (firstVoiceAgent) {
+      return firstVoiceAgent as unknown as Record<string, unknown>;
+    }
+
+    // 4. Primeiro agente ativo geral
+    const firstAgent = await this.prisma.painel_agents.findFirst({
+      where: {
+        client_id: clientId,
+        is_active: true,
+      },
+      orderBy: { execution_order: 'asc' },
+    });
+    return firstAgent as unknown as Record<string, unknown> | null;
   }
 
   private cacheKey(lookup: TelephonyRouteLookup): string | null {

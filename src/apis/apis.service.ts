@@ -1,6 +1,5 @@
 import {
   Injectable,
-  ForbiddenException,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
@@ -18,17 +17,6 @@ export class ApisService {
     private readonly prisma: PrismaService,
   ) {}
 
-  private async getUserCompanyId(userId: string): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) {
-      throw new ForbiddenException('Usuário sem empresa vinculada');
-    }
-    return user.company_id;
-  }
-
   private async validateClientAccess(clientId: string, companyId: string) {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
@@ -39,23 +27,20 @@ export class ApisService {
     }
   }
 
-  async create(clientId: string, payload: CreateApiDto, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async create(clientId: string, payload: CreateApiDto, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
     const api = await this.apisRepository.create(clientId, payload as any);
     void this.metadataService.refresh(clientId);
     return api;
   }
 
-  async findAllByClient(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async findAllByClient(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
     return this.apisRepository.findAllByClient(clientId);
   }
 
-  async findOne(id: string, userId: string) {
+  async findOne(id: string, companyId: string) {
     const api = await this.apisRepository.findOne(id);
-    const companyId = await this.getUserCompanyId(userId);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: api.client_id },
       select: { company_id: true },
@@ -66,8 +51,7 @@ export class ApisService {
     return api;
   }
 
-  async update(id: string, payload: UpdateApiDto, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async update(id: string, payload: UpdateApiDto, companyId: string) {
     const existing = await this.apisRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: existing.client_id },
@@ -82,8 +66,7 @@ export class ApisService {
     return api;
   }
 
-  async remove(id: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async remove(id: string, companyId: string) {
     const existing = await this.apisRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: existing.client_id },
@@ -127,7 +110,13 @@ export class ApisService {
             : JSON.stringify(payload.body)
           : undefined;
 
-      const response = await fetch(payload.url, {
+      let targetUrl = payload.url;
+      if (targetUrl.startsWith('/')) {
+        const port = process.env.PORT || 3000;
+        targetUrl = `http://127.0.0.1:${port}${targetUrl}`;
+      }
+
+      const response = await fetch(targetUrl, {
         method: payload.method || 'GET',
         headers: {
           'User-Agent': 'Synexa-Api-Tester/1.0',

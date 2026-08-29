@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 
 export type InboundTransformType =
   | 'text'
@@ -42,7 +42,7 @@ export class InboundDataMapperService {
 
   /**
    * Mapeia dados brutos de entrada (Discador, CRM, API, Webhook)
-   * para variáveis padronizadas da sessão com base nas regras do cliente.
+   * para variÃ¡veis padronizadas da sessÃ£o com base nas regras do cliente.
    */
   mapInboundData(
     rawData: Record<string, unknown> | null | undefined,
@@ -109,24 +109,48 @@ export class InboundDataMapperService {
         finalValue = rule.default_value;
       }
 
-      // Aplica transformações de tipo e sanitização
+      // Aplica transformaÃ§Ãµes de tipo e sanitizaÃ§Ã£o
       if (
         finalValue !== undefined &&
         finalValue !== null &&
         finalValue !== ''
       ) {
         finalValue = this.applyTransformation(finalValue, rule.transform);
+
+        // Remove colchetes ou chaves que o usuÃ¡rio possa ter digitado (ex: [[cnpj_cpf]] -> cnpj_cpf)
+        const cleanTarget = rule.target_variable.replace(/[[\]{}]/g, '').trim();
+
+        mappedState[cleanTarget] = finalValue;
         mappedState[rule.target_variable] = finalValue;
+
+        // Aliases automÃ¡ticos para garantir interpolaÃ§Ã£o nos prompts
+        if (cleanTarget === 'cnpj_cpf' || cleanTarget === 'cpf') {
+          mappedState.cnpj_cpf = finalValue;
+          mappedState.cpf = finalValue;
+          mappedState.documento = finalValue;
+        } else if (
+          cleanTarget === 'cliente_nome' ||
+          cleanTarget === 'nome_cliente' ||
+          cleanTarget === 'nome_contato'
+        ) {
+          mappedState.cliente_nome = finalValue;
+          mappedState.nome_cliente = finalValue;
+          mappedState.nome_contato = finalValue;
+        }
       }
     }
 
-    // Preserva campos não mapeados se configurado
+    // Preserva campos nÃ£o mapeados se configurado
     if (preserveUnmapped) {
       for (const [key, value] of Object.entries(rawData)) {
+        const cleanKey = key.replace(/[[\]{}]/g, '').trim();
         if (
           !appliedSourceKeys.has(key.toLowerCase()) &&
-          !Object.prototype.hasOwnProperty.call(mappedState, key)
+          !appliedSourceKeys.has(cleanKey.toLowerCase()) &&
+          !Object.prototype.hasOwnProperty.call(mappedState, key) &&
+          !Object.prototype.hasOwnProperty.call(mappedState, cleanKey)
         ) {
+          mappedState[cleanKey] = value;
           mappedState[key] = value;
         }
       }
@@ -136,14 +160,19 @@ export class InboundDataMapperService {
   }
 
   /**
-   * Extrai valor do payload bruto com suporte a case-insensitive e paths com ponto (ex: dados.cpf)
+   * Extrai valor do payload bruto com suporte a case-insensitive, normalizaÃ§Ã£o de caracteres e aliases
    */
   private extractValue(
     obj: Record<string, unknown>,
     keyOrPath: string,
   ): unknown {
+    const cleanKey = keyOrPath.replace(/[[\]{}]/g, '').trim();
+
     if (Object.prototype.hasOwnProperty.call(obj, keyOrPath)) {
       return obj[keyOrPath];
+    }
+    if (Object.prototype.hasOwnProperty.call(obj, cleanKey)) {
+      return obj[cleanKey];
     }
 
     // Busca por caminho pontilhado (dot notation)
@@ -164,11 +193,69 @@ export class InboundDataMapperService {
       if (current !== undefined) return current;
     }
 
-    // Busca case-insensitive no primeiro nível
-    const lowerKey = keyOrPath.toLowerCase();
+    // Busca flexÃ­vel: case-insensitive e ignorando separadores (- e _)
+    const normalizedTarget = cleanKey.toLowerCase().replace(/[-_]/g, '');
     for (const [k, v] of Object.entries(obj)) {
-      if (k.toLowerCase() === lowerKey) {
+      const normalizedK = k.toLowerCase().replace(/[-_]/g, '');
+      if (normalizedK === normalizedTarget) {
         return v;
+      }
+    }
+
+    // Aliases semÃ¢nticos para telefonia SIP
+    if (
+      ['xcpf', 'cpf', 'cnpjcpf', 'documento', 'param'].includes(
+        normalizedTarget,
+      )
+    ) {
+      for (const alias of [
+        'cpf',
+        'cnpj_cpf',
+        'documento',
+        'param',
+        'codigo',
+        'SYNEXA_CPF',
+        'X-CPF',
+        'x_cpf',
+      ]) {
+        if (
+          obj[alias] !== undefined &&
+          obj[alias] !== null &&
+          obj[alias] !== ''
+        ) {
+          return obj[alias];
+        }
+      }
+    }
+
+    if (
+      [
+        'xclientenome',
+        'clientenome',
+        'nomecliente',
+        'nomecontato',
+        'nome',
+        'callername',
+      ].includes(normalizedTarget)
+    ) {
+      for (const alias of [
+        'cliente_nome',
+        'nome_cliente',
+        'nome_contato',
+        'caller_name',
+        'nome',
+        'SYNEXA_CLIENTE_NOME',
+        'X-Cliente-Nome',
+        'x_cliente_nome',
+      ]) {
+        if (
+          obj[alias] !== undefined &&
+          obj[alias] !== null &&
+          obj[alias] !== '' &&
+          String(obj[alias]).toLowerCase() !== 'microsip'
+        ) {
+          return obj[alias];
+        }
       }
     }
 
@@ -176,7 +263,7 @@ export class InboundDataMapperService {
   }
 
   /**
-   * Aplica sanitizações e transformações nos valores
+   * Aplica sanitizaÃ§Ãµes e transformaÃ§Ãµes nos valores
    */
   applyTransformation(
     value: unknown,
@@ -187,7 +274,7 @@ export class InboundDataMapperService {
 
     switch (transform) {
       case 'cpf_cnpj': {
-        // Remove tudo que não for dígito
+        // Remove tudo que nÃ£o for dÃ­gito
         const digits = strVal.replace(/\D/g, '');
         if (digits.length === 11) {
           // Formata CPF: 000.000.000-00
@@ -203,7 +290,7 @@ export class InboundDataMapperService {
       }
 
       case 'phone': {
-        // Remove caracteres não numéricos
+        // Remove caracteres nÃ£o numÃ©ricos
         const digits = strVal.replace(/\D/g, '');
         if (digits.length === 11) {
           // Celular BR: (XX) 9XXXX-XXXX
@@ -221,7 +308,7 @@ export class InboundDataMapperService {
           num = value;
         } else {
           let cleaned = strVal.replace(/[R$\s]/gi, '');
-          // Identifica se vírgula é decimal (ex: 1.500,50 ou 250,00)
+          // Identifica se vÃ­rgula Ã© decimal (ex: 1.500,50 ou 250,00)
           if (
             cleaned.includes(',') &&
             (!cleaned.includes('.') ||
@@ -229,7 +316,7 @@ export class InboundDataMapperService {
           ) {
             cleaned = cleaned.replace(/\./g, '').replace(',', '.');
           } else if (cleaned.includes(',') && cleaned.includes('.')) {
-            // Formato US com vírgula de milhar: 1,500.50
+            // Formato US com vÃ­rgula de milhar: 1,500.50
             cleaned = cleaned.replace(/,/g, '');
           }
           num = parseFloat(cleaned);
@@ -267,7 +354,7 @@ export class InboundDataMapperService {
         ) {
           return true;
         }
-        if (['false', '0', 'nao', 'não', 'n', 'no', 'falso'].includes(lower)) {
+        if (['false', '0', 'nao', 'nÃ£o', 'n', 'no', 'falso'].includes(lower)) {
           return false;
         }
         return Boolean(value);

@@ -22,14 +22,12 @@ async function main() {
     where: { id: CLIENT_ID },
     update: {
       company_name: 'Synexa Cobrança & Negociação',
-      status: 'active',
       agent_name: 'Sofia - Assistente Synexa',
     },
     create: {
       id: CLIENT_ID,
       company_id: COMPANY_ID,
       company_name: 'Synexa Cobrança & Negociação',
-      status: 'active',
       agent_name: 'Sofia - Assistente Synexa',
     },
   });
@@ -387,18 +385,18 @@ Você é o Especialista de Negociação e Acordos da Synexa.
 Você assume o atendimento imediatamente após a localização da dívida para apresentar propostas facilitadas de quitação e regularização.
 
 ## Dados do Cliente e Pendência
-- Cliente: [[cliente_nome]]
-- CPF: [[cliente_cpf]]
-- Contrato: [[contrato]] ([[origem_divida]])
-- Valor Original: R$ [[valor_divida]]
-- Dias em Atraso: [[dias_atraso]] dias
-- Vencimento Original: [[data_vencimento]]
+- Cliente: {{cliente_nome}}
+- CPF: {{cliente_cpf}}
+- Contrato: {{contrato}} ({{origem_divida}})
+- Valor Original: R$ {{valor_divida}}
+- Dias em Atraso: {{dias_atraso}} dias
+- Vencimento Original: {{data_vencimento}}
 
 ## Regras de Abordagem Condicionais
-[SE [[dias_atraso]] > 30]
-O débito está com mais de 30 dias de vencimento ([[dias_atraso]] dias em aberto). Destaque a oportunidade imperdível de regularizar seu nome hoje mesmo com desconto especial à vista de 15% ou em parcelas flexíveis sem juros.
-[SENÃO SE [[dias_atraso]] > 0]
-O débito está recente ([[dias_atraso]] dias de atraso). Adote tom leve e solícito, apresentando as opções para manter a conta quitada sem complicações.
+[SE {{dias_atraso}} > 30]
+O débito está com mais de 30 dias de vencimento ({{dias_atraso}} dias em aberto). Destaque a oportunidade imperdível de regularizar seu nome hoje mesmo com desconto especial à vista de 15% ou em parcelas flexíveis sem juros.
+[SENÃO SE {{dias_atraso}} > 0]
+O débito está recente ({{dias_atraso}} dias de atraso). Adote tom leve e solícito, apresentando as opções para manter a conta quitada sem complicações.
 [SENÃO]
 Débito localizado para regularização imediata.
 [FIM SE]
@@ -439,7 +437,7 @@ Débito localizado para regularização imediata.
         identidade:
           'Especialista de negociação financeira da Synexa focado em conciliação e facilidades de pagamento.',
         condicionais:
-          '[SE [[dias_atraso]] > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
+          '[SE {{dias_atraso}} > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
         planos:
           'Plano à vista com desconto (NEG-001) e planos parcelados em até 5x (NEG-002 a NEG-005).',
       } as any,
@@ -471,7 +469,7 @@ Débito localizado para regularização imediata.
         identidade:
           'Especialista de negociação financeira da Synexa focado em conciliação e facilidades de pagamento.',
         condicionais:
-          '[SE [[dias_atraso]] > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
+          '[SE {{dias_atraso}} > 30] Foco em regularização urgente do nome [SENÃO] Foco em desconto facilitado [FIM SE]',
         planos:
           'Plano à vista com desconto (NEG-001) e planos parcelados em até 5x (NEG-002 a NEG-005).',
       } as any,
@@ -488,18 +486,18 @@ Você é o assistente de formalização e encerramento de acordos da Synexa.
 Você assume a conversa no instante em que o acordo foi registrado no sistema pela API \`agreement\`.
 
 ## Dados do Acordo Formalizado
-- Protocolo: [[acordo_id]]
-- Status do Acordo: [[acordo_status]]
-- Vencimento da 1ª Parcela: [[vencimento_acordo]]
-- Código PIX Copia e Cola: [[copia_e_cola]]
+- Protocolo: {{acordo_id}}
+- Status do Acordo: {{acordo_status}}
+- Vencimento da 1ª Parcela: {{vencimento_acordo}}
+- Código PIX Copia e Cola: {{copia_e_cola}}
 
 ## Roteiro de Encerramento (Voz e Texto)
-1. Parabenize o cliente pela negociação e confirme a formalização do acordo sob o protocolo **[[acordo_id]]**.
+1. Parabenize o cliente pela negociação e confirme a formalização do acordo sob o protocolo **{{acordo_id}}**.
 2. **Para Canais de Texto**: Envie a chave PIX Copia e Cola em um bloco de código destacado:
 \`\`\`
-[[copia_e_cola]]
+{{copia_e_cola}}
 \`\`\`
-3. **Para Canais de Voz**: Informe que a chave PIX e o comprovante foram enviados para o canal de mensagens e confirme o vencimento para **[[vencimento_acordo]]**.
+3. **Para Canais de Voz**: Informe que a chave PIX e o comprovante foram enviados para o canal de mensagens e confirme o vencimento para **{{vencimento_acordo}}**.
 4. Oriente o cliente a concluir o pagamento no aplicativo do seu banco até a data de vencimento para garantir a ativação do acordo.
 5. Pergunte cordialmente se pode ajudar em algo mais e despeça-se com profissionalismo e simpatia.`;
 

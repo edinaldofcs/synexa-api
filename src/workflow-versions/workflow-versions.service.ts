@@ -1,6 +1,5 @@
 import {
   Injectable,
-  ForbiddenException,
   NotFoundException,
   BadRequestException,
   Logger,
@@ -30,17 +29,6 @@ export class WorkflowVersionsService {
     private readonly metadataService: ClientMetadataService,
   ) {}
 
-  private async getUserCompanyId(userId: string): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) {
-      throw new ForbiddenException('Usuário sem empresa vinculada');
-    }
-    return user.company_id;
-  }
-
   private async validateClientAccess(clientId: string, companyId: string) {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
@@ -51,8 +39,7 @@ export class WorkflowVersionsService {
     }
   }
 
-  async list(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async list(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     return this.prisma.workflow_versions.findMany({
@@ -62,8 +49,7 @@ export class WorkflowVersionsService {
     });
   }
 
-  async getDraft(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getDraft(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     return this.prisma.workflow_versions.findFirst({
@@ -71,8 +57,7 @@ export class WorkflowVersionsService {
     });
   }
 
-  async getPublished(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getPublished(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     return this.prisma.workflow_versions.findFirst({
@@ -81,8 +66,7 @@ export class WorkflowVersionsService {
     });
   }
 
-  async getById(clientId: string, versionId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getById(clientId: string, versionId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     const version = await this.prisma.workflow_versions.findUnique({
@@ -96,8 +80,7 @@ export class WorkflowVersionsService {
     return version;
   }
 
-  async delete(clientId: string, versionId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async delete(clientId: string, versionId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     const version = await this.prisma.workflow_versions.findUnique({
@@ -128,9 +111,8 @@ export class WorkflowVersionsService {
     clientId: string,
     versionId: string,
     dto: UpdateVersionDto,
-    userId: string,
+    companyId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
 
     const version = await this.prisma.workflow_versions.findUnique({
@@ -193,8 +175,12 @@ export class WorkflowVersionsService {
     return updated;
   }
 
-  async activate(clientId: string, versionId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async activate(
+    clientId: string,
+    versionId: string,
+    companyId: string,
+    userId: string,
+  ) {
     await this.validateClientAccess(clientId, companyId);
 
     const targetVersion = await this.prisma.workflow_versions.findUnique({
@@ -255,8 +241,7 @@ export class WorkflowVersionsService {
     });
   }
 
-  async checkout(clientId: string, versionId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async checkout(clientId: string, versionId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     const targetVersion = await this.prisma.workflow_versions.findUnique({
@@ -301,8 +286,7 @@ export class WorkflowVersionsService {
     });
   }
 
-  async getEditingVersion(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getEditingVersion(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     const client = await this.prisma.painel_clients.findUnique({
@@ -324,8 +308,7 @@ export class WorkflowVersionsService {
     });
   }
 
-  async saveCurrentEditing(clientId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async saveCurrentEditing(clientId: string, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
 
     const client = await this.prisma.painel_clients.findUnique({
@@ -365,7 +348,7 @@ export class WorkflowVersionsService {
   }
 
   async buildCurrentSnapshot(clientId: string): Promise<WorkflowSnapshot> {
-    const [agents, subagents, apis, intentions] = await Promise.all([
+    const [agents, subagents, apis, tracks] = await Promise.all([
       this.prisma.painel_agents.findMany({
         where: { client_id: clientId },
         orderBy: { execution_order: 'asc' },
@@ -378,8 +361,9 @@ export class WorkflowVersionsService {
         where: { client_id: clientId },
         orderBy: { execution_order: 'asc' },
       }),
-      this.prisma.painel_intentions.findMany({
+      this.prisma.painel_tracks.findMany({
         where: { client_id: clientId },
+        orderBy: [{ display_order: 'asc' }, { created_at: 'asc' }],
       }),
     ]);
 
@@ -426,11 +410,18 @@ export class WorkflowVersionsService {
         next_tool: api.next_tool,
         execution_order: api.execution_order,
       })),
-      intentions: intentions.map((i) => ({
-        id: i.id,
-        code: i.code,
-        description: i.description,
-        is_active: i.is_active,
+      tracks: tracks.map((t) => ({
+        id: t.id,
+        code: t.code,
+        label: t.label,
+        description: t.description,
+        category: t.category,
+        icon: t.icon,
+        color: t.color,
+        examples: (t.examples as string[] | null) ?? null,
+        agent_id: t.agent_id,
+        display_order: t.display_order,
+        is_active: t.is_active,
       })),
     };
   }
@@ -438,9 +429,9 @@ export class WorkflowVersionsService {
   async createDraftSnapshot(
     clientId: string,
     dto: CreateSnapshotDto,
+    companyId: string,
     userId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
 
     const snapshot = await this.buildCurrentSnapshot(clientId);
@@ -491,9 +482,9 @@ export class WorkflowVersionsService {
     clientId: string,
     versionId: string,
     dto: PublishVersionDto,
+    companyId: string,
     userId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
 
     if (!dto?.description?.trim()) {
@@ -560,9 +551,9 @@ export class WorkflowVersionsService {
     clientId: string,
     targetVersionId: string,
     dto: RollbackVersionDto,
+    companyId: string,
     userId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
 
     const targetVersion = await this.prisma.workflow_versions.findUnique({
@@ -634,7 +625,7 @@ export class WorkflowVersionsService {
     await tx.painel_apis.deleteMany({ where: { client_id: clientId } });
     await tx.painel_agents.deleteMany({ where: { client_id: clientId } });
     await tx.painel_subagents.deleteMany({ where: { client_id: clientId } });
-    await tx.painel_intentions.deleteMany({ where: { client_id: clientId } });
+    await tx.painel_tracks.deleteMany({ where: { client_id: clientId } });
 
     // 2. Recriar agentes
     if (snapshot.agents && snapshot.agents.length > 0) {
@@ -699,15 +690,26 @@ export class WorkflowVersionsService {
       });
     }
 
-    // 5. Recriar Intenções
-    if (snapshot.intentions && snapshot.intentions.length > 0) {
-      await tx.painel_intentions.createMany({
-        data: snapshot.intentions.map((i) => ({
-          id: i.id,
+    // 5. Recriar Trilhas de Atendimento (snapshots antigos usavam "intentions")
+    const snapshotTracks =
+      snapshot.tracks ||
+      ((snapshot as any).intentions as WorkflowSnapshot['tracks']) ||
+      [];
+    if (snapshotTracks.length > 0) {
+      await tx.painel_tracks.createMany({
+        data: snapshotTracks.map((t) => ({
+          id: t.id,
           client_id: clientId,
-          code: i.code,
-          description: i.description,
-          is_active: i.is_active ?? true,
+          code: t.code,
+          label: t.label ?? t.code,
+          description: t.description,
+          category: t.category ?? null,
+          icon: t.icon ?? null,
+          color: t.color ?? null,
+          examples: t.examples ?? null,
+          agent_id: t.agent_id ?? null,
+          display_order: t.display_order ?? 0,
+          is_active: t.is_active ?? true,
         })),
       });
     }
@@ -738,9 +740,8 @@ export class WorkflowVersionsService {
     clientId: string,
     v1Id: string,
     v2Id: string,
-    userId: string,
+    companyId: string,
   ): Promise<WorkflowDiffResult> {
-    const companyId = await this.getUserCompanyId(userId);
     await this.validateClientAccess(clientId, companyId);
 
     const [snap1, snap2] = await Promise.all([
@@ -772,7 +773,7 @@ export class WorkflowVersionsService {
       });
       return pub
         ? (pub.snapshot as unknown as WorkflowSnapshot)
-        : { agents: [], subagents: [], apis: [], intentions: [] };
+        : { agents: [], subagents: [], apis: [], tracks: [] };
     }
 
     const ver = await this.prisma.workflow_versions.findUnique({
@@ -793,7 +794,7 @@ export class WorkflowVersionsService {
       agents: { added: [], removed: [], modified: [] },
       subagents: { added: [], removed: [], modified: [] },
       apis: { added: [], removed: [], modified: [] },
-      intentions: { added: [], removed: [], modified: [] },
+      tracks: { added: [], removed: [], modified: [] },
     };
 
     // 1. Diff Agentes
@@ -898,6 +899,44 @@ export class WorkflowVersionsService {
     for (const [id, oldApi] of oldApisMap) {
       if (!newApisMap.has(id)) {
         result.apis.removed.push(oldApi);
+        result.hasChanges = true;
+      }
+    }
+
+    // 4. Diff Trilhas de Atendimento (snapshots antigos usavam "intentions")
+    const oldTracksList =
+      oldSnap.tracks || ((oldSnap as any).intentions as any[]) || [];
+    const newTracksList =
+      newSnap.tracks || ((newSnap as any).intentions as any[]) || [];
+    const oldTracksMap = new Map(oldTracksList.map((t: any) => [t.id, t]));
+    const newTracksMap = new Map(newTracksList.map((t: any) => [t.id, t]));
+
+    for (const [id, newTrack] of newTracksMap) {
+      if (!oldTracksMap.has(id)) {
+        result.tracks.added.push(newTrack);
+        result.hasChanges = true;
+      } else {
+        const oldTrack = oldTracksMap.get(id)!;
+        const changes = this.compareObjects(oldTrack, newTrack, [
+          'code',
+          'label',
+          'description',
+          'category',
+          'icon',
+          'color',
+          'display_order',
+          'is_active',
+        ]);
+        if (Object.keys(changes).length > 0) {
+          result.tracks.modified.push({ item: newTrack, changes });
+          result.hasChanges = true;
+        }
+      }
+    }
+
+    for (const [id, oldTrack] of oldTracksMap) {
+      if (!newTracksMap.has(id)) {
+        result.tracks.removed.push(oldTrack);
         result.hasChanges = true;
       }
     }

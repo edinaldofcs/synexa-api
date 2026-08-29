@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
 import { ApisService } from './apis.service';
 
 describe('ApisService', () => {
@@ -11,12 +11,10 @@ describe('ApisService', () => {
   };
   const mockMetadata = { refresh: jest.fn() };
   const mockPrisma = {
-    users: { findUnique: jest.fn() },
     painel_clients: { findUnique: jest.fn() },
   };
 
   let service: ApisService;
-  const userId = 'user-1';
   const companyId = 'company-1';
   const clientId = 'client-1';
 
@@ -28,7 +26,6 @@ describe('ApisService', () => {
       mockPrisma as never,
     );
 
-    mockPrisma.users.findUnique.mockResolvedValue({ company_id: companyId });
     mockPrisma.painel_clients.findUnique.mockResolvedValue({
       id: clientId,
       company_id: companyId,
@@ -36,18 +33,6 @@ describe('ApisService', () => {
   });
 
   describe('Tenant security', () => {
-    it('rejeita criação se o usuário não possuir empresa', async () => {
-      mockPrisma.users.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.create(
-          clientId,
-          { name: 'Tool', method: 'GET', url: 'https://example.com' } as any,
-          userId,
-        ),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-    });
-
     it('rejeita findOne se a API pertencer a cliente de outra empresa', async () => {
       mockRepository.findOne.mockResolvedValue({
         id: 'api-1',
@@ -57,7 +42,7 @@ describe('ApisService', () => {
         company_id: 'company-other',
       });
 
-      await expect(service.findOne('api-1', userId)).rejects.toBeInstanceOf(
+      await expect(service.findOne('api-1', companyId)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
@@ -78,7 +63,7 @@ describe('ApisService', () => {
           method: 'GET',
           url: 'https://viacep.com.br',
         } as any,
-        userId,
+        companyId,
       );
 
       expect(result.id).toBe('api-1');
@@ -103,7 +88,7 @@ describe('ApisService', () => {
       const result = await service.update(
         'api-1',
         { name: 'Buscar CEP v2' } as any,
-        userId,
+        companyId,
       );
 
       expect(result.name).toBe('Buscar CEP v2');
@@ -120,7 +105,7 @@ describe('ApisService', () => {
         result: { success: true },
       });
 
-      const result = await service.remove('api-1', userId);
+      const result = await service.remove('api-1', companyId);
 
       expect(result).toEqual({ success: true });
       expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);

@@ -3,6 +3,8 @@ import { ITelephonyAdapter } from './telephony-adapter.interface';
 import { AsteriskFastAgiAdapter } from './asterisk/asterisk-fastagi.adapter';
 import { CallFlexAdapter } from './callflex/callflex.adapter';
 import { AudioSocketAdapter } from './audiosocket/audiosocket.adapter';
+import { TwilioMediaStreamsAdapter } from './twilio/twilio-media-streams.adapter';
+import { VonageVoiceAdapter } from './vonage/vonage-voice.adapter';
 
 export type TelephonyAdapterConstructor = new (
   ...args: any[]
@@ -55,5 +57,9 @@ export class TelephonyAdapterFactory {
     this.register('callflex', CallFlexAdapter);
     this.register('callflex_ws', CallFlexAdapter);
     this.register('audiosocket', AudioSocketAdapter);
+    this.register('twilio_media_streams', TwilioMediaStreamsAdapter);
+    this.register('twilio', TwilioMediaStreamsAdapter);
+    this.register('vonage_voice', VonageVoiceAdapter);
+    this.register('vonage', VonageVoiceAdapter);
   }
 }

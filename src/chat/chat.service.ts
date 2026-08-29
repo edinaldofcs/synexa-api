@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-  ForbiddenException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { CreateMessageDto } from './dto/create-message.dto';
@@ -14,20 +9,7 @@ export class ChatService {
 
   constructor(private prisma: PrismaService) {}
 
-  private async getUserCompanyId(userId: string): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) {
-      throw new ForbiddenException('Usuário sem empresa vinculada');
-    }
-    return user.company_id;
-  }
-
-  async getConversations(userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
-
+  async getConversations(companyId: string) {
     return this.prisma.conversations.findMany({
       where: { company_id: companyId },
       include: {
@@ -40,8 +22,7 @@ export class ChatService {
     });
   }
 
-  async createConversation(dto: CreateConversationDto, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async createConversation(dto: CreateConversationDto, companyId: string) {
     return this.prisma.conversations.create({
       data: {
         company_id: companyId,
@@ -51,8 +32,7 @@ export class ChatService {
     });
   }
 
-  async getConversation(id: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getConversation(id: string, companyId: string) {
     const conversation = await this.prisma.conversations.findUnique({
       where: { id },
       include: {
@@ -69,8 +49,7 @@ export class ChatService {
     return conversation;
   }
 
-  async getMessages(conversationId: string, userId: string) {
-    const companyId = await this.getUserCompanyId(userId);
+  async getMessages(conversationId: string, companyId: string) {
     const conversation = await this.prisma.conversations.findUnique({
       where: { id: conversationId },
       select: { company_id: true },
@@ -87,9 +66,8 @@ export class ChatService {
   async sendMessage(
     conversationId: string,
     dto: CreateMessageDto,
-    userId: string,
+    companyId: string,
   ) {
-    const companyId = await this.getUserCompanyId(userId);
     const conversation = await this.prisma.conversations.findUnique({
       where: { id: conversationId },
       select: { company_id: true },

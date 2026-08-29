@@ -6,7 +6,13 @@
 
 export class AudioResampler {
   /**
-   * Converte um buffer PCM 16-bit mono de `fromRate` para `toRate`.
+   * Converte um buffer PCM 16-bit mono de `fromRate` para `toRate`,
+   * por interpolação linear com clamping em 16-bit.
+   *
+   * Nota: um FIR anti-aliasing por chunk foi testado e removido — o estado
+   * do filtro não sobrevive entre chunks e cada fronteira virava um degrau
+   * audível (chunks do Gemini têm 10–30ms). Interpolação mantém continuidade
+   * entre chunks; a decimação aceita aliasing residual no cenário de telefonia.
    */
   public static resample(
     inputBuffer: Buffer,

@@ -11,7 +11,7 @@ import { TablesModule } from './tables/tables.module';
 import { ChatModule } from './chat/chat.module';
 import { ClientsModule } from './clients/clients.module';
 import { AgentsModule } from './agents/agents.module';
-import { IntentionsModule } from './intentions/intentions.module';
+import { TracksModule } from './tracks/tracks.module';
 import { ApisModule } from './apis/apis.module';
 import { AuditModule } from './audit/audit.module';
 import { ChannelsModule } from './channels/channels.module';
@@ -29,6 +29,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { SubagentsModule } from './subagents/subagents.module';
 import { WorkflowVersionsModule } from './workflow-versions/workflow-versions.module';
 import { InteractionsModule } from './interactions/interactions.module';
+import { TelephonyModule } from './telephony/telephony.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -56,7 +57,7 @@ import { AppService } from './app.service';
     AgentsModule,
     SubagentsModule,
     WorkflowVersionsModule,
-    IntentionsModule,
+    TracksModule,
     ApisModule,
     AuditModule,
     ChannelsModule,
@@ -72,6 +73,7 @@ import { AppService } from './app.service';
     BillingModule,
     AnalyticsModule,
     InteractionsModule,
+    TelephonyModule,
   ],
   controllers: [AppController],
   providers: [

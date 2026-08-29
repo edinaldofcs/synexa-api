@@ -20,36 +20,39 @@ export class SubagentsController {
   @Get()
   findAllByClient(
     @Query('clientId') clientId: string,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.subagentsService.findAllByClient(clientId, user.id);
+    return this.subagentsService.findAllByClient(clientId, user.company_id);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.subagentsService.findOne(id, user.id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser() user: { company_id: string },
+  ) {
+    return this.subagentsService.findOne(id, user.company_id);
   }
 
   @Post()
   create(
     @Query('clientId') clientId: string,
     @Body() dto: CreateSubagentDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.subagentsService.create(clientId, dto, user.id);
+    return this.subagentsService.create(clientId, dto, user.company_id);
   }
 
   @Put(':id')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateSubagentDto,
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: { company_id: string },
   ) {
-    return this.subagentsService.update(id, dto, user.id);
+    return this.subagentsService.update(id, dto, user.company_id);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @CurrentUser() user: { id: string }) {
-    return this.subagentsService.remove(id, user.id);
+  remove(@Param('id') id: string, @CurrentUser() user: { company_id: string }) {
+    return this.subagentsService.remove(id, user.company_id);
   }
 }

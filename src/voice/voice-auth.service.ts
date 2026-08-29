@@ -43,7 +43,7 @@ export class VoiceAuthService {
     }
 
     const defaultClient = await this.prisma.painel_clients.findFirst({
-      where: { company_id: companyId, status: 'active' },
+      where: { company_id: companyId },
       orderBy: { id: 'asc' },
       select: { id: true },
     });

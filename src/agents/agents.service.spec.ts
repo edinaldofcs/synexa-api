@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
 import { AgentsService } from './agents.service';
 
 describe('AgentsService', () => {
@@ -11,7 +11,6 @@ describe('AgentsService', () => {
   };
   const mockMetadata = { refresh: jest.fn() };
   const mockPrisma = {
-    users: { findUnique: jest.fn() },
     painel_clients: { findUnique: jest.fn() },
     painel_agents: {
       findMany: jest.fn(),
@@ -21,7 +20,6 @@ describe('AgentsService', () => {
   };
 
   let service: AgentsService;
-  const userId = 'user-1';
   const companyId = 'company-1';
   const clientId = 'client-1';
 
@@ -33,7 +31,6 @@ describe('AgentsService', () => {
       mockPrisma as never,
     );
 
-    mockPrisma.users.findUnique.mockResolvedValue({ company_id: companyId });
     mockPrisma.painel_clients.findUnique.mockResolvedValue({
       id: clientId,
       company_id: companyId,
@@ -41,21 +38,13 @@ describe('AgentsService', () => {
   });
 
   describe('Tenant security', () => {
-    it('rejeita criação quando usuário não tem empresa', async () => {
-      mockPrisma.users.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.create(clientId, { model: 'gpt-4o' }, userId),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-    });
-
     it('rejeita criação para cliente de outra empresa', async () => {
       mockPrisma.painel_clients.findUnique.mockResolvedValue({
         company_id: 'other-company',
       });
 
       await expect(
-        service.create(clientId, { model: 'gpt-4o' }, userId),
+        service.create(clientId, { model: 'gpt-4o' }, companyId),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
@@ -72,7 +61,7 @@ describe('AgentsService', () => {
       const agent = await service.create(
         clientId,
         { model: 'gemini-2.5-flash', is_initial: true, llm_provider: 'gemini' },
-        userId,
+        companyId,
       );
 
       expect(agent.id).toBe('agent-1');
@@ -105,7 +94,7 @@ describe('AgentsService', () => {
       const updated = await service.update(
         'agent-1',
         { execution_order: 2 },
-        userId,
+        companyId,
       );
 
       expect(updated.id).toBe('agent-1');
@@ -126,7 +115,7 @@ describe('AgentsService', () => {
         result: { success: true },
       });
 
-      const result = await service.remove('agent-1', userId);
+      const result = await service.remove('agent-1', companyId);
 
       expect(result).toEqual({ success: true });
       expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);

@@ -47,7 +47,7 @@ describe('VoiceAuthService', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
-  it('resolves the first active client when no client was selected', async () => {
+  it('resolves the first client when no client was selected', async () => {
     prisma.painel_clients.findFirst.mockResolvedValue({ id: 'client-1' });
 
     await expect(service.resolveClientId('company-1')).resolves.toBe(

@@ -1,5 +1,7 @@
 import { ConflictException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { TextAiExecutionService } from './text-ai-execution.service';
+import { ChannelsService } from '../channels/services/channels.service';
 import {
   QueueService,
   IngestJobData,
@@ -92,26 +94,19 @@ describe('TextAiExecutionService', () => {
       addMediaJob: jest.fn().mockResolvedValue('job-media'),
     };
 
-    const lazyTokens = {
-      channels: require('../channels/services/channels.service')
-        .ChannelsService,
-      conversations: require('../conversations/conversations.service')
-        .ConversationsService,
-      orchestration: require('../orchestrator/orchestration.service')
-        .OrchestrationService,
-    };
     const moduleRef = {
       get: jest.fn((token: unknown) => {
-        if (token === lazyTokens.channels) return channels;
-        if (token === lazyTokens.conversations) return conversations;
-        if (token === lazyTokens.orchestration) return orchestration;
-        return queue; // QueueService é o único token restante
+        if (token === ChannelsService) return channels;
+        throw new Error(`Provider inesperado no ModuleRef: ${String(token)}`);
       }),
     };
 
     service = new TextAiExecutionService(
       prisma as never,
       redis as never,
+      queue as never,
+      conversations as never,
+      orchestration as never,
       moduleRef as never,
     );
   });

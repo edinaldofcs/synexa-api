@@ -202,23 +202,33 @@ export function resolvePromptTemplateString(
 ): string {
   if (!template) return '';
 
-  return template.replace(/\[\[([^\]]+)]]/g, (match, rawKey: string) => {
+  const resolveKey = (match: string, rawKey: string) => {
     const key = rawKey.trim();
 
-    // 1. Check custom variables first
+    // 1. Verifica variáveis customizadas do contexto
     if (Object.prototype.hasOwnProperty.call(variables, key)) {
       const val = variables[key];
       if (val === null || val === undefined) return '';
       return typeof val === 'string' ? val : JSON.stringify(val);
     }
 
-    // 2. Check dynamic system variables
+    // 2. Verifica variáveis dinâmicas do sistema (ex: hoje, saudacao_tempo, etc.)
     const dynamicVal = resolveDynamicSystemVariable(key, now, timeZone);
     if (dynamicVal !== null) {
       return dynamicVal;
     }
 
-    // 3. Keep raw placeholder if not resolved
+    // 3. Mantém o placeholder original caso não seja resolvido
     return match;
-  });
+  };
+
+  // 1. Padrão primário: {{variavel}}
+  let result = template.replace(/\{\{([^{}]+)\}\}/g, resolveKey);
+
+  // 2. Fallback de compatibilidade: [[variavel]]
+  if (result.includes('[[')) {
+    result = result.replace(/\[\[([^\]]+)]]/g, resolveKey);
+  }
+
+  return result;
 }

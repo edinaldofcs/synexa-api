@@ -116,14 +116,12 @@ async function main() {
     where: { id: CLIENT_ID },
     update: {
       company_name: 'Cliente Teste',
-      status: 'active',
       agent_name: 'Assistente Synexa',
     },
     create: {
       id: CLIENT_ID,
       company_id: COMPANY_ID,
       company_name: 'Cliente Teste',
-      status: 'active',
       agent_name: 'Assistente Synexa',
     },
   });
@@ -218,6 +216,7 @@ async function main() {
     update: {
       model: defaultModel,
       is_active: true,
+      is_initial: true,
       service_step: 'reception',
       execution_order: 1,
       allowed_tool_names: [],
@@ -258,7 +257,8 @@ async function main() {
       model: defaultModel,
       service_step: 'reception',
       execution_order: 1,
-      system_prompt: `Seu nome é [[nome_agente]].
+      is_initial: true,
+      system_prompt: `Seu nome é {{nome_agente}}.
 
 Você é o assistente de recepção da Synexa.
 Seu papel é receber o cliente, identificar o motivo do contato e resolver problemas simples.
@@ -339,7 +339,7 @@ automaticamente quando as condições de ativação configuradas no painel forem
       model: defaultModel,
       service_step: 'suporte_tecnico',
       execution_order: 2,
-      system_prompt: `Seu nome é [[nome_agente]].
+      system_prompt: `Seu nome é {{nome_agente}}.
 
 Você é o agente de suporte técnico da Synexa.
 Ajude o cliente a resolver problemas técnicos com produtos e serviços.
@@ -391,7 +391,7 @@ condições de ativação configuradas no painel forem atendidas.`,
       model: defaultModel,
       service_step: 'vendas',
       execution_order: 3,
-      system_prompt: `Seu nome é [[nome_agente]].
+      system_prompt: `Seu nome é {{nome_agente}}.
 
 Você é o agente de vendas da Synexa.
 Apresente produtos e serviços, tire dúvidas sobre preços e condições.
@@ -422,7 +422,7 @@ Se o cliente quiser fechar negócio, colete os dados e registre o pedido.`,
       model: defaultModel,
       service_step: 'financeiro',
       execution_order: 4,
-      system_prompt: `Seu nome é [[nome_agente]].
+      system_prompt: `Seu nome é {{nome_agente}}.
 
 Você é o agente financeiro da Synexa.
 Ajude com questões de pagamento, boletos, faturas e reembolsos.
@@ -503,41 +503,76 @@ condições de ativação configuradas no painel forem atendidas.`,
     );
   }
 
-  // ── 9. Intentions ─────────────────────────────────────────────
-  const existingIntentions = await prisma.painel_intentions.findMany({
+  // ── 9. Trilhas de Atendimento ────────────────────────────────
+  const existingTracks = await prisma.painel_tracks.findMany({
     where: { client_id: CLIENT_ID },
   });
 
-  if (existingIntentions.length === 0) {
-    await prisma.painel_intentions.createMany({
+  if (existingTracks.length === 0) {
+    await prisma.painel_tracks.createMany({
       data: [
         {
           client_id: CLIENT_ID,
           code: 'saudacao',
+          label: 'Saudação',
           description: 'Cliente cumprimenta ou inicia conversa',
+          category: 'Atendimento',
+          icon: 'Hand',
+          color: '#22c55e',
+          examples: ['Olá!', 'Bom dia', 'Preciso de ajuda'],
+          display_order: 1,
           is_active: true,
         },
         {
           client_id: CLIENT_ID,
           code: 'suporte_tecnico',
+          label: 'Suporte Técnico',
           description: 'Cliente solicita suporte técnico',
+          category: 'Suporte',
+          icon: 'Wrench',
+          color: '#3b82f6',
+          examples: [
+            'Meu sistema não abre',
+            'Está dando erro no login',
+            'Preciso de suporte',
+          ],
+          display_order: 2,
           is_active: true,
         },
         {
           client_id: CLIENT_ID,
           code: 'financeiro',
+          label: 'Financeiro',
           description: 'Dúvidas sobre pagamentos, boletos e fatura',
+          category: 'Financeiro',
+          icon: 'Wallet',
+          color: '#f59e0b',
+          examples: [
+            'Quero a segunda via do boleto',
+            'Como faço o pagamento?',
+            'Qual o valor da fatura?',
+          ],
+          display_order: 3,
           is_active: true,
         },
         {
           client_id: CLIENT_ID,
           code: 'cancelamento',
+          label: 'Cancelamento',
           description: 'Cliente deseja cancelar serviço',
+          category: 'Retenção',
+          icon: 'CircleSlash',
+          color: '#ef4444',
+          examples: [
+            'Quero cancelar meu plano',
+            'Como cancelo a assinatura?',
+          ],
+          display_order: 4,
           is_active: true,
         },
       ],
     });
-    console.log(`[painel_intentions] 4 intenções criadas`);
+    console.log(`[painel_tracks] 4 trilhas de atendimento criadas`);
   }
 
   // ── 10. End User + Identity ───────────────────────────────────

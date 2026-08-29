@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bull';
 import { QueueService } from './queue.service';
 import { TextAiExecutionService } from './text-ai-execution.service';
+import { ConversationsModule } from '../conversations/conversations.module';
+import { OrchestratorModule } from '../orchestrator/orchestrator.module';
 import {
   QUEUE_INGESTION,
   QUEUE_DISPATCHER,
@@ -43,6 +45,11 @@ import {
       { name: QUEUE_WEBHOOK },
       { name: QUEUE_DEAD_LETTER },
     ),
+    // Providers da cadeia de IA de texto (ingestão → agente → resposta),
+    // injetados formalmente no TextAiExecutionService. Ambos são acíclicos
+    // em relação a esta infra (nenhum deles importa módulos de fila).
+    ConversationsModule,
+    OrchestratorModule,
   ],
   providers: [QueueService, TextAiExecutionService],
   exports: [QueueService, TextAiExecutionService, BullModule],

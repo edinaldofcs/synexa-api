@@ -80,6 +80,12 @@ export class DialerWsIngress
         return;
       }
 
+      // Mensagens que o discador mandou antes daqui (bufferizadas pelo
+      // CookieWsAdapter desde o handshake) são reproduzidas no adapter.
+      const earlyMessages = (clientWs as any).__earlyMessages as
+        | Array<{ data: unknown; isBinary: boolean }>
+        | undefined;
+
       const tokenHash = createHash('sha256')
         .update(`${token}${this.wsTokenPepper}`)
         .digest('hex');
@@ -89,6 +95,7 @@ export class DialerWsIngress
         await this.endpointResolver.resolveBySecretHash(tokenHash);
       if (!preRoute) {
         this.logger.warn('[DialerWS] Token sem endpoint habilitado.');
+        (clientWs as any).__detachEarlyBuffer?.();
         clientWs.close(4403, 'no_route');
         return;
       }
@@ -102,6 +109,12 @@ export class DialerWsIngress
         },
         audioFormat: normalizeAudioFormat(preRoute.audioFormat),
       });
+
+      // Mesmo tick da criação: sem janela de perda nem duplicação
+      (clientWs as any).__detachEarlyBuffer?.();
+      for (const { data, isBinary } of earlyMessages || []) {
+        adapter.handleRawMessage?.(data, isBinary);
+      }
 
       await adapter.waitForIdentification?.(IDENTIFICATION_TIMEOUT_MS);
 
@@ -128,7 +141,17 @@ export class DialerWsIngress
         return;
       }
 
-      const { session } = await this.voiceSessionFactory.create(adapter, route);
+      const { session } = await this.voiceSessionFactory.create(
+        adapter,
+        route,
+        {
+          // Habilita a tool nativa finalizar_chamada; hangup encerra o WS
+          // (CallFlex: frame hangup; Twilio: devolve ao TwiML)
+          onAiHangupRequest: async () => {
+            await adapter.hangup('ai_requested');
+          },
+        },
+      );
       this.sessions.set(clientWs, {
         adapter,
         close: () => void session.end(),

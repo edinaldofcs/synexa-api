@@ -12,6 +12,8 @@ import { AgentConfigResolver } from './services/agent-config-resolver.service';
 import { RagSearchService } from './services/rag-search.service';
 import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
 import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
+import { ApiToolExecutorService } from './services/api-tool-executor.service';
+import { LlmToolLoopService } from './services/llm-tool-loop.service';
 
 import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
@@ -30,6 +32,8 @@ import { FallbackProviderService } from './services/fallback-provider.service';
     RagSearchService,
     ToolCallDispatcher,
     ProviderKeyResolverService,
+    ApiToolExecutorService,
+    LlmToolLoopService,
     ModelPricingService,
     ProviderCircuitBreakerService,
     FallbackProviderService,
