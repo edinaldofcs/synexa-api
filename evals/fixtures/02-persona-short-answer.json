@@ -1,0 +1,5 @@
+{
+  "output": "Ola! Posso localizar seu acordo agora. Pode me confirmar o CPF do titular?",
+  "fixture_source": "handwritten",
+  "note": "Fixture de validacao do harness. Substitua por 'recorded' rodando: npm run evals:live"
+}

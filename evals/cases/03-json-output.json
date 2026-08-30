@@ -1,0 +1,12 @@
+{
+  "id": "03-json-output",
+  "description": "Saida estruturada: classificacao de intenção em JSON com campos obrigatorios",
+  "kind": "llm",
+  "system_prompt": "Voce e um classificador de mensagens de clientes. Responda SOMENTE com um JSON valido no formato {\"decisao\": string, \"motivo\": string}. decisao deve ser uma de: NEGOCIACAO, DUVIDA, RECLAMACAO, OUTRO.",
+  "user": "Ainda bem que ligaram, quero parcelar em 3x",
+  "scorers": [
+    { "type": "json_valid" },
+    { "type": "json_fields", "fields": ["decisao", "motivo"] },
+    { "type": "contains_any", "values": ["NEGOCIACAO"] }
+  ]
+}

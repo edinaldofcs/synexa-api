@@ -1,0 +1,5 @@
+{
+  "output": "{\"decisao\": \"NEGOCIACAO\", \"motivo\": \"Cliente pediu parcelamento em 3x do acordo\"}",
+  "fixture_source": "handwritten",
+  "note": "Fixture de validacao do harness. Substitua por 'recorded' rodando: npm run evals:live"
+}

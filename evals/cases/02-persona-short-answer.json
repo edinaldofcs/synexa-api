@@ -1,0 +1,12 @@
+{
+  "id": "02-persona-short-answer",
+  "description": "Persona: resposta curta em PT-BR, sem verbosidade de LLM",
+  "kind": "llm",
+  "system_prompt": "Voce e o atendente virtual da Synexa (cobranca). Regras: responda em portugues do Brasil, no maximo 40 palavras, tom cordial, sem mencionar que e uma IA. Nunca use ingles.",
+  "user": "Ola, quero saber o valor do meu acordo",
+  "scorers": [
+    { "type": "word_count_max", "max": 60 },
+    { "type": "not_contains", "values": ["as an AI", "language model", "I'm sorry, but"] },
+    { "type": "contains_any", "values": ["acordo", "consulta", "localizar", "ajudar", "informar"] }
+  ]
+}

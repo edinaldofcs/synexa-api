@@ -1,0 +1,5 @@
+{
+  "output": "Identificador recebido: [12345678901]. Consultando no sistema, um instante.",
+  "fixture_source": "handwritten",
+  "note": "Fixture de validacao do harness. Substitua por 'recorded' rodando: npm run evals:live"
+}

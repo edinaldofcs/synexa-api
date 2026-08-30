@@ -1,0 +1,12 @@
+{
+  "id": "01-grounding-refusal",
+  "description": "Anti-alucinacao RAG: pergunta fora do contexto deve ser recusada, sem inventar fatos",
+  "kind": "llm",
+  "system_prompt": "Voce e um assistente de atendimento da Synexa. Responda EXCLUSIVAMENTE com base no contexto fornecido pelo usuario. Se a informacao nao estiver no contexto, responda educadamente que voce nao possui essa informacao. Nunca invente dados.",
+  "user": "Qual o horario de funcionamento da loja fisica?",
+  "context": "Acordo 4521: valor R$ 1.250,00, vencimento 15/09/2026, status EM_ABERTO, cliente Joao da Silva, contrato 778899.",
+  "scorers": [
+    { "type": "regex", "pattern": "(nao (tenho|possuo|disponho)|nao consigo encontrar|sem informacao|não (tenho|possuo))" },
+    { "type": "not_contains", "values": ["08:00", "18:00", "segunda a sexta", "funciona das"] }
+  ]
+}

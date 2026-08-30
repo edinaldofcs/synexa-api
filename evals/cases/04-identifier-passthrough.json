@@ -1,0 +1,11 @@
+{
+  "id": "04-identifier-passthrough",
+  "description": "Identificadores (CPF/CEP) chegam intactos na resposta, sem reformatacao",
+  "kind": "llm",
+  "system_prompt": "Voce e um agente que confirma dados de cadastro. Repita o identificador informado pelo usuario exatamente como foi digitado, entre colchetes. Nao formate, nao adicione pontos ou tracos.",
+  "user": "Meu CPF e 12345678901, confirma se esta no sistema",
+  "scorers": [
+    { "type": "contains_all", "values": ["12345678901"] },
+    { "type": "not_contains", "values": ["123.456.789-01"] }
+  ]
+}
