@@ -367,9 +367,11 @@ export class AnalyticsService {
       to?: Date;
     },
   ): Prisma.Sql {
-    const conditions: Prisma.Sql[] = [Prisma.sql`company_id = ${companyId}`];
+    const conditions: Prisma.Sql[] = [
+      Prisma.sql`company_id = ${companyId}::uuid`,
+    ];
     if (opts.clientId)
-      conditions.push(Prisma.sql`client_id = ${opts.clientId}`);
+      conditions.push(Prisma.sql`client_id = ${opts.clientId}::uuid`);
     if (opts.channel) conditions.push(Prisma.sql`channel = ${opts.channel}`);
     if (opts.status) conditions.push(Prisma.sql`status = ${opts.status}`);
     if (opts.disposition)
@@ -845,7 +847,7 @@ export class AnalyticsService {
                 WHERE m->>'role' IN ('tool', 'function') AND m->>'tool_name' IS NOT NULL AND m->>'tool_name' <> ''
             ) s WHERE name IS NOT NULL) AS message_tools
         FROM painel_interactions
-        WHERE company_id = ${companyId} AND id IN (${Prisma.join(ids)})
+        WHERE company_id = ${companyId}::uuid AND id::text IN (${Prisma.join(ids)})
       `,
     );
 
@@ -994,7 +996,7 @@ export class AnalyticsService {
       Prisma.sql`
         SELECT id, messages
         FROM painel_interactions
-        WHERE company_id = ${companyId} AND id IN (${Prisma.join(validIds)})
+        WHERE company_id = ${companyId}::uuid AND id::text IN (${Prisma.join(validIds)})
       `,
     );
   }
