@@ -6,7 +6,6 @@ import {
   Query,
   DefaultValuePipe,
   ParseIntPipe,
-  ParseUUIDPipe,
   UseGuards,
   Logger,
 } from '@nestjs/common';
@@ -52,12 +51,15 @@ export class QueueController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit?: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset?: number,
   ) {
+    // O wrapper da DLQ (JOB_DEAD_LETTER_STORE) termina no estado 'completed'
+    // após o processor persistir em outbox_events — 'failed' quase nunca existe
     const jobs = await this.deadLetterQueue.getJobs(
-      ['failed'],
+      ['completed', 'failed'],
       offset || 0,
       (offset || 0) + (limit || 20) - 1,
     );
     const waiting = await this.deadLetterQueue.getWaitingCount();
+    const completed = await this.deadLetterQueue.getCompletedCount();
     const failed = await this.deadLetterQueue.getFailedCount();
 
     return {
@@ -71,12 +73,13 @@ export class QueueController {
         timestamp: j.timestamp,
         finished_on: j.finishedOn,
       })),
-      counts: { waiting, failed },
+      counts: { waiting, failed, completed },
     };
   }
 
   @Post('dead-letter/:id/retry')
-  async retryDeadLetter(@Param('id', ParseUUIDPipe) id: string) {
+  async retryDeadLetter(@Param('id') id: string) {
+    // IDs da Bull são numéricos ("1", "2"...) — ParseUUIDPipe rejeitava todo retry
     const job = await this.deadLetterQueue.getJob(id);
     if (!job) return { error: 'Job not found' };
 
@@ -107,7 +110,7 @@ export class QueueController {
 
   @Post('dead-letter/retry-all')
   async retryAllDeadLetter() {
-    const jobs = await this.deadLetterQueue.getJobs(['failed']);
+    const jobs = await this.deadLetterQueue.getJobs(['completed', 'failed']);
     let retried = 0;
     let skipped = 0;
 

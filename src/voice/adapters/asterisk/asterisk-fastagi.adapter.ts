@@ -122,16 +122,24 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
     // Responde ao Asterisk com ANSWER para estabelecer o canal de áudio
     this.sendCommand('ANSWER');
     this.callStartCallback?.();
+    // Aviso único: o protocolo FastAGI NÃO transporta áudio no socket de
+    // controle — egresso exige EAGI (fd 3) ou RTP dedicado; ingresso idem
+    this.logger.warn(
+      '[AsteriskFastAgiAdapter] Canal FastAGI sem transporte de áudio configurado (EAGI/RTP). Áudio da IA não será reproduzido e o ingresso depende de handleIncomingAudio ser acionado por um transporte dedicado.',
+    );
   }
 
   public sendAudio(pcm16: Buffer): void {
-    if (!this.socket || this.isClosed) return;
-    // Se o Asterisk estiver consumindo áudio via socket/EAGI
-    this.socket.write(pcm16);
+    // NUNCA escrever PCM no socket de controle AGI: o Asterisk interpretaria
+    // os bytes como comandos AGI, corrompendo o protocolo. Sem transporte
+    // EAGI/RTP configurado, o egresso de áudio é descartado com aviso.
+    if (this.isClosed) return;
   }
 
   /**
    * Dispara um pacote de áudio recebido do canal de telefonia (convertido para PCM 16-bit).
+   * Deve ser acionado por um transporte de áudio dedicado (EAGI fd 3 / RTP),
+   * nunca pelo socket de controle AGI.
    */
   public handleIncomingAudio(rawAudio: Buffer, isG711Ulaw = true): void {
     if (this.isClosed || !this.audioCallback) return;

@@ -22,7 +22,11 @@ export function getLLMProvider(
   logger.log(`Inicializando LLM Provider: ${name}`);
 
   if (name === 'mock') return new MockLlmProvider();
-  if (name === 'groq' || name === 'openai') return new GroqProvider(apiKey);
+  if (name === 'groq') return new GroqProvider(apiKey);
+  // openai usa o mesmo cliente compatível com OpenAI, mas apontando para a API da OpenAI
+  if (name === 'openai') {
+    return new GroqProvider(apiKey, 'https://api.openai.com/v1');
+  }
   if (name === 'openrouter') return new OpenRouterProvider(apiKey);
   if (name === 'gemini') return new GeminiProvider(apiKey);
 

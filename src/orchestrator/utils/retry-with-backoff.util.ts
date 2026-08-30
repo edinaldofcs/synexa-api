@@ -38,7 +38,9 @@ export function isRetryableError(error: unknown): boolean {
     return true;
   }
 
-  return true;
+  // Fail-closed: erro desconhecido não é retentável automaticamente —
+  // o default anterior (true) re-executava side effects de tools
+  return false;
 }
 
 export async function retryWithBackoff<T>(

@@ -157,6 +157,20 @@ export class WebhooksService {
 
     if (delivery.next_retry_at && delivery.next_retry_at > new Date()) return;
 
+    // Claim atômico: BullMQ é at-least-once e dois workers podem processar
+    // o mesmo delivery. Só envia quem conseguir a transição pending→processing.
+    const claimed = await this.prisma.webhook_deliveries.updateMany({
+      where: { id: deliveryId, status: 'pending' },
+      data: { status: 'processing' },
+    });
+    if (claimed.count === 0) {
+      this.logger.log(
+        { delivery_id: deliveryId },
+        'Delivery já reivindicado por outro worker; envio ignorado.',
+      );
+      return;
+    }
+
     const result = await this.trySend(
       delivery.webhook_endpoints.url,
       delivery.payload as unknown as WebhookCallbackPayload,

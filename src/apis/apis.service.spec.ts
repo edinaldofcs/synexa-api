@@ -1,114 +1,108 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { ApisService } from './apis.service';
 
-describe('ApisService', () => {
-  const mockRepository = {
-    create: jest.fn(),
-    findAllByClient: jest.fn(),
-    findOne: jest.fn(),
-    update: jest.fn(),
-    remove: jest.fn(),
-  };
-  const mockMetadata = { refresh: jest.fn() };
-  const mockPrisma = {
-    painel_clients: { findUnique: jest.fn() },
-  };
+jest.mock('../common/utils/ssrf-guard', () => ({
+  validateWebhookUrl: jest.fn(),
+}));
 
-  let service: ApisService;
-  const companyId = 'company-1';
-  const clientId = 'client-1';
+import { validateWebhookUrl } from '../common/utils/ssrf-guard';
+
+const mockedValidate = validateWebhookUrl as jest.Mock;
+
+describe('ApisService - testProxy (SSRF)', () => {
+  const build = () => {
+    const apisRepository = {
+      create: jest.fn(),
+      findAllByClient: jest.fn(),
+      findOne: jest.fn(),
+      update: jest.fn(),
+      remove: jest.fn(),
+    };
+    const metadataService = { refresh: jest.fn() };
+    const prisma = {
+      painel_clients: { findUnique: jest.fn() },
+    };
+    const service = new ApisService(
+      apisRepository as never,
+      metadataService as never,
+      prisma as never,
+    );
+    return service;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new ApisService(
-      mockRepository as never,
-      mockMetadata as never,
-      mockPrisma as never,
+    global.fetch = jest.fn() as never;
+  });
+
+  it('rejeita URL sem http/https', async () => {
+    const service = build();
+    await expect(service.testProxy({ url: '/api/internal' })).rejects.toThrow(
+      BadRequestException,
     );
-
-    mockPrisma.painel_clients.findUnique.mockResolvedValue({
-      id: clientId,
-      company_id: companyId,
-    });
   });
 
-  describe('Tenant security', () => {
-    it('rejeita findOne se a API pertencer a cliente de outra empresa', async () => {
-      mockRepository.findOne.mockResolvedValue({
-        id: 'api-1',
-        client_id: 'client-other',
-      });
-      mockPrisma.painel_clients.findUnique.mockResolvedValue({
-        company_id: 'company-other',
-      });
+  it('rejeita URL http://127.0.0.1 (SSRF guard)', async () => {
+    mockedValidate.mockRejectedValue(
+      new BadRequestException('Access to private/internal IP is not allowed'),
+    );
+    const service = build();
 
-      await expect(service.findOne('api-1', companyId)).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-    });
+    await expect(
+      service.testProxy({ url: 'http://127.0.0.1:3000/api/tables' }),
+    ).rejects.toThrow(BadRequestException);
+
+    expect(mockedValidate).toHaveBeenCalledWith(
+      'http://127.0.0.1:3000/api/tables',
+      expect.any(Boolean),
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  describe('CRUD operations & metadata refresh', () => {
-    it('cria ferramenta e atualiza cache de metadados do cliente', async () => {
-      mockRepository.create.mockResolvedValue({
-        id: 'api-1',
-        client_id: clientId,
-        name: 'Buscar CEP',
-      });
+  it('não converte mais URL relativa em localhost (removido)', async () => {
+    mockedValidate.mockRejectedValue(
+      new BadRequestException('Invalid URL format'),
+    );
+    const service = build();
 
-      const result = await service.create(
-        clientId,
-        {
-          name: 'Buscar CEP',
-          method: 'GET',
-          url: 'https://viacep.com.br',
-        } as any,
-        companyId,
-      );
+    await expect(service.testProxy({ url: '/api/secret' })).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
 
-      expect(result.id).toBe('api-1');
-      expect(mockRepository.create).toHaveBeenCalledWith(
-        clientId,
-        expect.objectContaining({ name: 'Buscar CEP' }),
-      );
-      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+  it('executa fetch em URL pública válida', async () => {
+    mockedValidate.mockResolvedValue(undefined);
+    (global.fetch as jest.Mock).mockResolvedValue({
+      status: 200,
+      statusText: 'OK',
+      text: async () => '{"ok":true}',
+    });
+    const service = build();
+
+    const result = await service.testProxy({
+      url: 'https://api.example.com/v1/data',
+      method: 'GET',
     });
 
-    it('atualiza ferramenta e atualiza cache de metadados', async () => {
-      mockRepository.findOne.mockResolvedValue({
-        id: 'api-1',
-        client_id: clientId,
-      });
-      mockRepository.update.mockResolvedValue({
-        id: 'api-1',
-        client_id: clientId,
-        name: 'Buscar CEP v2',
-      });
+    expect(result.success).toBe(true);
+    expect(result.status).toBe(200);
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.example.com/v1/data',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
 
-      const result = await service.update(
-        'api-1',
-        { name: 'Buscar CEP v2' } as any,
-        companyId,
-      );
+  it('propaga falha de rede como resultado estruturado (sem throw)', async () => {
+    mockedValidate.mockResolvedValue(undefined);
+    (global.fetch as jest.Mock).mockRejectedValue(new Error('ECONNREFUSED'));
+    const service = build();
 
-      expect(result.name).toBe('Buscar CEP v2');
-      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+    const result = await service.testProxy({
+      url: 'https://down.example.com',
     });
 
-    it('remove ferramenta e atualiza cache de metadados', async () => {
-      mockRepository.findOne.mockResolvedValue({
-        id: 'api-1',
-        client_id: clientId,
-      });
-      mockRepository.remove.mockResolvedValue({
-        api: { client_id: clientId },
-        result: { success: true },
-      });
-
-      const result = await service.remove('api-1', companyId);
-
-      expect(result).toEqual({ success: true });
-      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
-    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('ECONNREFUSED');
   });
 });

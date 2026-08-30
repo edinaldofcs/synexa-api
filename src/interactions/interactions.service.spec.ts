@@ -7,6 +7,7 @@ describe('InteractionsService', () => {
   let prisma: PrismaService;
 
   const mockPrisma = {
+    $queryRaw: jest.fn(),
     painel_interactions: {
       findUnique: jest.fn(),
       create: jest.fn(),
@@ -59,19 +60,19 @@ describe('InteractionsService', () => {
     expect(mockPrisma.painel_interactions.create).toHaveBeenCalled();
   });
 
-  it('should append a message and mark human_answer on first user message', async () => {
+  it('should append a message atomically (raw SQL append, sem read-modify-write)', async () => {
     mockPrisma.painel_interactions.findUnique.mockResolvedValue({
       id: 'uuid-1',
       session_id: 'session-123',
-      has_human_answer: false,
-      messages: [],
     });
-    mockPrisma.painel_interactions.update.mockResolvedValue({
-      id: 'uuid-1',
-      session_id: 'session-123',
-      has_human_answer: true,
-      messages: [{ role: 'user', content: 'Olá' }],
-    });
+    mockPrisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'uuid-1',
+        session_id: 'session-123',
+        has_human_answer: true,
+        messages: [{ role: 'user', content: 'Olá' }],
+      },
+    ]);
 
     const result = await service.appendMessage('session-123', {
       role: 'user',
@@ -79,40 +80,49 @@ describe('InteractionsService', () => {
     });
 
     expect(result).toBeDefined();
-    expect(mockPrisma.painel_interactions.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { session_id: 'session-123' },
-        data: expect.objectContaining({
-          has_human_answer: true,
-        }),
-      }),
-    );
+    expect(result.session_id).toBe('session-123');
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const sql = mockPrisma.$queryRaw.mock.calls[0][0];
+    expect(sql.sql).toContain('COALESCE(messages');
+    expect(sql.sql).toContain("|| ?::jsonb");
+    expect(sql.sql).toContain('RETURNING *');
+    // valor da mensagem vai parametrizado (sem interpolação de string)
+    expect(sql.values.some((v: any) => String(v).includes('Olá'))).toBe(true);
   });
 
-  it('should record barge-in interruption correctly', async () => {
+  it('returns null when session does not exist', async () => {
+    mockPrisma.painel_interactions.findUnique.mockResolvedValue(null);
+
+    const result = await service.appendMessage('missing', {
+      role: 'user',
+      content: 'Olá',
+    });
+
+    expect(result).toBeNull();
+    expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('should record barge-in atomically (increment no banco)', async () => {
     mockPrisma.painel_interactions.findUnique.mockResolvedValue({
       id: 'uuid-1',
       session_id: 'session-123',
-      barge_in_count: 1,
-      avg_barge_in_latency_ms: 200,
     });
-    mockPrisma.painel_interactions.update.mockResolvedValue({
-      id: 'uuid-1',
-      session_id: 'session-123',
-      barge_in_count: 2,
-      avg_barge_in_latency_ms: 150,
-    });
+    mockPrisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'uuid-1',
+        session_id: 'session-123',
+        barge_in_count: 2,
+        avg_barge_in_latency_ms: 150,
+      },
+    ]);
 
     const result = await service.recordBargeIn('session-123', 100);
 
     expect(result).toBeDefined();
-    expect(mockPrisma.painel_interactions.update).toHaveBeenCalledWith({
-      where: { session_id: 'session-123' },
-      data: {
-        barge_in_count: 2,
-        avg_barge_in_latency_ms: 150,
-      },
-    });
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const sql = mockPrisma.$queryRaw.mock.calls[0][0];
+    expect(sql.sql).toContain('COALESCE(barge_in_count, 0) + 1');
+    expect(sql.sql).toContain('RETURNING *');
   });
 
   it('should calculate funnel metrics correctly', async () => {

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateInteractionDto } from './dto/create-interaction.dto';
 import { UpdateInteractionDto } from './dto/update-interaction.dto';
@@ -61,20 +62,17 @@ export class InteractionsService {
    */
   async appendMessage(sessionId: string, message: InteractionMessageItem) {
     try {
-      const interaction = await this.prisma.painel_interactions.findUnique({
+      const exists = await this.prisma.painel_interactions.findUnique({
         where: { session_id: sessionId },
+        select: { id: true },
       });
 
-      if (!interaction) {
+      if (!exists) {
         this.logger.warn(
           `Interação não encontrada para session_id: ${sessionId}`,
         );
         return null;
       }
-
-      const currentMessages = Array.isArray(interaction.messages)
-        ? (interaction.messages as any[])
-        : [];
 
       const newMsg = {
         id:
@@ -92,22 +90,22 @@ export class InteractionsService {
         timestamp: message.timestamp || new Date().toISOString(),
       };
 
-      const updatedMessages = [...currentMessages, newMsg];
+      const isUserMessage = message.role === 'user';
 
-      // Se for a primeira fala do usuário, marca human_answer
-      const updatePayload: any = {
-        messages: updatedMessages,
-      };
+      // Append atômico no JSONB: turnos concorrentes não perdem mensagens
+      const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
+        UPDATE painel_interactions
+        SET messages = COALESCE(messages, '[]'::jsonb) || ${JSON.stringify(newMsg)}::jsonb,
+            has_human_answer = COALESCE(has_human_answer, false) OR ${isUserMessage},
+            human_answered_at = CASE
+              WHEN COALESCE(has_human_answer, false) = false AND ${isUserMessage} THEN NOW()
+              ELSE human_answered_at
+            END
+        WHERE session_id = ${sessionId}
+        RETURNING *
+      `);
 
-      if (message.role === 'user' && !interaction.has_human_answer) {
-        updatePayload.has_human_answer = true;
-        updatePayload.human_answered_at = new Date();
-      }
-
-      return await this.prisma.painel_interactions.update({
-        where: { session_id: sessionId },
-        data: updatePayload,
-      });
+      return rows?.[0] ?? null;
     } catch (err) {
       this.logger.error(
         `Erro ao anexar mensagem na interação (${sessionId}): ${err}`,
@@ -121,30 +119,36 @@ export class InteractionsService {
    */
   async recordBargeIn(sessionId: string, bargeInLatencyMs?: number) {
     try {
-      const interaction = await this.prisma.painel_interactions.findUnique({
+      const exists = await this.prisma.painel_interactions.findUnique({
         where: { session_id: sessionId },
+        select: { id: true },
       });
 
-      if (!interaction) return null;
+      if (!exists) return null;
 
-      const currentCount = interaction.barge_in_count || 0;
-      const newCount = currentCount + 1;
+      const latency =
+        bargeInLatencyMs !== undefined
+          ? Math.trunc(bargeInLatencyMs)
+          : null;
 
-      let newAvgLatency = interaction.avg_barge_in_latency_ms;
-      if (bargeInLatencyMs !== undefined && bargeInLatencyMs > 0) {
-        const prevAvg = interaction.avg_barge_in_latency_ms || bargeInLatencyMs;
-        newAvgLatency = Math.round(
-          (prevAvg * currentCount + bargeInLatencyMs) / newCount,
-        );
-      }
+      // Incremento e média calculados atomicamente no banco
+      const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`
+        UPDATE painel_interactions
+        SET barge_in_count = COALESCE(barge_in_count, 0) + 1,
+            avg_barge_in_latency_ms = CASE
+              WHEN ${latency}::int IS NOT NULL AND ${latency}::int > 0 THEN
+                ROUND(
+                  (COALESCE(NULLIF(avg_barge_in_latency_ms, 0), ${latency}::int)::numeric
+                    * COALESCE(barge_in_count, 0) + ${latency}::int)
+                  / (COALESCE(barge_in_count, 0) + 1)
+                )::int
+              ELSE avg_barge_in_latency_ms
+            END
+        WHERE session_id = ${sessionId}
+        RETURNING *
+      `);
 
-      return await this.prisma.painel_interactions.update({
-        where: { session_id: sessionId },
-        data: {
-          barge_in_count: newCount,
-          avg_barge_in_latency_ms: newAvgLatency,
-        },
-      });
+      return rows?.[0] ?? null;
     } catch (err) {
       this.logger.error(`Erro ao registrar barge-in (${sessionId}): ${err}`);
       return null;

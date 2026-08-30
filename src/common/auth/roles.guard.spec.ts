@@ -86,12 +86,18 @@ describe('RolesGuard', () => {
     expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
   });
 
-  it('should default user role to operator when role is not set', () => {
+  it('should throw ForbiddenException when user role is not set (fail-closed)', () => {
     reflector.getAllAndOverride.mockReturnValue(['operator']);
     const ctx = mockContext(['operator'], { id: '1' });
 
-    const result = guard.canActivate(ctx);
-    expect(result).toBe(true);
+    expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
+  });
+
+  it('should throw ForbiddenException when user role is empty string', () => {
+    reflector.getAllAndOverride.mockReturnValue(['operator']);
+    const ctx = mockContext(['operator'], { id: '1', role: '' });
+
+    expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
   });
 
   it('should throw ForbiddenException when user has no id', () => {

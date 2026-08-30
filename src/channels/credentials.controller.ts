@@ -22,7 +22,7 @@ export class CredentialsController {
     const ctx = extractTenantContext(user);
 
     // List all channel connections of type 'api' for the tenant
-    return this.prisma.channel_connections.findMany({
+    const rows = await this.prisma.channel_connections.findMany({
       where: {
         company_id: ctx.companyId,
         channel_type: 'api',
@@ -36,6 +36,12 @@ export class CredentialsController {
       },
       orderBy: { created_at: 'desc' },
     });
+
+    // O segredo HMAC nunca é retornado em listagens; apenas na criação/rotação
+    return rows.map(({ inbound_secret_hash, ...rest }) => ({
+      ...rest,
+      has_secret: Boolean(inbound_secret_hash),
+    }));
   }
 
   @Post('keys/rotate')
@@ -59,13 +65,20 @@ export class CredentialsController {
 
     const newSecret = 'sk_' + randomBytes(32).toString('hex');
 
-    return this.prisma.channel_connections.update({
+    await this.prisma.channel_connections.update({
       where: { id: connectionId },
       data: {
         inbound_secret_hash: newSecret,
         updated_at: new Date(),
       },
     });
+
+    // Segredo exibido apenas uma vez, na rotação
+    return {
+      id: connection.id,
+      client_id: connection.client_id,
+      inbound_secret: newSecret,
+    };
   }
 
   @Post('keys/create-api-connection')
@@ -101,7 +114,7 @@ export class CredentialsController {
 
     const secret = 'sk_' + randomBytes(32).toString('hex');
 
-    return this.prisma.channel_connections.create({
+    const created = await this.prisma.channel_connections.create({
       data: {
         company_id: ctx.companyId,
         client_id: clientId,
@@ -112,5 +125,14 @@ export class CredentialsController {
         config: {},
       },
     });
+
+    // Segredo exibido apenas uma vez, na criação
+    return {
+      id: created.id,
+      client_id: created.client_id,
+      channel_type: created.channel_type,
+      status: created.status,
+      inbound_secret: secret,
+    };
   }
 }

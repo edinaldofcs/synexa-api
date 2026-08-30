@@ -109,6 +109,7 @@ export class VoiceToolsService {
     functionName: string,
     args: Record<string, unknown>,
     sessionState?: Record<string, unknown>,
+    visited?: Set<string>,
   ) {
     const tool = (await this.getAgentTools(clientId, agentId)).find(
       (candidate) => candidate.name === functionName,
@@ -211,37 +212,49 @@ export class VoiceToolsService {
         legacyNextApiId,
       );
       if (response.ok && nextApiId) {
-        try {
-          const nextApi = await this.prisma.painel_apis.findFirst({
-            where: {
-              OR: [{ id: nextApiId }, { name: nextApiId }],
-              active: true,
-            },
-          });
-          if (nextApi) {
-            const nextArgs = {
-              ...args,
-              ...consolidatedData,
-            };
-            const nextResult = await this.execute(
-              clientId,
-              agentId,
-              this.toFunctionName(nextApi.name, nextApi.id),
-              nextArgs,
-              sessionState,
-            );
-            if (nextResult && nextResult.ok) {
-              consolidatedData = {
-                ...consolidatedData,
-                ...nextResult,
-                tem_ofertas: true,
-              };
-            }
-          }
-        } catch (chainErr) {
+        const chainVisited =
+          visited ?? new Set<string>([tool.id, tool.apiName].filter(Boolean));
+        if (chainVisited.has(nextApiId)) {
           this.logger.warn(
-            `Falha ao executar API encadeada no canal de voz (${nextApiId}): ${chainErr}`,
+            `Ciclo detectado no encadeamento de APIs de voz (${nextApiId}); cadeia abortada`,
           );
+        } else {
+          try {
+            const nextApi = await this.prisma.painel_apis.findFirst({
+              where: {
+                OR: [{ id: nextApiId }, { name: nextApiId }],
+                active: true,
+                client_id: clientId,
+              },
+            });
+            if (nextApi) {
+              const nextArgs = {
+                ...args,
+                ...consolidatedData,
+              };
+              const nextVisited = new Set(chainVisited);
+              nextVisited.add(nextApi.id);
+              const nextResult = await this.execute(
+                clientId,
+                agentId,
+                this.toFunctionName(nextApi.name, nextApi.id),
+                nextArgs,
+                sessionState,
+                nextVisited,
+              );
+              if (nextResult && nextResult.ok) {
+                consolidatedData = {
+                  ...consolidatedData,
+                  ...nextResult,
+                  tem_ofertas: true,
+                };
+              }
+            }
+          } catch (chainErr) {
+            this.logger.warn(
+              `Falha ao executar API encadeada no canal de voz (${nextApiId}): ${chainErr}`,
+            );
+          }
         }
       }
 

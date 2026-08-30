@@ -1,4 +1,4 @@
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
   IsString,
   IsNotEmpty,
@@ -6,8 +6,55 @@ import {
   IsUrl,
   IsNumber,
   IsIn,
+  IsBoolean,
   validateSync,
 } from 'class-validator';
+
+/**
+ * Conversão explícita de boolean a partir de string de ambiente.
+ * Com enableImplicitConversion o class-transformer converte 'false' em true
+ * (Boolean('false')) ANTES do hook @Transform — portanto a normalização
+ * também é aplicada nos valores brutos em validateEnv (ver BOOLEAN_ENV_FIELDS).
+ */
+export function transformBoolean({ value }: { value: unknown }): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    return parseBooleanString(value);
+  }
+  if (typeof value === 'number') return value !== 0;
+  return false;
+}
+
+function parseBooleanString(raw: string): boolean {
+  const normalized = raw.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  return false;
+}
+
+// Campos booleanos lidos de env como string: normalizados antes do
+// plainToInstance para que 'false' NÃO vire true na conversão implícita.
+const BOOLEAN_ENV_FIELDS = [
+  'FASTAGI_ENABLED',
+  'AUDIOSOCKET_ENABLED',
+  'AUDIO_GATE_ENABLED',
+  'GROQ_STT_ENABLED',
+  'GEMINI_CONTEXT_COMPRESSION_ENABLED',
+] as const;
+
+function normalizeBooleanEnvFields(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const normalized = { ...config };
+  for (const field of BOOLEAN_ENV_FIELDS) {
+    const raw = normalized[field];
+    if (typeof raw === 'string') {
+      normalized[field] = parseBooleanString(raw);
+    } else if (raw === undefined || raw === null) {
+      delete normalized[field];
+    }
+  }
+  return normalized;
+}
 
 export enum Environment {
   DEVELOPMENT = 'development',
@@ -233,6 +280,8 @@ export class EnvironmentVariables {
   @IsOptional()
   FASTAGI_PORT?: number = 4573;
 
+  @Transform(transformBoolean)
+  @IsBoolean()
   @IsOptional()
   FASTAGI_ENABLED?: boolean = false;
 
@@ -240,6 +289,8 @@ export class EnvironmentVariables {
   @IsOptional()
   AUDIOSOCKET_PORT?: number = 8090;
 
+  @Transform(transformBoolean)
+  @IsBoolean()
   @IsOptional()
   AUDIOSOCKET_ENABLED?: boolean = false;
 
@@ -263,6 +314,8 @@ export class EnvironmentVariables {
   @IsOptional()
   ASTERISK_AMI_SECRET?: string;
 
+  @Transform(transformBoolean)
+  @IsBoolean()
   @IsOptional()
   AUDIO_GATE_ENABLED?: boolean = true;
 
@@ -281,6 +334,8 @@ export class EnvironmentVariables {
   @IsOptional()
   AUDIO_GATE_PREROLL_MS?: number = 300;
 
+  @Transform(transformBoolean)
+  @IsBoolean()
   @IsOptional()
   GROQ_STT_ENABLED?: boolean = false;
 
@@ -296,6 +351,8 @@ export class EnvironmentVariables {
   @IsOptional()
   GEMINI_LIVE_DEFAULT_VOICE?: string = 'Aoede';
 
+  @Transform(transformBoolean)
+  @IsBoolean()
   @IsOptional()
   GEMINI_CONTEXT_COMPRESSION_ENABLED?: boolean = false;
 
@@ -312,9 +369,13 @@ export function validateEnv(
   options: { forbidUnknown?: boolean } = {},
 ) {
   const forbidUnknown = options.forbidUnknown ?? true;
-  const validatedConfig = plainToInstance(EnvironmentVariables, config, {
-    enableImplicitConversion: true,
-  });
+  const validatedConfig = plainToInstance(
+    EnvironmentVariables,
+    normalizeBooleanEnvFields(config),
+    {
+      enableImplicitConversion: true,
+    },
+  );
 
   const errors = validateSync(validatedConfig, {
     skipMissingProperties: false,

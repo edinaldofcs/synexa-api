@@ -69,7 +69,18 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin, callback) => {
-      if (!origin || origin === 'null' || environment === 'development') {
+      if (!origin) {
+        return callback(null, true);
+      }
+      // Origin "null" (iframes sandboxed, redirects) com credentials:true
+      // só é aceito em development
+      if (origin === 'null') {
+        if (environment === 'development') {
+          return callback(null, true);
+        }
+        return callback(new Error('Bloqueado por CORS'));
+      }
+      if (environment === 'development') {
         return callback(null, true);
       }
       if (corsOrigins.includes(origin) || corsOrigins.includes('*')) {

@@ -306,6 +306,9 @@ export class OrchestrationService {
       }
     }
 
+    let output: any = null;
+    let legacyOutput: { text: string; usage?: any } | null = null;
+
     try {
       if (activeProvider.chatWithParts) {
         this.logger.log(
@@ -319,7 +322,7 @@ export class OrchestrationService {
           'Processing with chatWithParts',
         );
 
-        const output = await retryWithBackoff(
+        output = await retryWithBackoff(
           async () => activeProvider.chatWithParts!(params),
           {
             maxRetries: 2,
@@ -334,87 +337,44 @@ export class OrchestrationService {
         );
 
         await this.circuitBreaker.recordSuccess(activeProviderName, clientId);
+      } else {
+        const legacyHistory = history.map((msg) => {
+          let content = '';
+          if (msg.parts && Array.isArray(msg.parts)) {
+            content = msg.parts
+              .filter((p) => p.type === 'text')
+              .map((p) => p.text)
+              .join('\n');
+          }
+          return {
+            role: msg.role === 'assistant' ? 'assistant' : 'user',
+            content,
+          };
+        });
 
-        const result = await this.handleOutput(
-          conversationId,
-          companyId,
-          requestId,
-          output,
-          [],
+        legacyOutput = await retryWithBackoff(
+          async () =>
+            activeProvider.chat({
+              systemPrompt: agentConfig.system_prompt + mediaInstruction,
+              userMessage: [
+                text,
+                ...inputParts.filter((p) => p.type === 'text').map((p) => p.text),
+              ]
+                .filter(Boolean)
+                .join('\n'),
+              history: legacyHistory,
+              publicTools: [],
+              allToolsList: [],
+              executeExternalApiCallback: async () => ({}),
+            }),
+          { maxRetries: 2, initialDelayMs: 300 },
         );
-        await this.completeAgentRun(
-          agentRun.id,
-          'success',
-          result.responseMessageId,
-          output.usage,
-          activeModel,
-          activeProviderName,
-        );
-        return { ...result, agentId: agentConfig.agentId };
+
+        await this.circuitBreaker.recordSuccess(activeProviderName, clientId);
       }
-
-      const legacyHistory = history.map((msg) => {
-        let content = '';
-        if (msg.parts && Array.isArray(msg.parts)) {
-          content = msg.parts
-            .filter((p) => p.type === 'text')
-            .map((p) => p.text)
-            .join('\n');
-        }
-        return {
-          role: msg.role === 'assistant' ? 'assistant' : 'user',
-          content,
-        };
-      });
-
-      const legacyOutput = await retryWithBackoff(
-        async () =>
-          activeProvider.chat({
-            systemPrompt: agentConfig.system_prompt + mediaInstruction,
-            userMessage: [
-              text,
-              ...inputParts.filter((p) => p.type === 'text').map((p) => p.text),
-            ]
-              .filter(Boolean)
-              .join('\n'),
-            history: legacyHistory,
-            publicTools: [],
-            allToolsList: [],
-            executeExternalApiCallback: async () => ({}),
-          }),
-        { maxRetries: 2, initialDelayMs: 300 },
-      );
-
-      await this.circuitBreaker.recordSuccess(activeProviderName, clientId);
-
-      const responseMessage = await this.conversationsService.addMessage({
-        conversation_id: conversationId,
-        company_id: companyId,
-        sender_type: 'ai',
-        channel: 'internal',
-        direction: 'outbound',
-        message_type: 'text',
-        content: legacyOutput.text,
-        request_id: requestId,
-      });
-
-      await this.completeAgentRun(
-        agentRun.id,
-        'success',
-        responseMessage.id,
-        legacyOutput.usage,
-        activeModel,
-        activeProviderName,
-      );
-
-      return {
-        responseText: legacyOutput.text,
-        responseMessageId: responseMessage.id,
-        agentId: agentConfig.agentId,
-        hadTools: false,
-        calledTools: [],
-      };
     } catch (primaryError) {
+      // Somente falhas do PROVEDOR LLM chegam aqui: persistência fora deste
+      // try nunca penaliza o circuit breaker nem re-executa tools
       await this.circuitBreaker.recordFailure(
         activeProviderName,
         primaryError,
@@ -443,28 +403,18 @@ export class OrchestrationService {
             params.agentConfig.model = fallback.target.model;
 
             if (fallbackProvider.chatWithParts) {
-              const output = await fallbackProvider.chatWithParts(params);
+              output = await fallbackProvider.chatWithParts(params);
+              activeModel = fallback.target.model;
+              activeProviderName = fallback.target.provider;
               await this.circuitBreaker.recordSuccess(
                 fallback.target.provider,
                 clientId,
               );
-
-              const result = await this.handleOutput(
-                conversationId,
-                companyId,
-                requestId,
-                output,
-                [],
-              );
-              await this.completeAgentRun(
-                agentRun.id,
-                'success',
-                result.responseMessageId,
-                output.usage,
-                fallback.target.model,
+            } else {
+              await this.circuitBreaker.recordSuccess(
                 fallback.target.provider,
+                clientId,
               );
-              return { ...result, agentId: agentConfig.agentId };
             }
           } catch (fallbackError) {
             await this.circuitBreaker.recordFailure(
@@ -476,9 +426,66 @@ export class OrchestrationService {
         }
       }
 
-      await this.failAgentRun(agentRun.id, primaryError);
-      throw primaryError;
+      if (!output) {
+        await this.failAgentRun(agentRun.id, primaryError);
+        throw primaryError;
+      }
     }
+
+    // Persistência fora do try do provedor: erro de banco após o LLM responder
+    // não dispara fallback (que re-executaria todas as tools do turno)
+    if (output) {
+      const result = await this.handleOutput(
+        conversationId,
+        companyId,
+        requestId,
+        output,
+        [],
+      );
+      await this.completeAgentRun(
+        agentRun.id,
+        'success',
+        result.responseMessageId,
+        output.usage,
+        activeModel,
+        activeProviderName,
+      );
+      return { ...result, agentId: agentConfig.agentId };
+    }
+
+    if (legacyOutput) {
+      const responseMessage = await this.conversationsService.addMessage({
+        conversation_id: conversationId,
+        company_id: companyId,
+        sender_type: 'ai',
+        channel: 'internal',
+        direction: 'outbound',
+        message_type: 'text',
+        content: legacyOutput.text,
+        request_id: requestId,
+      });
+
+      await this.completeAgentRun(
+        agentRun.id,
+        'success',
+        responseMessage.id,
+        legacyOutput.usage,
+        activeModel,
+        activeProviderName,
+      );
+
+      return {
+        responseText: legacyOutput.text,
+        responseMessageId: responseMessage.id,
+        agentId: agentConfig.agentId,
+        hadTools: false,
+        calledTools: [],
+      };
+    }
+
+    throw new Error(
+      'Nenhum output produzido pelo provedor LLM (nem fallback disponível)',
+    );
   }
 
   private async waitForMediaProcessing(messageId: string): Promise<void> {

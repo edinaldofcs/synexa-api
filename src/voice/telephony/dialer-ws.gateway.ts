@@ -118,6 +118,16 @@ export class DialerWsIngress
 
       await adapter.waitForIdentification?.(IDENTIFICATION_TIMEOUT_MS);
 
+      // Desconexão durante o setup async: sem esta checagem a sessão seria
+      // criada com o WS já fechado (Gemini conectado, conversa presa em active)
+      if ((clientWs as { readyState?: number }).readyState !== WebSocket.OPEN) {
+        this.logger.warn(
+          '[DialerWS] Cliente desconectou durante a identificação; sessão abortada',
+        );
+        adapter.close?.();
+        return;
+      }
+
       // Refina a rota se o discador indicou outro DID no frame de start
       const identifiedDid = adapter.metadata.didNumber as string | undefined;
       const route =
@@ -137,6 +147,14 @@ export class DialerWsIngress
       }
 
       if ((route.agent as any)?.interaction_mode === 'text') {
+        adapter.close?.();
+        return;
+      }
+
+      if ((clientWs as { readyState?: number }).readyState !== WebSocket.OPEN) {
+        this.logger.warn(
+          '[DialerWS] Cliente desconectou durante a resolução de rota; sessão abortada',
+        );
         adapter.close?.();
         return;
       }

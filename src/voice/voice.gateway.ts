@@ -70,6 +70,9 @@ export class VoiceGateway
 
     this.logger.log('🟢 [VoiceGateway] Cliente conectado via WebSocket');
     let telemetryTimer: ReturnType<typeof setInterval> | null = null;
+    // Sinaliza que a sessão de voz foi encerrada; evita criar timers/providers
+    // quando um 'start' assíncrono retoma depois do close
+    let voiceSessionClosed = false;
 
     const session = new VoiceClientSession(clientWs);
     this.sessions.set(clientWs, session);
@@ -106,6 +109,7 @@ export class VoiceGateway
     };
 
     const closeVoiceSession = async () => {
+      voiceSessionClosed = true;
       if (telemetryTimer) {
         clearInterval(telemetryTimer);
         telemetryTimer = null;
@@ -654,6 +658,16 @@ export class VoiceGateway
                       agent.id,
                     )
                   : [];
+
+              // 'start' concorrente: este connectAgent ficou obsoleto quando
+              // outra iteração avançou a generation da sessão
+              if (generation !== session.providerGeneration) {
+                this.logger.warn(
+                  '[VoiceGateway] connectAgent obsoleto (generation antiga); abortando',
+                );
+                return;
+              }
+
               const voiceToolDeclarations = [
                 ...voiceTools,
                 ...voiceSubagents,
@@ -757,6 +771,12 @@ export class VoiceGateway
               }
 
               const provider = new GeminiLiveVoiceProvider();
+              // Fecha o provider anterior antes de sobrescrever: 'start'
+              // concorrente sem este close deixava o WS do Gemini aberto
+              // (conectado e faturando) até o fim do processo
+              if (session.liveProvider && session.liveProvider !== provider) {
+                session.liveProvider.close();
+              }
               session.liveProvider = provider;
 
               // Resolve variáveis {{chave}} do prompt com o estado da sessão
@@ -954,6 +974,15 @@ export class VoiceGateway
             };
 
             await connectAgent(selectedAgent);
+            // O WS pode ter fechado durante o connectAgent (await): sem esta
+            // checagem o interval de telemetria seria criado após o cleanup
+            // e nunca mais limpo (leak por conexão)
+            if (voiceSessionClosed) {
+              this.logger.warn(
+                '[VoiceGateway] Sessão encerrada durante o start; timer de telemetria não criado',
+              );
+              break;
+            }
             sendTelemetry();
             telemetryTimer = setInterval(sendTelemetry, 1000);
             break;

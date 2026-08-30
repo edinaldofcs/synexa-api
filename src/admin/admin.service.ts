@@ -82,25 +82,60 @@ export class AdminService {
   }
 
   async deleteCompany(id: string) {
-    // Clean up restricted child relations manually to avoid FK constraint errors in Postgres
-    await this.prisma.users.deleteMany({
-      where: { company_id: id },
-    });
+    await this.ensureCompanyExists(id);
 
-    await this.prisma.channel_connections.deleteMany({
-      where: { company_id: id },
-    });
+    // Transação única + ordem que respeita as FKs Restrict: qualquer falha
+    // no meio da exclusão não pode deixar o tenant parcialmente removido.
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Filhos diretos de webhook_endpoints (Restrict)
+      await tx.webhook_deliveries.deleteMany({
+        where: { webhook_endpoints: { painel_clients: { company_id: id } } },
+      });
+      await tx.webhook_endpoints.deleteMany({
+        where: { painel_clients: { company_id: id } },
+      });
 
-    await this.prisma.end_users.deleteMany({
-      where: { company_id: id },
-    });
+      // 2. Execuções e eventos (FKs Restrict para end_users/users/conversations)
+      await tx.tool_calls.deleteMany({ where: { company_id: id } });
+      await tx.agent_runs.deleteMany({ where: { company_id: id } });
+      await tx.message_events.deleteMany({ where: { company_id: id } });
+      await tx.business_events.deleteMany({ where: { company_id: id } });
+      await tx.inbound_events.deleteMany({ where: { company_id: id } });
+      await tx.outbox_events.deleteMany({ where: { company_id: id } });
 
-    await this.prisma.inbound_events.deleteMany({
-      where: { company_id: id },
-    });
+      // 3. Knowledge
+      await tx.knowledge_embeddings.deleteMany({ where: { company_id: id } });
+      await tx.knowledge_chunks.deleteMany({ where: { company_id: id } });
+      await tx.knowledge_documents.deleteMany({ where: { company_id: id } });
+      await tx.knowledge_bases.deleteMany({ where: { company_id: id } });
 
-    return this.prisma.companies.delete({
-      where: { id },
+      // 4. Credenciais e auditoria
+      await tx.credential_audit_logs.deleteMany({ where: { company_id: id } });
+      await tx.provider_credentials.deleteMany({ where: { company_id: id } });
+
+      // 5. Voz, telefonia, interações, workflow e mídia
+      await tx.painel_interactions.deleteMany({ where: { company_id: id } });
+      await tx.voice_session_telemetry.deleteMany({ where: { company_id: id } });
+      await tx.telephony_endpoints.deleteMany({ where: { company_id: id } });
+      await tx.workflow_versions.deleteMany({ where: { company_id: id } });
+      await tx.media_assets.deleteMany({ where: { company_id: id } });
+
+      // 6. Conversas e mensagens (message_parts/conversation_state cascateiam)
+      await tx.messages.deleteMany({ where: { company_id: id } });
+      await tx.conversations.deleteMany({ where: { company_id: id } });
+
+      // 7. Identidades e canais (Restrict com painel_clients/conversations)
+      await tx.channel_identities.deleteMany({ where: { company_id: id } });
+      await tx.end_users.deleteMany({ where: { company_id: id } });
+      await tx.channel_connections.deleteMany({ where: { company_id: id } });
+
+      // 8. Filhos de painel_clients com FK Restrict e o próprio cliente
+      await tx.painel_clients.deleteMany({ where: { company_id: id } });
+
+      // 9. Usuários (NoAction) e a empresa
+      await tx.users.deleteMany({ where: { company_id: id } });
+
+      return tx.companies.delete({ where: { id } });
     });
   }
 

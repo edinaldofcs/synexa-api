@@ -202,7 +202,27 @@ export class AuthController {
   private callbackUrl(request: Request) {
     const configured = this.configService.get<string>('AUTH_CALLBACK_URL');
     if (configured) return configured;
-    return `${request.protocol}://${request.get('host')}/api/auth/callback`;
+
+    // Nunca confiar no header Host (host header injection no e-mail do
+    // magic link): deriva da origem configurada via CORS_ORIGIN
+    const corsOrigin = this.configService.get<string>('CORS_ORIGIN', '');
+    const trustedOrigin = (corsOrigin || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)[0];
+    if (trustedOrigin) {
+      return `${trustedOrigin.replace(/\/+$/, '')}/api/auth/callback`;
+    }
+
+    // Host header apenas como último recurso em development
+    const environment = this.configService.get<string>('ENVIRONMENT');
+    if (environment === 'development') {
+      return `${request.protocol}://${request.get('host')}/api/auth/callback`;
+    }
+
+    throw new Error(
+      'AUTH_CALLBACK_URL ou CORS_ORIGIN deve estar configurado em produção',
+    );
   }
 
   private frontendUrl(path: string) {

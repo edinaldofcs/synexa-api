@@ -6,11 +6,13 @@ import { BadRequestException } from '@nestjs/common';
 const BLOCKED_HOSTNAMES = new Set(['localhost', '0.0.0.0', '[::]']);
 
 const PRIVATE_IPV4_RANGES: [number, number][] = [
+  [0x00000000, 0x00ffffff], // 0.0.0.0/8 (inclui 0.0.0.0 e 0.x.x.x)
   [0x0a000000, 0x0affffff], // 10.0.0.0/8
+  [0x64400000, 0x647fffff], // 100.64.0.0/10 (CGNAT)
+  [0x7f000000, 0x7fffffff], // 127.0.0.0/8
+  [0xa9fe0000, 0xa9feffff], // 169.254.0.0/16 (link-local)
   [0xac100000, 0xac1fffff], // 172.16.0.0/12
   [0xc0a80000, 0xc0a8ffff], // 192.168.0.0/16
-  [0x7f000000, 0x7fffffff], // 127.0.0.0/8
-  [0xa9fe0000, 0xa9feffff], // 169.254.0.0/16
 ];
 
 function isPrivateIPv4(ip: string): boolean {
@@ -23,14 +25,13 @@ function isPrivateIPv4(ip: string): boolean {
 
 function isLoopbackOrPrivateIP(ip: string): boolean {
   if (isIP(ip) === 0) return false;
-  if (ip === '::1' || ip === '::ffff:127.0.0.1') return true;
 
-  if (
-    ip.startsWith('fe80:') ||
-    ip.startsWith('fc') ||
-    ip.startsWith('fd') ||
-    ip === '::1'
-  ) {
+  // IPv4-mapped IPv6 (::ffff:0:0/96) — extrai o IPv4 embutido
+  const mapped = ip.toLowerCase().match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) return isPrivateIPv4(mapped[1]);
+
+  if (ip === '::1' || ip === '::') return true;
+  if (ip.startsWith('fe80:') || ip.startsWith('fc') || ip.startsWith('fd')) {
     return true;
   }
 
@@ -61,37 +62,42 @@ export async function validateWebhookUrl(
     return;
   }
 
-  try {
-    const addresses = await dns.resolve4(hostname);
-    for (const addr of addresses) {
-      if (isLoopbackOrPrivateIP(addr)) {
+  // IP literal: valida direto, sem depender de DNS
+  if (isIP(hostname) !== 0) {
+    if (isLoopbackOrPrivateIP(hostname)) {
+      if (!allowLocalInDev) {
         throw new BadRequestException(
-          `Access to private/internal IP ranges is not allowed: ${addr}`,
+          `Access to private/internal IP is not allowed: ${hostname}`,
         );
       }
+      return;
     }
-  } catch (err) {
-    if (err instanceof BadRequestException) throw err;
-    // DNS resolution failure - may be a valid external host that couldn't resolve
-    // Allow if the hostname itself isn't a raw IP that's private
-    const directIP = isIP(hostname);
-    if (directIP !== 0 && isLoopbackOrPrivateIP(hostname)) {
-      throw new BadRequestException(
-        `Access to private/internal IP is not allowed: ${hostname}`,
-      );
-    }
+    return;
   }
 
+  // Hostname: fail-closed — não é possível validar um host que não resolve
+  let addresses4: string[] = [];
+  let addresses6: string[] = [];
   try {
-    const addresses6 = await dns.resolve6(hostname);
-    for (const addr of addresses6) {
-      if (isLoopbackOrPrivateIP(addr)) {
-        throw new BadRequestException(
-          `Access to private/IPv6 internal ranges is not allowed: ${addr}`,
-        );
-      }
-    }
+    [addresses4, addresses6] = await Promise.all([
+      dns.resolve4(hostname).catch(() => [] as string[]),
+      dns.resolve6(hostname).catch(() => [] as string[]),
+    ]);
   } catch {
-    // IPv6 resolution failure is acceptable
+    throw new BadRequestException(`DNS resolution failed for ${hostname}`);
+  }
+
+  if (addresses4.length === 0 && addresses6.length === 0) {
+    throw new BadRequestException(
+      `DNS resolution failed for ${hostname}; refusing to forward request to unresolvable host`,
+    );
+  }
+
+  for (const addr of [...addresses4, ...addresses6]) {
+    if (isLoopbackOrPrivateIP(addr)) {
+      throw new BadRequestException(
+        `Access to private/internal IP ranges is not allowed: ${addr}`,
+      );
+    }
   }
 }

@@ -3,6 +3,14 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { RedisService } from '../../common/redis/redis.service';
 
 const ROUTE_CACHE_TTL_SECONDS = 60;
+// Provedores de ingresso conhecidos: usados para invalidar todas as
+// variantes de cache de um DID quando os endpoints mudam
+const KNOWN_ROUTE_PROVIDERS = [
+  'any',
+  'asterisk_fastagi',
+  'audiosocket',
+  'callflex_ws',
+] as const;
 
 export interface TelephonyRouteLookup {
   /** DID / número discado (ex: agi_extension, dnid ou origem da chamada) */
@@ -125,6 +133,15 @@ export class TelephonyEndpointResolverService {
   public async invalidate(didNumber?: string): Promise<void> {
     if (!didNumber) return;
     try {
+      // Invalida todas as variantes por provider (a cache key inclui o
+      // provedor de ingresso; resolver por outro provider com o mesmo DID
+      // não pode servir a rota em cache do primeiro ingresso)
+      await Promise.all(
+        KNOWN_ROUTE_PROVIDERS.map((provider) =>
+          this.redis.del(`voice:endpoint:${provider}:${didNumber}`),
+        ),
+      );
+      // Chave legada (antes da introdução do provider na key)
       await this.redis.del(`voice:endpoint:${didNumber}`);
     } catch {
       // Cache indisponível: nada a invalidar
@@ -286,7 +303,10 @@ export class TelephonyEndpointResolverService {
   }
 
   private cacheKey(lookup: TelephonyRouteLookup): string | null {
-    if (lookup.didNumber) return `voice:endpoint:${lookup.didNumber}`;
+    if (lookup.didNumber) {
+      const provider = lookup.providerName || 'any';
+      return `voice:endpoint:${provider}:${lookup.didNumber}`;
+    }
     if (lookup.clientIdHint) {
       return `voice:endpoint_by_client:${lookup.clientIdHint}`;
     }

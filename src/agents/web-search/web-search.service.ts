@@ -130,19 +130,13 @@ export class WebSearchService {
       );
     }
 
+    // Todos os provedores falharam: sinaliza erro explicitamente para o LLM
+    // em vez de retornar um placeholder fabricado como se fosse dado real
     return {
-      answer: `Informações públicas pesquisadas para: "${normalizedQuestion}".`,
-      results: [
-        {
-          title: `Busca web: ${normalizedQuestion}`,
-          snippet: `Resultado da consulta em tempo real sobre "${normalizedQuestion}".`,
-          link: `https://duckduckgo.com/?q=${encodeURIComponent(normalizedQuestion)}`,
-        },
-      ],
+      answer: '',
+      results: [],
       source: 'Synexa Live Web Search',
-      citations: [
-        `https://duckduckgo.com/?q=${encodeURIComponent(normalizedQuestion)}`,
-      ],
+      error: `Busca web indisponível no momento para "${normalizedQuestion}". Informe ao usuário que não foi possível consultar a internet agora.`,
     };
   }
 
@@ -268,8 +262,10 @@ export class WebSearchService {
         .join('\n\n');
     }
 
+    // Sem texto fabricado: answer vazio sinaliza ao caller (ask) que nenhum
+    // dado real foi obtido, acionando o retorno com flag de erro
     return {
-      answer: summary || `Resultados encontrados na web para: ${query}`,
+      answer: summary,
       results,
       source: 'Synexa Live Web Search Engine',
       citations: Array.from(new Set(citations)),

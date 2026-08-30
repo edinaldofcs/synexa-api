@@ -158,6 +158,16 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
       adapter.metadata.customVariables = customVars;
       adapter.metadata.didNumber = didNumber;
 
+      // A resolução de contexto AMI pode levar ~40s (várias conexões
+      // sequenciais): sem esta checagem, uma chamada desligada criaria
+      // sessão de voz órfã com o Gemini conectado
+      if (!socket.writable || socket.destroyed) {
+        this.logger.warn(
+          `[AudioSocket] Socket fechado durante a resolução de rota (channel=${channelId}); sessão abortada`,
+        );
+        return;
+      }
+
       const route = await this.endpointResolver.resolve({
         didNumber,
         providerName: adapter.providerName,

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { OperatorPresenceService } from './operator-presence.service';
 
 @Injectable()
@@ -9,6 +10,7 @@ export class HandoffDistributorService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
     private readonly presenceService: OperatorPresenceService,
   ) {}
 
@@ -16,6 +18,39 @@ export class HandoffDistributorService {
    * Distribui uma conversa para o operador online com menor carga
    */
   async distribute(
+    conversationId: string,
+    companyId: string,
+    clientId?: string | null,
+  ): Promise<string | null> {
+    // Serializa a distribuição por empresa: o cálculo de carga é
+    // check-then-act e sem lock duas distribuições concorrentes podem
+    // atribuir ao mesmo operador acima da capacidade máxima
+    const lockKey = `handoff:distribute:${companyId}`;
+    const acquired = await this.redis.acquireLock(lockKey, 10);
+    if (!acquired) {
+      this.logger.warn(
+        { conversation_id: conversationId, company_id: companyId },
+        'Distribuição já em andamento para esta empresa; conversa permanece na fila.',
+      );
+      await this.prisma.conversations.updateMany({
+        where: { id: conversationId, assigned_to: null },
+        data: { assigned_to: null },
+      });
+      return null;
+    }
+
+    try {
+      return await this.distributeLocked(
+        conversationId,
+        companyId,
+        clientId,
+      );
+    } finally {
+      await this.redis.releaseLock(lockKey);
+    }
+  }
+
+  private async distributeLocked(
     conversationId: string,
     companyId: string,
     clientId?: string | null,
@@ -28,8 +63,8 @@ export class HandoffDistributorService {
         { conversation_id: conversationId, company_id: companyId },
         'Nenhum operador disponível para novos atendimentos. Conversa mantida na fila de espera.',
       );
-      await this.prisma.conversations.update({
-        where: { id: conversationId },
+      await this.prisma.conversations.updateMany({
+        where: { id: conversationId, assigned_to: null },
         data: { assigned_to: null },
       });
       return null;
@@ -91,8 +126,8 @@ export class HandoffDistributorService {
         { conversation_id: conversationId },
         `Todos os ${operators.length} operadores online atingiram a capacidade máxima (${maxCapacity}). Conversa na fila.`,
       );
-      await this.prisma.conversations.update({
-        where: { id: conversationId },
+      await this.prisma.conversations.updateMany({
+        where: { id: conversationId, assigned_to: null },
         data: { assigned_to: null },
       });
       return null;
@@ -102,12 +137,21 @@ export class HandoffDistributorService {
     eligible.sort((a, b) => a.activeCount - b.activeCount);
     const selectedOperator = eligible[0];
 
-    await this.prisma.conversations.update({
-      where: { id: conversationId },
+    // Atribuição condicional: não sobrescreve atribuição manual concorrente
+    const assigned = await this.prisma.conversations.updateMany({
+      where: { id: conversationId, assigned_to: null },
       data: {
         assigned_to: selectedOperator.operatorId,
       },
     });
+
+    if (assigned.count === 0) {
+      this.logger.log(
+        { conversation_id: conversationId },
+        'Conversa já atribuída por outra operação; nenhuma mudança aplicada.',
+      );
+      return selectedOperator.operatorId;
+    }
 
     await this.prisma.message_events.create({
       data: {

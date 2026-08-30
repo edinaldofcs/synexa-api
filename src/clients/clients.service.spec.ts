@@ -1,4 +1,9 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ClientsService } from './clients.service';
 import { encrypt } from '../common/utils/crypto.util';
 
@@ -35,6 +40,7 @@ describe('ClientsService', () => {
     invalidate: jest.fn().mockResolvedValue(undefined),
   };
   const prisma = {
+    $queryRaw: jest.fn().mockResolvedValue([]),
     painel_clients: { findUnique: jest.fn(), findMany: jest.fn() },
     telephony_endpoints: {
       upsert: jest.fn().mockResolvedValue({ id: 'ep-1' }),
@@ -152,6 +158,68 @@ describe('ClientsService', () => {
     await expect(
       service.create({ user_id: 'missing' } as any, null as never),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('rejects creation when sip_extension DID belongs to another company (409)', async () => {
+    clientsRepository.create.mockResolvedValue({
+      id: 'client-3',
+      company_name: 'ACME 3',
+    });
+    prisma.$queryRaw.mockResolvedValue([{ company_id: 'other-company' }]);
+
+    await expect(
+      service.create(
+        {
+          user_id: 'user-1',
+          company_name: 'ACME 3',
+          sip_extension: '2000',
+          telephony_provider: 'audiosocket',
+        } as any,
+        companyId,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.telephony_endpoints.upsert).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).toHaveBeenCalledWith(
+      expect.anything() as unknown as Prisma.Sql,
+    );
+  });
+
+  it('allows DID reuse by the owning company', async () => {
+    clientsRepository.create.mockResolvedValue({
+      id: 'client-4',
+      company_name: 'ACME 4',
+    });
+    prisma.$queryRaw.mockResolvedValue([{ company_id: companyId }]);
+
+    await service.create(
+      {
+        user_id: 'user-1',
+        sip_extension: '3000',
+      } as any,
+      companyId,
+    );
+
+    expect(prisma.telephony_endpoints.upsert).toHaveBeenCalled();
+  });
+
+  it('rejects update when target DID belongs to another company', async () => {
+    clientsRepository.update.mockResolvedValue({ id: 'client-1' });
+    clientsRepository.findOne.mockResolvedValue({
+      id: 'client-1',
+      company_id: companyId,
+    });
+    prisma.telephony_endpoints.findFirst.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([{ company_id: 'other-company' }]);
+
+    await expect(
+      service.update(
+        'client-1',
+        { sip_extension: '3000', telephony_provider: 'audiosocket' } as any,
+        companyId,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.telephony_endpoints.upsert).not.toHaveBeenCalled();
   });
 
   it('duplicates agents, tracks, apis, subagents and remaps next_api_id', async () => {

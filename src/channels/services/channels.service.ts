@@ -83,18 +83,32 @@ export class ChannelsService {
 
     const requestId = uuidv4();
 
-    const inboundEvent = await this.prisma.inbound_events.create({
-      data: {
-        company_id: connection.company_id,
-        client_id: dto.client_id,
-        channel_connection_id: connection.id,
-        channel_type: dto.origin_channel,
-        raw_payload: dto as unknown as Prisma.InputJsonValue,
-        status: 'received',
-        idempotency_key: dto.idempotency_key || null,
-        request_id: requestId,
-      },
-    });
+    let inboundEvent;
+    try {
+      inboundEvent = await this.prisma.inbound_events.create({
+        data: {
+          company_id: connection.company_id,
+          client_id: dto.client_id,
+          channel_connection_id: connection.id,
+          channel_type: dto.origin_channel,
+          raw_payload: dto as unknown as Prisma.InputJsonValue,
+          status: 'received',
+          idempotency_key: dto.idempotency_key || null,
+          request_id: requestId,
+        },
+      });
+    } catch (err: any) {
+      // Corrida no check-then-act: a constraint única
+      // (client_id, channel_type, idempotency_key) garante a idempotência
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002' &&
+        dto.idempotency_key
+      ) {
+        throw new BadRequestException('Duplicate idempotency_key');
+      }
+      throw err;
+    }
 
     const text = dto.message?.text || '';
 
@@ -212,27 +226,47 @@ export class ChannelsService {
 
     if (identity) return identity.end_user_id;
 
-    const endUser = await this.prisma.end_users.create({
-      data: {
-        company_id: connection.company_id,
-        client_id: dto.client_id,
-        metadata: (dto.metadata as any) || {},
-      },
-    });
+    try {
+      // end_user + identity criados atomicamente: falha na identity
+      // não deixa end_user órfão
+      const created = await this.prisma.$transaction(async (tx) => {
+        const endUser = await tx.end_users.create({
+          data: {
+            company_id: connection.company_id,
+            client_id: dto.client_id,
+            metadata: (dto.metadata as any) || {},
+          },
+        });
 
-    await this.prisma.channel_identities.create({
-      data: {
-        company_id: connection.company_id,
-        client_id: dto.client_id,
-        end_user_id: endUser.id,
-        channel_type: dto.origin_channel,
-        external_user_id: dto.external_user_id,
-        normalized_phone:
-          dto.origin_channel === 'whatsapp' ? dto.external_user_id : null,
-      },
-    });
+        await tx.channel_identities.create({
+          data: {
+            company_id: connection.company_id,
+            client_id: dto.client_id,
+            end_user_id: endUser.id,
+            channel_type: dto.origin_channel,
+            external_user_id: dto.external_user_id,
+            normalized_phone:
+              dto.origin_channel === 'whatsapp' ? dto.external_user_id : null,
+          },
+        });
 
-    return endUser.id;
+        return endUser;
+      });
+      return created.id;
+    } catch (err: any) {
+      // Corrida: outra requisição criou a identity/end_user concorrentemente
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const existingIdentity = await this.prisma.channel_identities.findFirst({
+          where: {
+            client_id: dto.client_id,
+            channel_type: dto.origin_channel,
+            external_user_id: dto.external_user_id,
+          },
+        });
+        if (existingIdentity) return existingIdentity.end_user_id;
+      }
+      throw err;
+    }
   }
 
   private async resolveConnection(

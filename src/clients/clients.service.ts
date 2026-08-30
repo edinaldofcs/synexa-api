@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { AgentsRepository } from '../agents/repositories/agents.repository';
@@ -45,6 +47,32 @@ export class ClientsService {
     }
   }
 
+  /**
+   * Garante que o DID/ramal não pertence a outra empresa (chave única global
+   * did_number_provider). Consulta cross-tenant via raw query pois a extensão
+   * de escopo de tenant mascara registros de outros tenants no findFirst.
+   */
+  private async assertDidOwnership(
+    didNumber: string,
+    provider: string,
+    companyId: string,
+  ) {
+    const rows = await this.prisma.$queryRaw<{ company_id: string }[]>(
+      Prisma.sql`
+        SELECT company_id
+        FROM telephony_endpoints
+        WHERE did_number = ${didNumber} AND provider = ${provider}
+        LIMIT 1
+      `,
+    );
+    const owner = rows?.[0];
+    if (owner && owner.company_id !== companyId) {
+      throw new ConflictException(
+        `Ramal ${didNumber} (${provider}) já está em uso por outra empresa`,
+      );
+    }
+  }
+
   async create(createClientDto: CreateClientDto, companyId: string) {
     if (!companyId) {
       throw new ForbiddenException('Usuário sem empresa vinculada');
@@ -65,6 +93,7 @@ export class ClientsService {
         telephony_provider?.trim() || 'audiosocket'
       ).toLowerCase();
       try {
+        await this.assertDidOwnership(ext, provider, companyId);
         await this.prisma.telephony_endpoints.upsert({
           where: {
             did_number_provider: {
@@ -91,6 +120,7 @@ export class ClientsService {
         });
         await this.telephonyResolver.invalidate(ext);
       } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
         this.logger.error(
           `Falha ao provisionar ramal ${ext} para cliente ${client.id}: ${err.message}`,
         );
@@ -200,6 +230,7 @@ export class ClientsService {
             await this.telephonyResolver.invalidate(existing.did_number);
           }
 
+          await this.assertDidOwnership(ext, provider, companyId);
           await this.prisma.telephony_endpoints.upsert({
             where: {
               did_number_provider: {
@@ -232,6 +263,7 @@ export class ClientsService {
           await this.telephonyResolver.invalidate(existing.did_number);
         }
       } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
         this.logger.error(
           `Falha ao atualizar ramal ${ext} para cliente ${id}: ${err.message}`,
         );

@@ -59,16 +59,10 @@ export class ApiKeyGuard implements CanActivate {
 
     const nowSec = Math.floor(Date.now() / 1000);
     const requestSec = parseInt(timestamp as string, 10);
-    if (Math.abs(nowSec - requestSec) > 300) {
+    // NaN desativaria o freshness check silenciosamente
+    if (!Number.isFinite(requestSec) || Math.abs(nowSec - requestSec) > 300) {
       throw new UnauthorizedException('invalid_signature');
     }
-
-    const replayKey = `hmac:replay:${clientId}:${timestamp}:${signature}`;
-    const exists = await this.redisService.get(replayKey);
-    if (exists) {
-      throw new UnauthorizedException('invalid_signature');
-    }
-    await this.redisService.set(replayKey, '1');
 
     const payload = JSON.stringify(request.body);
     const expectedSig = createHmac('sha256', connection.inbound_secret_hash)
@@ -84,9 +78,19 @@ export class ApiKeyGuard implements CanActivate {
       ) {
         throw new UnauthorizedException('invalid_signature');
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof UnauthorizedException) throw err;
       throw new UnauthorizedException('invalid_signature');
     }
+
+    // Chave de replay gravada somente APÓS a assinatura ser validada:
+    // requisições com assinatura inválida não consomem o nonce
+    const replayKey = `hmac:replay:${clientId}:${timestamp}:${signature}`;
+    const exists = await this.redisService.get(replayKey);
+    if (exists) {
+      throw new UnauthorizedException('invalid_signature');
+    }
+    await this.redisService.set(replayKey, '1');
 
     return true;
   }

@@ -1,5 +1,6 @@
 export class ImportContactDto {
-  userId: string;
+  userId?: string;
+  companyId?: string;
   fileName?: string;
   fileType?: string;
   data: Record<string, any>[];

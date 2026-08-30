@@ -4,10 +4,10 @@ import { WorkflowVersionsService } from './workflow-versions.service';
 describe('WorkflowVersionsService', () => {
   const mockPrisma = {
     painel_clients: { findUnique: jest.fn(), update: jest.fn() },
-    painel_agents: { findMany: jest.fn() },
-    painel_subagents: { findMany: jest.fn() },
-    painel_apis: { findMany: jest.fn() },
-    painel_tracks: { findMany: jest.fn() },
+    painel_agents: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
+    painel_subagents: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
+    painel_apis: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
+    painel_tracks: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
     workflow_versions: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
@@ -254,6 +254,66 @@ describe('WorkflowVersionsService', () => {
           where: { id: 'v-edit-1' },
         }),
       );
+    });
+  });
+
+  describe('Update de versão publicada', () => {
+    it('aplica snapshot publicado dentro de $transaction real (não repassa o PrismaService)', async () => {
+      mockPrisma.workflow_versions.findUnique.mockResolvedValue({
+        id: 'v-pub',
+        client_id: clientId,
+        status: 'published',
+        description: 'antiga',
+        base_version: 1,
+        snapshot: { agents: [] },
+        version: 2,
+      });
+      mockPrisma.workflow_versions.update.mockResolvedValue({
+        id: 'v-pub',
+        version: 2,
+      });
+      mockPrisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(mockPrisma),
+      );
+
+      await service.update(
+        clientId,
+        'v-pub',
+        { snapshot: { agents: [], apis: [], subagents: [], tracks: [] } } as any,
+        companyId,
+      );
+
+      expect(mockPrisma.$transaction).toHaveBeenCalledWith(
+        expect.any(Function),
+      );
+      // Nunca deve chamar applySnapshot com o PrismaService puro
+      expect(mockPrisma.painel_agents.deleteMany).toHaveBeenCalledWith({
+        where: { client_id: clientId },
+      });
+    });
+
+    it('não aplica snapshot quando a versão não está publicada', async () => {
+      mockPrisma.workflow_versions.findUnique.mockResolvedValue({
+        id: 'v-draft',
+        client_id: clientId,
+        status: 'draft',
+        snapshot: { agents: [] },
+        version: 2,
+      });
+      mockPrisma.workflow_versions.update.mockResolvedValue({
+        id: 'v-draft',
+        version: 3,
+      });
+
+      await service.update(
+        clientId,
+        'v-draft',
+        { snapshot: { agents: [], apis: [], subagents: [], tracks: [] } } as any,
+        companyId,
+      );
+
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(mockPrisma.painel_agents.deleteMany).not.toHaveBeenCalled();
     });
   });
 });

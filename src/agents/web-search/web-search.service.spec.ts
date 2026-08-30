@@ -76,4 +76,23 @@ describe('WebSearchService', () => {
       BadRequestException,
     );
   });
+
+  it('retorna flag error (sem dado fabricado) quando todos os provedores falham', async () => {
+    createMock.mockRejectedValue(new Error('OpenRouter down'));
+    (global.fetch as jest.Mock) = jest.fn().mockRejectedValue(
+      new Error('network unreachable'),
+    );
+
+    const result = await service.ask('preco do dolar agora');
+
+    expect(result.error).toBeDefined();
+    expect(result.results).toEqual([]);
+    expect(result.answer).toBe('');
+    // Nenhum resultado placeholder fabricado
+    expect(
+      result.results.some((r) =>
+        r.snippet.includes('Resultado da consulta em tempo real'),
+      ),
+    ).toBe(false);
+  });
 });

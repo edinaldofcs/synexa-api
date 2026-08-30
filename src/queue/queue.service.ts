@@ -135,6 +135,10 @@ export class QueueService {
     const job = await this.mediaQueue.add(JOB_PROCESS_MEDIA, data, {
       delay: delayMs || 0,
       jobId: data.media_asset_id,
+      // removeOnComplete/Fail: jobId fixo + jobs retidos fazem o Bull v4
+      // ignorar silenciosamente o reprocessamento (retry admin, re-upload)
+      removeOnComplete: true,
+      removeOnFail: true,
     });
     this.logger.log(
       { job_id: job.id, media_asset_id: data.media_asset_id },
@@ -153,6 +157,8 @@ export class QueueService {
       {
         delay: delayMs || 0,
         jobId: data.document_id,
+        removeOnComplete: true,
+        removeOnFail: true,
       },
     );
     this.logger.log(

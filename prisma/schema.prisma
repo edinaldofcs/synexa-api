@@ -95,6 +95,7 @@ model conversations {
   @@index([channel_connection_id])
   @@index([end_user_id])
   @@index([status])
+  @@unique([client_id, external_conversation_key])
 }
 
 model messages {

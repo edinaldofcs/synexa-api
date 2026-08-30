@@ -33,6 +33,7 @@ export interface ApiTool {
   body?: unknown;
   parameters?: unknown;
   extract_data?: unknown;
+  client_id?: string;
 }
 
 export interface ToolCallDebug {
@@ -220,6 +221,7 @@ export class ApiToolExecutorService {
       body: api.body,
       parameters: api.parameters,
       extract_data: api.extract_data,
+      client_id: clientId,
     }));
   }
 
@@ -514,14 +516,14 @@ export class ApiToolExecutorService {
 
     try {
       const provider = subagent.llm_provider || 'gemini';
+      // Usa o modelo configurado no subagente; aplica default apenas quando
+      // não há modelo definido (não descarta configuração válida do cliente)
       let model = subagent.model || '';
-      if (
-        provider.toLowerCase() === 'gemini' &&
-        (!model || model.includes('2.5') || model.includes('2.0'))
-      ) {
-        model = 'gemini-3.6-flash';
-      } else if (!model) {
-        model = 'llama-3.3-70b-versatile';
+      if (!model) {
+        model =
+          provider.toLowerCase() === 'gemini'
+            ? 'gemini-3.6-flash'
+            : 'llama-3.3-70b-versatile';
       }
 
       const apiKey = await this.resolveSubagentApiKey(
@@ -654,6 +656,7 @@ export class ApiToolExecutorService {
     tool: ApiTool,
     args: Record<string, unknown>,
     sessionState?: Record<string, unknown>,
+    visited?: Set<string>,
   ) {
     if (!tool.url) throw new Error(`Tool ${tool.name} sem URL configurada`);
 
@@ -716,58 +719,69 @@ export class ApiToolExecutorService {
       legacyNextApiId,
     );
     if (response.ok && nextApiId) {
-      try {
-        const nextApi = await this.prisma.painel_apis.findFirst({
-          where: {
-            OR: [{ id: nextApiId }, { name: nextApiId }],
-            active: true,
-          },
-        });
-        if (nextApi) {
-          const nextTool = {
-            id: nextApi.id,
-            name: nextApi.name,
-            functionName: this.toFunctionName(nextApi.name, nextApi.id),
-            description: nextApi.description,
-            method: nextApi.method,
-            url: nextApi.url,
-            headers: nextApi.headers,
-            body: nextApi.body,
-            parameters: nextApi.parameters,
-            extract_data: nextApi.extract_data,
-          };
-          const nextArgs = {
-            ...args,
-            ...(typeof extracted === 'object' && extracted !== null
-              ? extracted
-              : {}),
-            ...(typeof raw === 'object' && raw !== null
-              ? (raw as Record<string, unknown>)
-              : {}),
-          };
-          const nextResult = await this.executeApiTool(
-            nextTool,
-            nextArgs,
-            sessionState,
-          );
-          if (nextResult && nextResult.ok) {
-            result.data = {
-              ...(typeof result.data === 'object' && result.data !== null
-                ? result.data
-                : {}),
-              ...(typeof nextResult.data === 'object' &&
-              nextResult.data !== null
-                ? nextResult.data
-                : {}),
-              tem_ofertas: true,
-            };
-            result.chained_result = nextResult;
-          }
-        }
-      } catch (chainErr) {
+      const chainVisited = visited ?? new Set([tool.id]);
+      if (chainVisited.has(nextApiId)) {
         this.logger.warn(
-          `Falha ao executar API encadeada (${nextApiId}): ${chainErr instanceof Error ? chainErr.message : String(chainErr)}`,
+          `Ciclo detectado no encadeamento de APIs (${nextApiId}); cadeia abortada`,
         );
+      } else {
+        try {
+          const nextApi = await this.prisma.painel_apis.findFirst({
+            where: {
+              OR: [{ id: nextApiId }, { name: nextApiId }],
+              active: true,
+              ...(tool.client_id ? { client_id: tool.client_id } : {}),
+            },
+          });
+          if (nextApi) {
+            const nextTool = {
+              id: nextApi.id,
+              name: nextApi.name,
+              functionName: this.toFunctionName(nextApi.name, nextApi.id),
+              description: nextApi.description,
+              method: nextApi.method,
+              url: nextApi.url,
+              headers: nextApi.headers,
+              body: nextApi.body,
+              parameters: nextApi.parameters,
+              extract_data: nextApi.extract_data,
+            };
+            const nextArgs = {
+              ...args,
+              ...(typeof extracted === 'object' && extracted !== null
+                ? extracted
+                : {}),
+              ...(typeof raw === 'object' && raw !== null
+                ? (raw as Record<string, unknown>)
+                : {}),
+            };
+            const nextVisited = new Set(chainVisited);
+            nextVisited.add(nextApi.id);
+            const nextResult = await this.executeApiTool(
+              nextTool,
+              nextArgs,
+              sessionState,
+              nextVisited,
+            );
+            if (nextResult && nextResult.ok) {
+              result.data = {
+                ...(typeof result.data === 'object' && result.data !== null
+                  ? result.data
+                  : {}),
+                ...(typeof nextResult.data === 'object' &&
+                nextResult.data !== null
+                  ? nextResult.data
+                  : {}),
+                tem_ofertas: true,
+              };
+              result.chained_result = nextResult;
+            }
+          }
+        } catch (chainErr) {
+          this.logger.warn(
+            `Falha ao executar API encadeada (${nextApiId}): ${chainErr instanceof Error ? chainErr.message : String(chainErr)}`,
+          );
+        }
       }
     }
 
@@ -1192,6 +1206,8 @@ export class ApiToolExecutorService {
         // "Dado de Outra API / Sessão": resolve na ordem estado da sessão ->
         // argumentos da IA. Se nada for encontrado, o campo é OMITIDO
         // (nunca enviar o nome da variável literal como valor).
+        // Fallbacks de CPF só se aplicam a campos de CPF — nunca vaziam o
+        // CPF para campos system sem relação (ex.: valor, protocolo).
         const varName =
           typeof cfg.value === 'string'
             ? cfg.value.replace(/[{}]/g, '').trim()
@@ -1205,10 +1221,10 @@ export class ApiToolExecutorService {
           (isCpfField
             ? this.lookupSessionValue(sessionState, 'cliente_cpf')
             : undefined) ??
+          (isCpfField ? (args as any)['cliente_cpf'] : undefined) ??
+          (isCpfField ? (args as any)['cpf'] : undefined) ??
           (args as any)[varName] ??
-          (args as any)[key] ??
-          (args as any)['cliente_cpf'] ??
-          (args as any)['cpf'];
+          (args as any)[key];
       } else if ('value' in cfg) {
         const rawVal = cfg.value;
         if (

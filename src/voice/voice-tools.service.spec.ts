@@ -1,22 +1,166 @@
 import { VoiceToolsService } from './voice-tools.service';
 
-describe('VoiceToolsService - resolução de payload (source system/sessão)', () => {
+jest.mock('../common/utils/api-chaining.util', () => ({
+  resolveChainedApiId: jest.fn(),
+}));
+
+import { resolveChainedApiId } from '../common/utils/api-chaining.util';
+
+const mockedResolveChainedApiId = resolveChainedApiId as jest.Mock;
+
+const buildPrisma = (apiRecord: Record<string, unknown>) => {
+  const prisma = {
+    painel_agents: {
+      findFirst: jest.fn().mockResolvedValue({ allowed_tool_names: [] }),
+    },
+    painel_apis: {
+      findMany: jest.fn().mockResolvedValue([apiRecord]),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+  };
+  return { prisma, service: new VoiceToolsService(prisma as any, {} as any) };
+};
+
+const captureFetch = (
+  respond: { ok: boolean; status?: number; body?: unknown } = { ok: true },
+) => {
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  jest
+    .spyOn(global, 'fetch')
+    .mockImplementation(async (url: any, init: RequestInit = {}) => {
+      requests.push({ url: String(url), init });
+      return {
+        ok: respond.ok,
+        status: respond.status ?? 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => respond.body ?? {},
+        text: async () => JSON.stringify(respond.body ?? {}),
+      } as unknown as Response;
+    });
+  return requests;
+};
+
+afterEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+});
+
+describe('VoiceToolsService - encadeamento (tenant scope & cycle guard)', () => {
   const apiId = '11111111-1111-1111-1111-111111111111';
   const agentId = '22222222-2222-2222-2222-222222222222';
 
-  const buildService = (apiRecord: Record<string, unknown>) => {
+  it('filtra a API encadeada por client_id (sem execução cross-tenant)', async () => {
+    mockedResolveChainedApiId.mockReturnValue('next-api');
+    const { service, prisma } = buildPrisma({
+      id: apiId,
+      name: 'Consulta',
+      method: 'GET',
+      url: 'https://api.example.com/step1',
+      extract_data: null,
+    });
+    prisma.painel_apis.findFirst.mockResolvedValue(null);
+    captureFetch({ ok: true, body: {} });
+
+    await service.execute(
+      'client-1',
+      agentId,
+      `consulta_${apiId.replace(/-/g, '_')}`,
+      {},
+      {},
+    );
+
+    expect(prisma.painel_apis.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          client_id: 'client-1',
+          active: true,
+        }),
+      }),
+    );
+  });
+
+  it('aborta cadeia em ciclo (next_api_id já visitado) sem consultar DB', async () => {
+    mockedResolveChainedApiId.mockReturnValue(apiId);
+    const { service, prisma } = buildPrisma({
+      id: apiId,
+      name: 'Consulta',
+      method: 'GET',
+      url: 'https://api.example.com/self',
+      extract_data: null,
+    });
+    captureFetch({ ok: true, body: {} });
+
+    const result = await service.execute(
+      'client-1',
+      agentId,
+      `consulta_${apiId.replace(/-/g, '_')}`,
+      {},
+      {},
+    );
+
+    expect(result.ok).toBe(true);
+    expect(prisma.painel_apis.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('permite encadeamento legítimo entre APIs distintas', async () => {
+    mockedResolveChainedApiId.mockReturnValue('next-api');
+    const nextRecord = {
+      id: 'next-api',
+      name: 'Passo 2',
+      method: 'GET',
+      url: 'https://api.example.com/step2',
+      headers: null,
+      body: null,
+      parameters: null,
+      extract_data: null,
+    };
     const prisma = {
       painel_agents: {
         findFirst: jest.fn().mockResolvedValue({ allowed_tool_names: [] }),
       },
       painel_apis: {
-        findMany: jest.fn().mockResolvedValue([apiRecord]),
-        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            {
+              id: apiId,
+              name: 'Passo 1',
+              method: 'GET',
+              url: 'https://api.example.com/step1',
+              extract_data: null,
+            },
+            nextRecord,
+          ]),
+        findFirst: jest.fn().mockResolvedValue(nextRecord),
       },
     };
     const service = new VoiceToolsService(prisma as any, {} as any);
-    return service;
-  };
+    const requests = captureFetch({ ok: true, body: { step: 1 } });
+
+    const result = await service.execute(
+      'client-1',
+      agentId,
+      `passo_1_${apiId.replace(/-/g, '_')}`,
+      {},
+      {},
+    );
+
+    expect(prisma.painel_apis.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ client_id: 'client-1' }),
+      }),
+    );
+    expect(requests.length).toBeGreaterThanOrEqual(2);
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('VoiceToolsService - resolução de payload (source system/sessão)', () => {
+  const apiId = '11111111-1111-1111-1111-111111111111';
+  const agentId = '22222222-2222-2222-2222-222222222222';
+
+  const buildService = (apiRecord: Record<string, unknown>) =>
+    buildPrisma(apiRecord).service;
 
   const captureFetch = (
     respond: { ok: boolean; status?: number; body?: unknown } = { ok: true },
@@ -39,6 +183,7 @@ describe('VoiceToolsService - resolução de payload (source system/sessão)', (
 
   afterEach(() => {
     jest.restoreAllMocks();
+    jest.clearAllMocks();
   });
 
   it('deve resolver campo source=system a partir do estado da sessão', async () => {

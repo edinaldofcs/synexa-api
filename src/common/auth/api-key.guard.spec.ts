@@ -231,6 +231,36 @@ describe('ApiKeyGuard', () => {
       );
     });
 
+    it('should throw when timestamp is not numeric (NaN) — freshness não pode ser desativada', async () => {
+      prismaService.channel_connections.findUnique.mockResolvedValue({
+        inbound_secret_hash: 'secret',
+      });
+
+      const ctx = mockContext(body, {
+        'x-signature': 'sig',
+        'x-timestamp': 'status 1400:boom',
+      });
+
+      await expect(guard.canActivate(ctx)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('should throw when timestamp is empty string', async () => {
+      prismaService.channel_connections.findUnique.mockResolvedValue({
+        inbound_secret_hash: 'secret',
+      });
+
+      const ctx = mockContext(body, {
+        'x-signature': 'sig',
+        'x-timestamp': '',
+      });
+
+      await expect(guard.canActivate(ctx)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
     it('should accept timestamp exactly at the 5-minute boundary', async () => {
       const secret = 'secret';
       prismaService.channel_connections.findUnique.mockResolvedValue({
@@ -366,6 +396,24 @@ describe('ApiKeyGuard', () => {
       await expect(guard.canActivate(ctx)).rejects.toThrow(
         UnauthorizedException,
       );
+    });
+
+    it('não grava a chave de replay quando a assinatura é inválida (regression)', async () => {
+      const timestamp = String(nowSec);
+      const payload = JSON.stringify(body);
+      const wrongSig = createHmac('sha256', 'wrong-secret')
+        .update(`${timestamp}.${payload}`)
+        .digest('hex');
+
+      const ctx = mockContext(body, {
+        'x-signature': wrongSig,
+        'x-timestamp': timestamp,
+      });
+
+      await expect(guard.canActivate(ctx)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(redisService.set).not.toHaveBeenCalled();
     });
   });
 });

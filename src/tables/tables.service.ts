@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -24,6 +25,9 @@ export class TablesService {
     'painel_apis',
     'painel_tracks',
   ]);
+
+  // Tabelas com coluna própria company_id; as demais são escopadas via client_id
+  private readonly COMPANY_SCOPED_TABLES = new Set(['painel_clients']);
 
   constructor(private prisma: PrismaService) {}
 
@@ -91,7 +95,12 @@ export class TablesService {
   async exportTable(
     tableName: string,
     queryParams: { startDate?: string; endDate?: string },
+    companyId: string,
   ) {
+    if (!companyId) {
+      throw new ForbiddenException('Acesso negado: tenant não identificado');
+    }
+
     const { startDate, endDate } = queryParams;
 
     const validName = /^[a-z_][a-z0-9_]*$/i;
@@ -119,14 +128,18 @@ export class TablesService {
 
       const safeTableName = Prisma.raw(`"${knownTable.table_name}"`);
 
-      let query = Prisma.sql`SELECT * FROM ${safeTableName}`;
+      const tenantFilter = this.COMPANY_SCOPED_TABLES.has(tableName)
+        ? Prisma.sql`company_id = ${companyId}`
+        : Prisma.sql`client_id IN (SELECT id FROM "painel_clients" WHERE company_id = ${companyId}::uuid)`;
+
+      let query = Prisma.sql`SELECT * FROM ${safeTableName} WHERE ${tenantFilter}`;
 
       if (startDate && endDate) {
-        query = Prisma.sql`${query} WHERE created_at BETWEEN ${new Date(startDate)} AND ${new Date(endDate)}`;
+        query = Prisma.sql`${query} AND created_at BETWEEN ${new Date(startDate)} AND ${new Date(endDate)}`;
       } else if (startDate) {
-        query = Prisma.sql`${query} WHERE created_at >= ${new Date(startDate)}`;
+        query = Prisma.sql`${query} AND created_at >= ${new Date(startDate)}`;
       } else if (endDate) {
-        query = Prisma.sql`${query} WHERE created_at <= ${new Date(endDate)}`;
+        query = Prisma.sql`${query} AND created_at <= ${new Date(endDate)}`;
       }
 
       query = Prisma.sql`${query} ORDER BY created_at DESC`;

@@ -261,6 +261,9 @@ export class AsteriskAmiService {
         port: this.port,
       });
       let authenticated = false;
+      // Acumula chunks: fragmentação TCP pode separar 'Response: Success'
+      // e 'Authentication accepted' em pacotes distintos
+      let loginBuffer = '';
 
       client.setTimeout(5000);
 
@@ -270,15 +273,17 @@ export class AsteriskAmiService {
 
       client.on('data', (data) => {
         const response = data.toString();
-        if (
-          !authenticated &&
-          response.includes('Response: Success') &&
-          response.includes('Authentication accepted')
-        ) {
-          authenticated = true;
-          execute(client);
-          client.write('Action: Logoff\r\n\r\n');
-          resolve(true);
+        if (!authenticated) {
+          loginBuffer += response;
+          if (
+            loginBuffer.includes('Response: Success') &&
+            loginBuffer.includes('Authentication accepted')
+          ) {
+            authenticated = true;
+            execute(client);
+            client.write('Action: Logoff\r\n\r\n');
+            resolve(true);
+          }
         }
       });
 

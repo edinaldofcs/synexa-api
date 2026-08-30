@@ -1,5 +1,9 @@
 import 'reflect-metadata';
-import { validateEnv, EnvironmentVariables } from './env.validation';
+import {
+  validateEnv,
+  EnvironmentVariables,
+  transformBoolean,
+} from './env.validation';
 
 const baseConfig = {
   ENVIRONMENT: 'development',
@@ -255,6 +259,52 @@ describe('validateEnv', () => {
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
       };
       expect(() => validateEnv(config)).not.toThrow();
+    });
+  });
+
+  describe('boolean flags com transformBoolean (regression: "false" vira true)', () => {
+    const booleanFlags: Array<[string, boolean]> = [
+      ['FASTAGI_ENABLED', false],
+      ['AUDIOSOCKET_ENABLED', false],
+      ['AUDIO_GATE_ENABLED', true],
+      ['GROQ_STT_ENABLED', false],
+      ['GEMINI_CONTEXT_COMPRESSION_ENABLED', false],
+    ];
+
+    it.each(booleanFlags)(
+      'converte %s="false" para false (não true)',
+      (flag) => {
+        const result = validateEnv({ ...baseConfig, [flag]: 'false' });
+        expect(result[flag]).toBe(false);
+      },
+    );
+
+    it.each(booleanFlags)('converte %s="true" para true', (flag) => {
+      const result = validateEnv({ ...baseConfig, [flag]: 'true' });
+      expect(result[flag]).toBe(true);
+    });
+
+    it.each(booleanFlags)('mantém default quando ausente (%s)', (flag, def) => {
+      const result = validateEnv(baseConfig);
+      expect(result[flag]).toBe(def);
+    });
+
+    it('transformBoolean cobre variantes de string', () => {
+      expect(transformBoolean({ value: 'TRUE' })).toBe(true);
+      expect(transformBoolean({ value: '1' })).toBe(true);
+      expect(transformBoolean({ value: 'yes' })).toBe(true);
+      expect(transformBoolean({ value: 'on' })).toBe(true);
+      expect(transformBoolean({ value: 'false' })).toBe(false);
+      expect(transformBoolean({ value: '0' })).toBe(false);
+      expect(transformBoolean({ value: 'no' })).toBe(false);
+      expect(transformBoolean({ value: 'off' })).toBe(false);
+      expect(transformBoolean({ value: '' })).toBe(false);
+      expect(transformBoolean({ value: true })).toBe(true);
+      expect(transformBoolean({ value: false })).toBe(false);
+      expect(transformBoolean({ value: 1 })).toBe(true);
+      expect(transformBoolean({ value: 0 })).toBe(false);
+      expect(transformBoolean({ value: 'garbage' })).toBe(false);
+      expect(transformBoolean({ value: undefined })).toBe(false);
     });
   });
 });

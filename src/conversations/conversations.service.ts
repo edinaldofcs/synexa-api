@@ -1,9 +1,5 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ConversationsRepository } from './repositories/conversations.repository';
 import { OperatorPresenceService } from './operator-presence.service';
@@ -57,15 +53,38 @@ export class ConversationsService {
       return this.mapResult(conversation);
     }
 
-    conversation = await this.conversationsRepo.create({
-      company_id: dto.company_id,
-      client_id: dto.client_id,
-      channel_connection_id: dto.channel_connection_id,
-      end_user_id: dto.end_user_id,
-      origin_channel: dto.origin_channel,
-      external_conversation_key: dto.conversation_key,
-      metadata: dto.metadata,
-    });
+    try {
+      conversation = await this.conversationsRepo.create({
+        company_id: dto.company_id,
+        client_id: dto.client_id,
+        channel_connection_id: dto.channel_connection_id,
+        end_user_id: dto.end_user_id,
+        origin_channel: dto.origin_channel,
+        external_conversation_key: dto.conversation_key,
+        metadata: dto.metadata,
+      });
+    } catch (err: any) {
+      // Corrida no find-or-create: a constraint única (client_id,
+      // external_conversation_key) indica que outra requisição criou a conversa
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002' &&
+        dto.conversation_key
+      ) {
+        const existing = await this.conversationsRepo.findByExternalKey(
+          dto.client_id,
+          dto.conversation_key,
+        );
+        if (!existing) throw err;
+        conversation = existing;
+        this.logger.warn(
+          { conversation_id: conversation.id },
+          'Race no find-or-create: reaproveitando conversa criada concorrentemente',
+        );
+        return this.mapResult(conversation);
+      }
+      throw err;
+    }
 
     // Mapeia variáveis de entrada (CRM, Webhook, API, Discador) para o estado da sessão
     try {

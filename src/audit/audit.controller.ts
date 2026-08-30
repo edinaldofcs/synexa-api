@@ -22,12 +22,11 @@ export class AuditController {
   @Get('summary')
   getMetricsSummary(
     @CurrentUser() user: any,
-    @Query('company_id') company_id?: string,
     @Query('client_id') client_id?: string,
   ) {
     const ctx = extractTenantContext(user);
     return this.auditService.getMetricsSummary({
-      company_id: company_id || ctx.companyId,
+      company_id: ctx.companyId,
       client_id,
     });
   }
@@ -35,7 +34,6 @@ export class AuditController {
   @Get('credentials')
   listCredentialAuditLogs(
     @CurrentUser() user: any,
-    @Query('company_id') company_id?: string,
     @Query('client_id') client_id?: string,
     @Query('provider') provider?: string,
     @Query('page', new DefaultValuePipe(DEFAULT_PAGE), ParseIntPipe)
@@ -49,7 +47,7 @@ export class AuditController {
       MAX_LIMIT,
     );
     return this.auditService.listCredentialAuditLogs({
-      company_id: company_id || ctx.companyId,
+      company_id: ctx.companyId,
       client_id,
       provider,
       page,
@@ -60,7 +58,6 @@ export class AuditController {
   @Get('agent-runs')
   listAgentRuns(
     @CurrentUser() user: any,
-    @Query('company_id') company_id?: string,
     @Query('client_id') client_id?: string,
     @Query('conversation_id') conversation_id?: string,
     @Query('request_id') request_id?: string,
@@ -76,7 +73,7 @@ export class AuditController {
       MAX_LIMIT,
     );
     return this.auditService.listAgentRuns({
-      company_id: company_id || ctx.companyId,
+      company_id: ctx.companyId,
       client_id,
       conversation_id,
       request_id,
@@ -94,7 +91,6 @@ export class AuditController {
   @Get('tool-calls')
   listToolCalls(
     @CurrentUser() user: any,
-    @Query('company_id') company_id?: string,
     @Query('client_id') client_id?: string,
     @Query('conversation_id') conversation_id?: string,
     @Query('agent_run_id') agent_run_id?: string,
@@ -112,7 +108,7 @@ export class AuditController {
       MAX_LIMIT,
     );
     return this.auditService.listToolCalls({
-      company_id: company_id || ctx.companyId,
+      company_id: ctx.companyId,
       client_id,
       conversation_id,
       agent_run_id,
@@ -127,7 +123,6 @@ export class AuditController {
   @Get('message-events')
   listMessageEvents(
     @CurrentUser() user: any,
-    @Query('company_id') company_id?: string,
     @Query('client_id') client_id?: string,
     @Query('conversation_id') conversation_id?: string,
     @Query('message_id') message_id?: string,
@@ -144,7 +139,7 @@ export class AuditController {
       MAX_LIMIT,
     );
     return this.auditService.listMessageEvents({
-      company_id: company_id || ctx.companyId,
+      company_id: ctx.companyId,
       client_id,
       conversation_id,
       message_id,
@@ -158,7 +153,6 @@ export class AuditController {
   @Get('inbound-events')
   listInboundEvents(
     @CurrentUser() user: any,
-    @Query('company_id') company_id?: string,
     @Query('client_id') client_id?: string,
     @Query('request_id') request_id?: string,
     @Query('status') status?: string,
@@ -173,7 +167,7 @@ export class AuditController {
       MAX_LIMIT,
     );
     return this.auditService.listInboundEvents({
-      company_id: company_id || ctx.companyId,
+      company_id: ctx.companyId,
       client_id,
       request_id,
       status,

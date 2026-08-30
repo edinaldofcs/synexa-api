@@ -164,11 +164,15 @@ export class WorkflowVersionsService {
       version.status === 'published' &&
       (dto.captureCurrentState || dto.snapshot)
     ) {
-      await this.applySnapshotInTransaction(
-        clientId,
-        nextSnapshot as any,
-        this.prisma,
-      );
+      // Transação real: deletes de agents/apis/subagents/tracks + recriação
+      // devem ser atômicos; falha no meio não pode deixar o workflow destruído
+      await this.prisma.$transaction(async (tx) => {
+        await this.applySnapshotInTransaction(
+          clientId,
+          nextSnapshot as any,
+          tx,
+        );
+      });
       void this.metadataService.refresh(clientId);
     }
 

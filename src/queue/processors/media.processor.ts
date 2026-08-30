@@ -113,7 +113,9 @@ export class MediaProcessor {
       apiKey,
     }).audio.transcriptions.create({
       file,
-      model: process.env.MEDIA_TRANSCRIPTION_MODEL || 'whisper-1',
+      // whisper-1 é id da OpenAI e não existe na Groq (model_not_found);
+      // default Groq: whisper-large-v3-turbo (mesmo padrão do hybrid-stt)
+      model: process.env.MEDIA_TRANSCRIPTION_MODEL || 'whisper-large-v3-turbo',
     });
 
     return response.text;

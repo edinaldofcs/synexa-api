@@ -26,7 +26,9 @@ for (let i = 0; i < 256; i++) {
   } else {
     sample = ((mantissa << 4) + 264) << (exponent - 1);
   }
-  aLawToPcmTable[i] = sign ? -sample : sample;
+  // Convenção ITU G.711 A-law (g711.c): após XOR 0x55, MSB=1 é POSITIVO
+  // (zero positivo = 0xD5, zero negativo = 0x55)
+  aLawToPcmTable[i] = sign ? sample : -sample;
 }
 
 const pcmToMuLawTable = new Uint8Array(65536);
@@ -68,7 +70,9 @@ for (let val = -32768; val <= 32767; val++) {
 
 const pcmToALawTable = new Uint8Array(65536);
 function pcm16ToALaw(sample: number): number {
-  let sign = sample < 0 ? 0x80 : 0;
+  // Convenção ITU G.711 A-law (g711.c): positivo usa máscara 0xD5,
+  // negativo 0x55 — o bit de sinal vai na máscara do XOR final
+  const mask = sample >= 0 ? 0xd5 : 0x55;
   if (sample < 0) sample = -sample;
   if (sample > 32767) sample = 32767;
   let exponent = 0;
@@ -101,9 +105,8 @@ function pcm16ToALaw(sample: number): number {
     exponent = 0;
     mantissa = (sample >> 3) & 0x0f;
   }
-  let aVal = (exponent << 4) | mantissa;
-  if (sign) aVal |= 0x80;
-  return (aVal ^ 0x55) & 0xff;
+  const aVal = (exponent << 4) | mantissa;
+  return (aVal ^ mask) & 0xff;
 }
 for (let val = -32768; val <= 32767; val++) {
   pcmToALawTable[val + 32768] = pcm16ToALaw(val);
@@ -180,6 +183,14 @@ export class RtpChannelSession {
       pcm24Or16,
       this.codec,
     );
+    // Teto da fila (120s @ 8kHz = 1.920 frames de 160B): o Gemini produz mais
+    // rápido que o dreno de 1 frame/20ms; sem teto a memória cresce sem bound
+    const maxQueueBytes = 160 * 9600;
+    while (this.outboundQueueBytes + encodedG711.length > maxQueueBytes) {
+      const dropped = this.outboundQueue.shift();
+      if (!dropped) break;
+      this.outboundQueueBytes -= dropped.length;
+    }
     this.outboundQueue.push(encodedG711);
     this.outboundQueueBytes += encodedG711.length;
   }

@@ -161,7 +161,16 @@ export class OpenRouterProvider implements LLMProvider {
             };
             const functionName = tc.function.name;
             calledTools.push(functionName);
-            const args = JSON.parse(tc.function.arguments);
+            // Args truncados/malformados do LLM não devem derrubar o request
+            let args: Record<string, unknown>;
+            try {
+              args = JSON.parse(tc.function.arguments || '{}');
+            } catch {
+              this.logger.warn(
+                `Argumentos inválidos do LLM para ${functionName}; seguindo com objeto vazio`,
+              );
+              args = {};
+            }
 
             this.logger.log(`OpenRouter chamou: ${functionName}`);
 

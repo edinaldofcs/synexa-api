@@ -8,6 +8,7 @@ import { ClientMetadataService } from '../common/metadata/client-metadata.servic
 import { ApisRepository } from './repositories/apis.repository';
 import { CreateApiDto } from './dto/create-api.dto';
 import { UpdateApiDto } from './dto/update-api.dto';
+import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 
 @Injectable()
 export class ApisService {
@@ -87,11 +88,18 @@ export class ApisService {
     headers?: Record<string, string>;
     body?: any;
   }) {
-    if (!payload.url || !payload.url.startsWith('http')) {
+    if (!payload.url || !/^https?:\/\//i.test(payload.url)) {
       throw new BadRequestException(
         'URL inválida. Deve iniciar com http:// ou https://',
       );
     }
+
+    // SSRF guard: bloqueia localhost, ranges privados, CGNAT e hosts
+    // não-resolvíveis (fail-closed contra DNS rebinding)
+    await validateWebhookUrl(
+      payload.url,
+      process.env.ENVIRONMENT === 'development',
+    );
 
     const startTime = Date.now();
     const controller = new AbortController();
@@ -110,13 +118,7 @@ export class ApisService {
             : JSON.stringify(payload.body)
           : undefined;
 
-      let targetUrl = payload.url;
-      if (targetUrl.startsWith('/')) {
-        const port = process.env.PORT || 3000;
-        targetUrl = `http://127.0.0.1:${port}${targetUrl}`;
-      }
-
-      const response = await fetch(targetUrl, {
+      const response = await fetch(payload.url, {
         method: payload.method || 'GET',
         headers: {
           'User-Agent': 'Synexa-Api-Tester/1.0',

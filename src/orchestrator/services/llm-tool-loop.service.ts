@@ -291,7 +291,7 @@ export class LlmToolLoopService {
           call?.function?.arguments,
         );
 
-        if (!tool && !functionName.startsWith('subagent_')) {
+        if (!functionName || (!tool && !functionName.startsWith('subagent_'))) {
           messages.push({
             role: 'tool',
             tool_call_id: call.id,

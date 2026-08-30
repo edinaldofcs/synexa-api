@@ -223,6 +223,13 @@ export class TextAiExecutionService {
       throw new ConflictException('Agent processing is locked, will retry');
     }
 
+    // Watchdog: renova o lock durante o processamento — LLM + tools podem
+    // exceder o TTL de 60s e sem renovação outro worker processaria a mesma
+    // conversa em paralelo (resposta duplicada ao usuário)
+    const renewTimer = setInterval(() => {
+      void this.redisService.renewLock(lockKey, 60).catch(() => undefined);
+    }, 30_000);
+
     try {
       const result = await this.orchestrationService.processMessage(
         data.conversation_id,
@@ -250,6 +257,7 @@ export class TextAiExecutionService {
         },
       });
     } finally {
+      clearInterval(renewTimer);
       await this.redisService.releaseLock(lockKey);
     }
   }

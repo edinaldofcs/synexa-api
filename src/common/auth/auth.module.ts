@@ -28,6 +28,10 @@ export class AuthModule {
             provide: APP_GUARD,
             useClass: AuthGuard,
           },
+          {
+            provide: APP_GUARD,
+            useClass: RolesGuard,
+          },
         ],
         exports: [RolesGuard],
       };
@@ -45,6 +49,10 @@ export class AuthModule {
         {
           provide: APP_GUARD,
           useClass: AuthGuard,
+        },
+        {
+          provide: APP_GUARD,
+          useClass: RolesGuard,
         },
       ],
       exports: [RolesGuard],

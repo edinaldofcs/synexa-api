@@ -58,9 +58,11 @@ function agentPartToGeminiPart(part: MessagePart): any {
     case 'text':
       return { text: part.text || '' };
     case 'image':
-      if (part.media_url)
-        return { inlineData: { mimeType: 'image/*', data: part.media_url } };
-      return { text: `[Image: ${part.media_asset_id || 'unknown'}]` };
+      // media_url é caminho de storage (não base64): inlineData inválido
+      // quebraria a chamada inteira; sinaliza a imagem como texto
+      return {
+        text: `[Imagem anexada pelo usuário: ${part.media_url || part.media_asset_id || 'sem url'}]`,
+      };
     case 'audio':
       return { text: `[Audio: ${part.media_asset_id || 'unknown'}]` };
     case 'tool_result':
@@ -94,6 +96,8 @@ function agentHistoryToGemini(
 
 const SYSTEM_SUFFIX =
   '\n\nIMPORTANTE: Ao chamar ferramentas, certifique-se de passar valores numéricos (integer/number) SEM ASPAS. Não use strings para campos que esperam números.';
+
+const MAX_TOOL_LOOPS = 10;
 
 export class GeminiProvider implements LLMProvider {
   private readonly logger = new Logger(GeminiProvider.name);
@@ -169,8 +173,15 @@ export class GeminiProvider implements LLMProvider {
       }
 
       let functionCalls = response.functionCalls();
+      let toolLoops = 0;
 
       while (functionCalls && functionCalls.length > 0) {
+        if (++toolLoops > MAX_TOOL_LOOPS) {
+          this.logger.warn(
+            `Gemini excedeu ${MAX_TOOL_LOOPS} iterações de tool call; encerrando loop`,
+          );
+          break;
+        }
         const call = functionCalls[0];
         const { name: functionName, args } = call;
 
@@ -311,8 +322,15 @@ export class GeminiProvider implements LLMProvider {
       }
 
       let functionCalls = response.functionCalls();
+      let toolLoops = 0;
 
       while (functionCalls && functionCalls.length > 0) {
+        if (++toolLoops > MAX_TOOL_LOOPS) {
+          this.logger.warn(
+            `Gemini chatWithParts excedeu ${MAX_TOOL_LOOPS} iterações de tool call; encerrando loop`,
+          );
+          break;
+        }
         for (const call of functionCalls) {
           const { name: toolName, args } = call;
           this.logger.log({ toolName, args }, 'Gemini tool call');
