@@ -8,6 +8,7 @@ import { DevOnlyGuard } from '../common/auth/dev-only.guard';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { AnalyticsModule } from '../analytics/analytics.module';
 import { MediaModule } from '../media/media.module';
+import { WebSearchModule } from '../agents/web-search/web-search.module';
 import { AgentConfigResolver } from './services/agent-config-resolver.service';
 import { RagSearchService } from './services/rag-search.service';
 import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
@@ -20,7 +21,9 @@ import { ProviderCircuitBreakerService } from './services/circuit-breaker.servic
 import { FallbackProviderService } from './services/fallback-provider.service';
 
 @Module({
-  imports: [ConversationsModule, MediaModule, AnalyticsModule],
+  // WebSearchModule declarado aqui (e nao apenas via AgentsModule no app da
+  // API) para que o contexto de workers resolva ToolCallDispatcher -> WebSearch.
+  imports: [ConversationsModule, MediaModule, AnalyticsModule, WebSearchModule],
   controllers: [OrchestratorController],
   providers: [
     OrchestratorService,

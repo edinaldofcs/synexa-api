@@ -43,8 +43,10 @@ import { AppService } from './app.service';
     }),
     ThrottlerModule.forRoot([
       {
-        ttl: 60000,
-        limit: 100,
+        // Configuravel p/ testes de carga (THROTTLE_LIMIT=10000); prod usa o
+        // default 100 req/min por IP.
+        ttl: Number(process.env.THROTTLE_TTL_MS || 60000),
+        limit: Number(process.env.THROTTLE_LIMIT || 100),
       },
     ]),
     CommonModule,
