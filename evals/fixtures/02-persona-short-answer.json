@@ -1,5 +1,6 @@
 {
-  "output": "Ola! Posso localizar seu acordo agora. Pode me confirmar o CPF do titular?",
-  "fixture_source": "handwritten",
-  "note": "Fixture de validacao do harness. Substitua por 'recorded' rodando: npm run evals:live"
+  "output": "Olá! Para verificar o valor do seu acordo, preciso do número da sua conta ou do contrato. Por favor, informe esses dados.",
+  "fixture_source": "recorded",
+  "recorded_at": "2026-08-30T20:08:17.437Z",
+  "model": "openai/gpt-oss-20b"
 }

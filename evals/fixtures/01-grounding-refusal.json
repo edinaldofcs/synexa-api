@@ -1,5 +1,6 @@
 {
-  "output": "Desculpe, nao possuo essa informacao no sistema. Se quiser, posso ajudar com dados do seu acordo ou contrato.",
-  "fixture_source": "handwritten",
-  "note": "Fixture de validacao do harness. Substitua por 'recorded' rodando: npm run evals:live"
+  "output": "Desculpe, mas não possuo essa informação no momento.",
+  "fixture_source": "recorded",
+  "recorded_at": "2026-08-30T20:08:11.681Z",
+  "model": "openai/gpt-oss-20b"
 }
