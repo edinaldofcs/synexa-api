@@ -117,4 +117,21 @@ export class AdminController {
   ) {
     return this.adminService.resetUserPassword(actor, id);
   }
+
+  // ── LGPD: direito ao esquecimento do titular final (art. 18, VI) ────────
+
+  @Delete('end-users/:id')
+  @Roles(ROLES.PLATFORM_ADMIN, ROLES.COMPANY_ADMIN)
+  async eraseEndUser(
+    @CurrentUser() actor: ActorContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('confirm') confirm?: string,
+  ) {
+    if (confirm !== id) {
+      throw new BadRequestException(
+        'Confirmation required: provide ?confirm=<end_user_id>',
+      );
+    }
+    return this.adminService.eraseEndUserData(actor, id);
+  }
 }

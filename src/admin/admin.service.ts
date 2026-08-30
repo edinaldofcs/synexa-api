@@ -142,6 +142,129 @@ export class AdminService {
     });
   }
 
+  // ── Erasure de titular (LGPD art. 18, VI) ─────────────────────────────
+
+  /**
+   * Remove/anonimiza dados pessoais de um end_user mantendo integridade
+   * financeira (valores de acordo permanecem p/ defesa legal - art. 16, II).
+   * Arquivos fisicos de midia NAO sao removidos do bucket (limitacao
+   * documentada; as linhas com transcript/ocr_text sao removidas).
+   */
+  async eraseEndUserData(actor: ActorContext, endUserId: string) {
+    const endUser = await this.prisma.end_users.findUnique({
+      where: { id: endUserId },
+      select: { id: true, name: true, company_id: true },
+    });
+    if (!endUser) throw new NotFoundException('Titular nao encontrado');
+
+    if (!isPlatformAdmin(actor.role)) {
+      this.assertActorCompany(actor);
+      if (actor.company_id !== endUser.company_id) {
+        throw new ForbiddenException('Titular de outra empresa');
+      }
+    }
+
+    const conversations = await this.prisma.conversations.findMany({
+      where: { end_user_id: endUserId },
+      select: { id: true },
+    });
+    const convIds = conversations.map((c) => c.id);
+
+    const identities = await this.prisma.channel_identities.findMany({
+      where: { end_user_id: endUserId },
+      select: { external_user_id: true, normalized_phone: true },
+    });
+    const identifiers = [
+      ...new Set(
+        identities
+          .flatMap((i) => [i.external_user_id, i.normalized_phone])
+          .filter((v): v is string => !!v),
+      ),
+    ];
+
+    const erasedAt = new Date().toISOString();
+    const counts = await this.prisma.$transaction(async (tx) => {
+      // 1. Conteudo de execucao com PII (arguments/result/trace)
+      const toolCalls = await tx.tool_calls.deleteMany({
+        where: { conversation_id: { in: convIds } },
+      });
+      const agentRuns = await tx.agent_runs.deleteMany({
+        where: { conversation_id: { in: convIds } },
+      });
+
+      // 2. Midia com transcript/ocr do titular (linhas; arquivos em bucket
+      //    precisam de cleanup de storage - ver plano LGPD)
+      const media = await tx.media_assets.deleteMany({
+        where: { messages: { conversation_id: { in: convIds } } },
+      });
+
+      // 3. Telemetria de voz: mantem metricas, remove numero do chamador
+      const telemetry = await tx.voice_session_telemetry.updateMany({
+        where: { conversation_id: { in: convIds } },
+        data: { caller_number: null, metadata: {} },
+      });
+
+      // 4. Conversas, mensagens (parts/state cascateiam) e eventos
+      const messages = await tx.messages.deleteMany({
+        where: { conversation_id: { in: convIds } },
+      });
+      const removedConversations = await tx.conversations.deleteMany({
+        where: { end_user_id: endUserId },
+      });
+
+      // 5. Eventos de negocio sobreviventes sem conversa: desvincula titular
+      const businessEvents = await tx.business_events.updateMany({
+        where: { end_user_id: endUserId },
+        data: { end_user_id: null, values: {} },
+      });
+
+      // 6. Interacoes de cobranca: remove conteudo pessoal, preserva valores
+      //    financeiros (obrigacao legal/defesa de direitos - art. 16, II)
+      const interactions = await tx.painel_interactions.updateMany({
+        where: {
+          company_id: endUser.company_id,
+          OR: [
+            ...(identifiers.length ? [{ client_identifier: { in: identifiers } }] : []),
+            ...(endUser.name ? [{ client_name: endUser.name }] : []),
+          ],
+        },
+        data: {
+          client_identifier: null,
+          client_name: null,
+          summary: null,
+          messages: [],
+          context_variables: {},
+          recording_url: null,
+        },
+      });
+
+      // 7. Identidades de canal e o registro do titular
+      await tx.channel_identities.deleteMany({ where: { end_user_id: endUserId } });
+      await tx.end_users.delete({ where: { id: endUserId } });
+
+      return {
+        conversations_removed: removedConversations.count,
+        messages_removed: messages.count,
+        media_removed: media.count,
+        tool_calls_removed: toolCalls.count,
+        agent_runs_removed: agentRuns.count,
+        telemetry_anonymized: telemetry.count,
+        business_events_stripped: businessEvents.count,
+        interactions_anonymized: interactions.count,
+      };
+    });
+
+    this.logger.log({
+      event: 'lgpd_erasure',
+      request_id: (actor as any)?.request_id,
+      end_user_id: endUserId,
+      company_id: endUser.company_id,
+      ...counts,
+    });
+
+    return { erased: true, end_user_id: endUserId, erased_at: erasedAt, ...counts };
+  }
+
   // ── Users (platform_admin global; company_admin restrito à própria empresa) ──
 
   async listUsers(actor: ActorContext) {
