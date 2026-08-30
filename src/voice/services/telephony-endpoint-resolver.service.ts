@@ -20,10 +20,17 @@ export interface TelephonyRouteLookup {
   /**
    * Dica legada enviada pelo dialplan/discador via variáveis SYNEXA_*.
    * Tem precedência sobre o roteamento por DID para manter compatibilidade.
+   * Só é honrada quando `trusted` indica um ingresso autenticado
+   * (allowlist de IP, shared secret ou token de discador).
    */
   clientIdHint?: string;
   /** Sobrescreve o agent_step configurado no endpoint (SYNEXA_AGENT_STEP) */
   agentStepHint?: string;
+  /**
+   * Ingresso autenticado (allowlist de IP, shared secret ou hash de token).
+   * Sem trust, clientIdHint/agentStepHint são ignorados (anti cross-tenant).
+   */
+  trusted?: boolean;
 }
 
 export interface ResolvedTelephonyRoute {
@@ -57,7 +64,18 @@ export class TelephonyEndpointResolverService {
   public async resolve(
     lookup: TelephonyRouteLookup,
   ): Promise<ResolvedTelephonyRoute | null> {
-    const cacheKey = this.cacheKey(lookup);
+    // Hints do chamador (SYNEXA_CLIENT_ID/AGENT_STEP) só valem de ingressos
+    // confiaveis; sem trust sao descartados antes da rota e do cache
+    const effectiveLookup: TelephonyRouteLookup = lookup.trusted
+      ? lookup
+      : { ...lookup, clientIdHint: undefined, agentStepHint: undefined };
+    if (lookup.clientIdHint && !lookup.trusted) {
+      this.logger.warn(
+        '[EndpointResolver] clientIdHint ignorado: ingresso sem autenticacao (trusted=false)',
+      );
+    }
+
+    const cacheKey = this.cacheKey(effectiveLookup);
 
     if (cacheKey) {
       try {
@@ -70,7 +88,7 @@ export class TelephonyEndpointResolverService {
       }
     }
 
-    const resolved = await this.resolveFromDatabase(lookup);
+    const resolved = await this.resolveFromDatabase(effectiveLookup);
     if (resolved && cacheKey) {
       try {
         await this.redis.set(cacheKey, resolved, ROUTE_CACHE_TTL_SECONDS);

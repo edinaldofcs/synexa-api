@@ -142,4 +142,56 @@ describe('AuthService impersonation', () => {
       BadRequestException,
     );
   });
+
+  it('checagem de papel usa request.user (actor): rebaixado não impersona mesmo com sessão stale', async () => {
+    const target = {
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Empresa Beta',
+      status: 'active',
+    };
+    const { service } = buildService(target);
+    const demoted = { ...platformAdmin, role: ROLES.OPERATOR };
+
+    await expect(
+      service.enterImpersonation(platformAdmin, target.id, demoted),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('actor já impersonando (original_role recarregado) mantém bloqueio de visualização aninhada', async () => {
+    const target = {
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Empresa Beta',
+      status: 'active',
+    };
+    const { service } = buildService(target);
+    const viewingActor: SessionUser = {
+      ...platformAdmin,
+      role: ROLES.COMPANY_ADMIN,
+      company_id: '22222222-2222-4222-8222-222222222222',
+      company_name: 'Empresa Beta',
+      original_role: ROLES.PLATFORM_ADMIN,
+      original_company_id: platformAdmin.company_id,
+      original_company_name: 'Synexa Admin',
+    };
+
+    await expect(
+      service.enterImpersonation(viewingActor, target.id, viewingActor),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('define impersonating_until (60min) ao entrar na visualização', async () => {
+    const target = {
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Empresa Beta',
+      status: 'active',
+    };
+    const { service } = buildService(target);
+
+    const result = await service.enterImpersonation(platformAdmin, target.id);
+
+    expect(result.impersonating_until).toBeGreaterThan(Date.now());
+    expect(result.impersonating_until).toBeLessThanOrEqual(
+      Date.now() + 60 * 60 * 1000,
+    );
+  });
 });

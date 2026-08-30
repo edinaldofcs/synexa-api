@@ -3,6 +3,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  Matches,
   MinLength,
 } from 'class-validator';
 import { ASSIGNABLE_ROLES, ROLES } from '../../common/auth/roles.constants';
@@ -25,5 +26,8 @@ export class AdminUpdateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(8, { message: 'Senha deve ter no mínimo 8 caracteres' })
+  @Matches(/(?=.*[a-zA-Z])(?=.*\d)/, {
+    message: 'Senha deve conter letras e números',
+  })
   password?: string;
 }

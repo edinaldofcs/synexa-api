@@ -12,6 +12,12 @@ const SENSITIVE_KEYS = new Set([
   'token',
   'api_key',
   'apiKey',
+  'authorization',
+  'auth',
+  'bearer',
+  'cookie',
+  'cookies',
+  'set-cookie',
   'credit_card',
   'card_number',
   'cvv',
@@ -54,6 +60,9 @@ const SENSITIVE_VALUE_PATTERNS = [
   /^\d{3}\.\d{3}\.\d{3}-\d{2}$/, // CPF
   /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/, // CNPJ
   /^\+?\d{10,15}$/, // telefone
+  /^Bearer\s+\S+/i, // Bearer token
+  /^sk-[A-Za-z0-9_-]{8,}$/, // API key sk-
+  /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/, // JWT
 ];
 
 function isSensitiveValue(value: unknown): boolean {

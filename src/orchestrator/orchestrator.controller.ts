@@ -7,13 +7,19 @@ import {
   Logger,
   Res,
   UseGuards,
+  HttpStatus,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from '../common/auth/public.decorator';
+import { CurrentUser } from '../common/auth/current-user.decorator';
+import { RedisService } from '../common/redis/redis.service';
 import { CompatibilityService } from './compatibility.service';
 import { OrchestratorService } from './orchestrator.service';
-import { TestChatService } from './test-chat.service';
+import {
+  TestChatService,
+  type TestChatUserContext,
+} from './test-chat.service';
 import { ClearTestChatDto, TestChatDto } from './dto/test-chat.dto';
 import {
   ChatRequestDto,
@@ -22,6 +28,12 @@ import {
 } from './dto/chat-request.dto';
 import { DevOnlyGuard } from '../common/auth/dev-only.guard';
 import { ListModelsDto } from './dto/list-models.dto';
+import {
+  acquireSseStream,
+  releaseSseStream,
+  parseMaxConcurrentStreams,
+  SSE_STREAM_DEADLINE_MS,
+} from './utils/sse-stream-counter.util';
 
 @Controller('orchestrator')
 export class OrchestratorController {
@@ -31,13 +43,65 @@ export class OrchestratorController {
     private readonly orchestratorService: OrchestratorService,
     private readonly compatibilityService: CompatibilityService,
     private readonly testChatService: TestChatService,
+    private readonly redisService: RedisService,
   ) {}
 
+  /**
+   * S02: extrai o contexto do token para o tenant check no service.
+   * Sem user (uso interno/testes) retorna undefined e o service mantem o
+   * comportamento atual.
+   */
+  private toUserContext(user: any): TestChatUserContext | undefined {
+    if (!user) return undefined;
+    const id = user.id || user.sub;
+    if (!id) return undefined;
+    return {
+      id,
+      company_id: user.company_id || null,
+      role: user.role || 'operator',
+    };
+  }
+
+  private maxConcurrentStreams(): number {
+    return parseMaxConcurrentStreams(process.env.LLM_MAX_CONCURRENT_STREAMS);
+  }
+
+  private async tryAcquireStreamSlot(
+    userCtx: TestChatUserContext | undefined,
+  ): Promise<{ allowed: boolean; active: number | null }> {
+    if (!userCtx) return { allowed: true, active: null };
+    try {
+      const active = await acquireSseStream(
+        this.redisService.getClient(),
+        userCtx.id,
+      );
+      if (active > this.maxConcurrentStreams()) {
+        await releaseSseStream(this.redisService.getClient(), userCtx.id);
+        return { allowed: false, active };
+      }
+      return { allowed: true, active };
+    } catch (error: any) {
+      // Redis indisponivel: fail-open (a rota tem Throttle proprio e deadline)
+      this.logger.warn(
+        { error: error.message },
+        'TestChatStream: falha ao checar contador de streams concorrentes',
+      );
+      return { allowed: true, active: null };
+    }
+  }
+
+  private async releaseStreamSlot(userCtx: TestChatUserContext | undefined) {
+    if (!userCtx) return;
+    await releaseSseStream(this.redisService.getClient(), userCtx.id);
+  }
+
   @Post('test-chat')
-  async testChat(@Body() dto: TestChatDto) {
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  async testChat(@CurrentUser() user: any, @Body() dto: TestChatDto) {
+    const userCtx = this.toUserContext(user);
     try {
       this.logger.log({ provider: dto.provider, model: dto.model }, 'TestChat');
-      return await this.testChatService.send(dto);
+      return await this.testChatService.send(dto, undefined, userCtx);
     } catch (error: any) {
       this.logger.error({ error: error.message }, 'TestChat error');
       return { error: error.message };
@@ -45,9 +109,26 @@ export class OrchestratorController {
   }
 
   @Post('test-chat/stream')
-  async testChatStream(@Body() dto: TestChatDto, @Res() res: Response) {
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  async testChatStream(
+    @CurrentUser() user: any,
+    @Body() dto: TestChatDto,
+    @Res() res: Response,
+  ) {
     if (process.env.LLM_STREAMING_ENABLED === 'false') {
       return res.status(404).json({ error: 'Streaming desabilitado' });
+    }
+
+    const userCtx = this.toUserContext(user);
+    const slot = await this.tryAcquireStreamSlot(userCtx);
+    if (!slot.allowed) {
+      this.logger.warn(
+        { userId: userCtx?.id, active: slot.active, max: this.maxConcurrentStreams() },
+        'TestChatStream: cap de streams concorrentes atingido',
+      );
+      return res
+        .status(HttpStatus.TOO_MANY_REQUESTS)
+        .json({ error: 'Too many concurrent streams' });
     }
 
     this.logger.log({ provider: dto.provider, model: dto.model }, 'TestChatStream');
@@ -61,14 +142,32 @@ export class OrchestratorController {
     res.on('close', () => {
       closed = true;
     });
+
+    // S05: deadline de 120s - nenhum write acontece apos o limite
+    const startedAt = Date.now();
     const send = (event: string, data: unknown) => {
       if (closed) return;
+      if (Date.now() - startedAt > SSE_STREAM_DEADLINE_MS) {
+        this.logger.warn(
+          { userId: userCtx?.id },
+          'TestChatStream: deadline de 120s excedido, stream abortado',
+        );
+        closed = true;
+        try {
+          res.end();
+        } catch {
+          // resposta ja encerrada
+        }
+        return;
+      }
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
     try {
-      const result = await this.testChatService.send(dto, (chunk) =>
-        send('token', { token: chunk }),
+      const result = await this.testChatService.send(
+        dto,
+        (chunk) => send('token', { token: chunk }),
+        userCtx,
       );
       send('done', {
         text: result.text,
@@ -85,13 +184,15 @@ export class OrchestratorController {
         closed = true;
         res.end();
       }
+      await this.releaseStreamSlot(userCtx);
     }
   }
 
   @Delete('test-chat')
-  async clearTestChat(@Body() dto: ClearTestChatDto) {
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  async clearTestChat(@CurrentUser() user: any, @Body() dto: ClearTestChatDto) {
     try {
-      return await this.testChatService.clear(dto);
+      return await this.testChatService.clear(dto, this.toUserContext(user));
     } catch (error: any) {
       this.logger.error({ error: error.message }, 'Clear test chat error');
       return { error: error.message };
@@ -101,9 +202,20 @@ export class OrchestratorController {
   @Post('list-models')
   async listModels(@Body() body: ListModelsDto) {
     try {
+      let apiKey = body.apiKey;
+      // S43: em production a apiKey do body e ignorada (egress para validar
+      // chaves roubadas); usa apenas a credencial registrada via
+      // provider-key-resolver.
+      if (process.env.ENVIRONMENT === 'production' && apiKey) {
+        this.logger.warn(
+          { provider: body.provider },
+          'ListModels: apiKey no body ignorada em production',
+        );
+        apiKey = undefined;
+      }
       const models = await this.testChatService.listModels(
         body.provider,
-        body.apiKey,
+        apiKey,
         body.clientId,
       );
       return { models };

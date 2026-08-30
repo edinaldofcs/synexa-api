@@ -131,12 +131,38 @@ export class RtpChannelSession {
   private sendInterval: NodeJS.Timeout | null = null;
   private outboundQueue: Buffer[] = [];
   private outboundQueueBytes = 0;
+  private expectedRemoteIp = '';
+  private expectedRemotePort = 0;
+  private unexpectedPeerWarned = false;
+  private firstPacketWarned = false;
 
   constructor(
     private readonly callbacks: RtpSessionCallbacks,
     codec: 'ulaw' | 'alaw' = 'ulaw',
   ) {
     this.codec = codec;
+  }
+
+  /**
+   * Fixa o peer esperado (definido no setup via AMI/AudioSocket): pacotes
+   * UDP de outros IPs sao descartados (anti sequestro de midia). Sem esta
+   * chamada, o remote e fixado pelo primeiro pacote recebido.
+   */
+  public setExpectedRemote(ip: string, port: number): void {
+    this.expectedRemoteIp = ip;
+    this.expectedRemotePort = port;
+    if (!this.remoteIp && ip && port) {
+      this.remoteIp = ip;
+      this.remotePort = port;
+    }
+  }
+
+  public shouldAcceptPeer(address: string): boolean {
+    if (!this.expectedRemoteIp) return true;
+    return (
+      address.toLowerCase().replace(/^::ffff:/, '') ===
+      this.expectedRemoteIp.toLowerCase()
+    );
   }
 
   public async start(): Promise<number> {
@@ -149,7 +175,26 @@ export class RtpChannelSession {
       });
 
       this.socket.on('message', (msg, rinfo) => {
-        if (!this.remoteIp || !this.remotePort) {
+        if (this.expectedRemoteIp) {
+          if (
+            rinfo.address.toLowerCase().replace(/^::ffff:/, '') !==
+            this.expectedRemoteIp.toLowerCase()
+          ) {
+            if (!this.unexpectedPeerWarned) {
+              this.unexpectedPeerWarned = true;
+              this.logger.warn(
+                `[RtpSession] Pacote UDP descartado de origem inesperada (${rinfo.address}:${rinfo.port}); remote fixado em ${this.expectedRemoteIp}:${this.expectedRemotePort}`,
+              );
+            }
+            return;
+          }
+        } else if (!this.remoteIp || !this.remotePort) {
+          if (!this.firstPacketWarned) {
+            this.firstPacketWarned = true;
+            this.logger.warn(
+              `[RtpSession] Remote definido pelo primeiro pacote recebido (${rinfo.address}:${rinfo.port}); sem remote fixado no setup a midia pode ser sequestrada`,
+            );
+          }
           this.remoteIp = rinfo.address;
           this.remotePort = rinfo.port;
         }

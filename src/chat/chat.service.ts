@@ -1,13 +1,19 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createHmac } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { CreateMessageDto } from './dto/create-message.dto';
+import { sanitize } from '../common/utils/sanitize-log.util';
 
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async getConversations(companyId: string) {
     return this.prisma.conversations.findMany({
@@ -106,13 +112,29 @@ export class ChatService {
   }
 
   private async triggerWebhook(payload: Record<string, unknown>) {
+    const webhookUrl = this.configService.get<string>(
+      'CHAT_FORWARD_WEBHOOK_URL',
+      '',
+    );
+    if (!webhookUrl) return;
+
     try {
-      await fetch('https://prd.naldofcs-ai.com/webhook/receptor', {
+      const body = JSON.stringify(payload);
+      const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (encryptionKey) {
+        headers['x-synexa-signature'] = createHmac('sha256', encryptionKey)
+          .update(body)
+          .digest('hex');
+      }
+      await fetch(webhookUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        headers,
+        body,
       });
-      this.logger.log('Triggering webhook with payload:', payload);
+      this.logger.log(`Webhook forwarded with payload: ${JSON.stringify(sanitize(payload))}`);
     } catch (error) {
       this.logger.error('Error triggering webhook:', error);
     }

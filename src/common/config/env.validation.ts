@@ -362,6 +362,21 @@ export class EnvironmentVariables {
   )
   @IsOptional()
   GEMINI_WS_HANDSHAKE_TIMEOUT_MS?: number = 15000;
+
+  // S15: mantida como string ('true'/'false') para compatibilidade com a
+  // leitura === 'true' no ApiKeyGuard.
+  @IsIn(['true', 'false'], {
+    message: 'BYPASS_API_KEY_DEV must be "true" or "false"',
+  })
+  @IsOptional()
+  BYPASS_API_KEY_DEV?: string;
+
+  @IsNumber(
+    {},
+    { message: 'LLM_MAX_CONCURRENT_STREAMS must be a valid number' },
+  )
+  @IsOptional()
+  LLM_MAX_CONCURRENT_STREAMS?: number = 5;
 }
 
 export function validateEnv(
@@ -445,6 +460,11 @@ export function validateEnv(
     ) {
       throw new Error(
         'ENCRYPTION_KEY must be at least 32 characters in production environment',
+      );
+    }
+    if (validatedConfig.BYPASS_API_KEY_DEV === 'true') {
+      throw new Error(
+        'BYPASS_API_KEY_DEV cannot be enabled in production environment',
       );
     }
   }

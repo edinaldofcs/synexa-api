@@ -91,7 +91,7 @@ describe('TelephonyEndpointResolverService', () => {
     expect(db.painel_clients.findUnique).not.toHaveBeenCalled();
   });
 
-  it('hint legado SYNEXA_CLIENT_ID tem precedência', async () => {
+  it('hint legado SYNEXA_CLIENT_ID tem precedência (ingresso confiavel)', async () => {
     const legacyClient = { ...clientRow, id: 'client-legacy' };
     const { service, db } = makeService();
     (db.telephony_endpoints.findFirst as jest.Mock).mockResolvedValue(null); // sem match por DID
@@ -99,10 +99,24 @@ describe('TelephonyEndpointResolverService', () => {
 
     const route = await service.resolve({
       clientIdHint: 'client-legacy',
+      trusted: true,
     });
 
     expect(route!.client_id).toBe('client-legacy');
     expect(route!.provider).toBe('legacy_variables');
+  });
+
+  it('ignora clientIdHint sem trusted (anti cross-tenant)', async () => {
+    const { service, db } = makeService();
+    (db.telephony_endpoints.findFirst as jest.Mock).mockResolvedValue(null);
+    (db.painel_clients.findUnique as jest.Mock).mockResolvedValue(clientRow);
+
+    const route = await service.resolve({
+      clientIdHint: 'client-legacy',
+    });
+
+    expect(route).toBeNull();
+    expect(db.painel_clients.findUnique).not.toHaveBeenCalled();
   });
 
   it('usa cache Redis entre chamadas repetidas', async () => {

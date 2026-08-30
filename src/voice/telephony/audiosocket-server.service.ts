@@ -9,6 +9,10 @@ import * as net from 'net';
 import { AudioSocketAdapter } from '../adapters/audiosocket/audiosocket.adapter';
 import { TelephonyEndpointResolverService } from '../services/telephony-endpoint-resolver.service';
 import { VoiceSessionFactory } from '../services/voice-session.factory';
+import {
+  isVoiceIngressIpAllowed,
+  parseVoiceIngressAllowlist,
+} from './fastagi-server.service';
 import { AsteriskAmiService } from './asterisk-ami.service';
 
 /**
@@ -29,6 +33,9 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
   private server: net.Server | null = null;
   private port: number;
   private enabled: boolean;
+  private bindHost: string;
+  private ingressAllowlist: string[];
+  private environment: string;
 
   constructor(
     private readonly configService: ConfigService,
@@ -39,6 +46,13 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
     this.port = this.configService.get<number>('AUDIOSOCKET_PORT') || 8090;
     this.enabled =
       this.configService.get<boolean>('AUDIOSOCKET_ENABLED') ?? false;
+    this.bindHost =
+      this.configService.get<string>('AUDIOSOCKET_BIND_HOST') || '0.0.0.0';
+    this.ingressAllowlist = parseVoiceIngressAllowlist(
+      this.configService.get<string>('VOICE_INGRESS_ALLOWLIST'),
+    );
+    this.environment =
+      this.configService.get<string>('ENVIRONMENT') || 'development';
   }
 
   public onModuleInit(): void {
@@ -54,13 +68,19 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
   public start(): void {
     if (this.server) return;
 
+    if (this.environment === 'production' && !this.ingressAllowlist.length) {
+      throw new Error(
+        '[AudioSocket] VOICE_INGRESS_ALLOWLIST obrigatoria em ENVIRONMENT=production (fail-closed)',
+      );
+    }
+
     this.server = net.createServer((socket) => {
       this.handleConnection(socket);
     });
 
-    this.server.listen(this.port, '0.0.0.0', () => {
+    this.server.listen(this.port, this.bindHost, () => {
       this.logger.log(
-        `📞 [AudioSocket] Servidor TCP escutando em 0.0.0.0:${this.port}`,
+        `📞 [AudioSocket] Servidor TCP escutando em ${this.bindHost}:${this.port}`,
       );
     });
   }
@@ -74,6 +94,20 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleConnection(socket: net.Socket): Promise<void> {
+    const remoteAddress = socket.remoteAddress || '';
+    if (!isVoiceIngressIpAllowed(remoteAddress, this.ingressAllowlist)) {
+      this.logger.warn(
+        `[AudioSocket] Conexao recusada fora da allowlist (ip=${remoteAddress || 'unknown'})`,
+      );
+      socket.destroy();
+      return;
+    }
+
+    // Sem allowlist configurada o ingresso roda em modo nao confiavel:
+    // dicas de roteamento herdadas do canal (SYNEXA_CLIENT_ID/AGENT_STEP/
+    // VARS_JSON) sao ignoradas e o roteamento ocorre apenas pelo DID
+    const trusted = this.ingressAllowlist.length > 0;
+
     const adapter = new AudioSocketAdapter(socket);
 
     const channelId = await this.waitForChannelId(adapter);
@@ -146,7 +180,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
       if (channelVars['SYNEXA_CPF']) {
         customVars.cpf = channelVars['SYNEXA_CPF'];
       }
-      if (channelVars['SYNEXA_VARS_JSON']) {
+      if (trusted && channelVars['SYNEXA_VARS_JSON']) {
         try {
           const parsed = JSON.parse(channelVars['SYNEXA_VARS_JSON']);
           Object.assign(customVars, parsed);
@@ -171,8 +205,12 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
       const route = await this.endpointResolver.resolve({
         didNumber,
         providerName: adapter.providerName,
-        clientIdHint: channelVars['SYNEXA_CLIENT_ID'] || undefined,
-        agentStepHint: channelVars['SYNEXA_AGENT_STEP'] || undefined,
+        clientIdHint: trusted
+          ? channelVars['SYNEXA_CLIENT_ID'] || undefined
+          : undefined,
+        agentStepHint: trusted
+          ? channelVars['SYNEXA_AGENT_STEP'] || undefined
+          : undefined,
       });
 
       if (!route) {

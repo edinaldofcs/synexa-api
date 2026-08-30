@@ -42,6 +42,7 @@ describe('AuthController', () => {
     const result = await controller.login(
       { email: user.email, password: 'password' },
       response as any,
+      { ip: '127.0.0.1' } as any,
     );
 
     expect(result).toEqual({ user });

@@ -24,6 +24,7 @@ const DEFAULT_ALLOWED_MIME_TYPES = [
   'text/csv',
   'application/json',
 ];
+const BLOCKED_MIME_TYPES = new Set(['image/svg+xml']);
 
 @Injectable()
 export class MediaService {
@@ -230,11 +231,18 @@ export class MediaService {
     }
     this.validateFileSize(buffer.length);
 
+    const detectedType = await fileTypeFromBuffer(buffer);
+    if (!detectedType || !this.isAllowedMime(detectedType.mime)) {
+      throw new BadRequestException(
+        'Inline media content does not match allowed types',
+      );
+    }
+
     await this.ensureBucket();
     const storagePath = this.buildStoragePath(
       params.companyId,
       params.clientId,
-      `inline.${this.extensionForMime(mimeType)}`,
+      `inline.${detectedType.ext || this.extensionForMime(mimeType)}`,
     );
 
     if (this.isDevelopment && this.storageProvider) {
@@ -242,7 +250,7 @@ export class MediaService {
         this.bucketName,
         storagePath,
         buffer,
-        { contentType: mimeType, cacheControl: '3600' },
+        { contentType: detectedType.mime, cacheControl: '3600' },
       );
       if (error)
         throw new BadRequestException(`Storage upload failed: ${error}`);
@@ -252,7 +260,7 @@ export class MediaService {
         this.bucketName,
       ).upload(storagePath, buffer, {
         cacheControl: '3600',
-        contentType: mimeType,
+        contentType: detectedType.mime,
         upsert: false,
       });
       if (error)
@@ -268,7 +276,7 @@ export class MediaService {
         message_id: params.messageId,
         storage_bucket: this.bucketName,
         storage_path: storagePath,
-        mime_type: mimeType,
+        mime_type: detectedType.mime,
         file_size: buffer.length,
         transcript: params.transcript || null,
         status: 'ready',
@@ -287,6 +295,14 @@ export class MediaService {
     const asset = await this.findOne(assetId, userId);
     if (!asset.storage_bucket || !asset.storage_path) {
       throw new BadRequestException('Media asset has no stored file');
+    }
+
+    const requester = await this.prisma.users.findUnique({
+      where: { id: userId },
+      select: { company_id: true },
+    });
+    if (!requester?.company_id || asset.company_id !== requester.company_id) {
+      throw new ForbiddenException('Asset does not belong to your company');
     }
 
     if (this.isDevelopment && this.storageProvider) {
@@ -321,12 +337,16 @@ export class MediaService {
   async update(assetId: string, dto: UpdateMediaAssetDto, userId: string) {
     const asset = await this.findOne(assetId, userId);
 
+    if ('storage_bucket' in dto || 'storage_path' in dto) {
+      throw new BadRequestException(
+        'storage_bucket and storage_path cannot be modified',
+      );
+    }
+
     return this.prisma.media_assets.update({
       where: { id: asset.id },
       data: {
         status: dto.status,
-        storage_bucket: dto.storage_bucket,
-        storage_path: dto.storage_path,
         transcript: dto.transcript,
         ocr_text: dto.ocr_text,
         error_message: dto.error_message,
@@ -379,6 +399,7 @@ export class MediaService {
   }
 
   private isAllowedMime(mime: string): boolean {
+    if (BLOCKED_MIME_TYPES.has(mime)) return false;
     return (
       DEFAULT_ALLOWED_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix)) ||
       DEFAULT_ALLOWED_MIME_TYPES.includes(mime)
@@ -386,12 +407,7 @@ export class MediaService {
   }
 
   private validateMimeType(mimeType: string) {
-    const isAllowed =
-      DEFAULT_ALLOWED_MIME_PREFIXES.some((prefix) =>
-        mimeType.startsWith(prefix),
-      ) || DEFAULT_ALLOWED_MIME_TYPES.includes(mimeType);
-
-    if (!isAllowed) {
+    if (!this.isAllowedMime(mimeType)) {
       throw new BadRequestException(`Unsupported media type: ${mimeType}`);
     }
   }

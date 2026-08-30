@@ -210,5 +210,52 @@ describe('sanitize-log.util', () => {
     it('should handle empty array', () => {
       expect(sanitize([])).toEqual([]);
     });
+
+    it('should redact authorization key from SENSITIVE_KEYS', () => {
+      const obj = { authorization: 'Bearer abc.def', method: 'POST' };
+      expect(sanitize(obj)).toEqual({
+        authorization: '[REDACTED]',
+        method: 'POST',
+      });
+    });
+
+    it('should redact cookie key from SENSITIVE_KEYS', () => {
+      const obj = { cookie: 'session=xyz', host: 'api.example.com' };
+      expect(sanitize(obj)).toEqual({
+        cookie: '[REDACTED]',
+        host: 'api.example.com',
+      });
+    });
+
+    it('should redact auth and bearer keys from SENSITIVE_KEYS', () => {
+      const obj = { auth: 'Basic abc', bearer: 'xyz', keep: 1 };
+      expect(sanitize(obj)).toEqual({
+        auth: '[REDACTED]',
+        bearer: '[REDACTED]',
+        keep: 1,
+      });
+    });
+
+    it('should redact Bearer token values even under non-sensitive keys', () => {
+      const obj = { header: 'Bearer sk-abcdef1234567890' };
+      expect(sanitize(obj)).toEqual({ header: '[REDACTED]' });
+    });
+
+    it('should redact sk- API key values', () => {
+      const obj = { leaked: 'sk-proj-abcdefgh12345678' };
+      expect(sanitize(obj)).toEqual({ leaked: '[REDACTED]' });
+    });
+
+    it('should redact JWT values', () => {
+      const obj = {
+        jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c',
+      };
+      expect(sanitize(obj)).toEqual({ jwt: '[REDACTED]' });
+    });
+
+    it('should not redact ordinary strings that only resemble tokens', () => {
+      const obj = { note: 'hello world' };
+      expect(sanitize(obj)).toEqual({ note: 'hello world' });
+    });
   });
 });

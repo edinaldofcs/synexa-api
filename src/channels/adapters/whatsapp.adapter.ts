@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHmac, timingSafeEqual } from 'crypto';
 import {
   ChannelAdapter,
   NormalizedMessage,
@@ -148,6 +149,16 @@ export class WhatsappAdapter implements ChannelAdapter {
     signature: string,
     payload: unknown,
   ): boolean {
-    return true;
+    const appSecret = connection.config?.appSecret as string | undefined;
+    if (!appSecret || !signature) return false;
+    const expected =
+      'sha256=' +
+      createHmac('sha256', appSecret)
+        .update(JSON.stringify(payload ?? null))
+        .digest('hex');
+    const a = Buffer.from(expected);
+    const b = Buffer.from(signature);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
   }
 }

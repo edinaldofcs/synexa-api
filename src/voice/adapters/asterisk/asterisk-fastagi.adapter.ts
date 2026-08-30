@@ -22,6 +22,51 @@ export interface FastAgiRawEnvironment {
   [key: string]: string | undefined;
 }
 
+export interface FastAgiAdapterOptions {
+  /** Conexao passou pela allowlist de IP e/ou shared secret do ingresso */
+  trusted?: boolean;
+}
+
+// Chaves de roteamento: so sao honradas em ingressos confiaveis (allowlist
+// de IP ou shared secret); sem trust sao descartadas (anti cross-tenant)
+const ROUTING_VARIABLE_KEYS = new Set([
+  'SYNEXA_CLIENT_ID',
+  'SYNEXA_AGENT_ID',
+  'SYNEXA_AGENT_STEP',
+]);
+
+// Prefixos de negocio aceitos do dialplan (variaveis uteis da URA)
+const DIALPLAN_VARIABLE_PREFIXES = ['SYNEXA_', 'VAR_'];
+
+// Chaves fixas de identificacao/telefone/uuid aceitas do dialplan
+const DIALPLAN_VARIABLE_KEYS = new Set([
+  'CALLER_NAME',
+  'CALLER_NUMBER',
+  'CLIENTE_NOME',
+  'NOME_CONTATO',
+  'CPF',
+  'CPF_CLIENTE',
+  'DOCUMENTO',
+  'CODIGO',
+  'PARAM',
+  'PROTOCOLO',
+  'PLANO',
+  'FATURAS_ABERTAS',
+  'TELEFONE',
+  'PHONE',
+  'UUID',
+  'LEAD_ID',
+]);
+
+function isAllowedDialplanVariable(key: string): boolean {
+  const upper = key.toUpperCase();
+  return (
+    ROUTING_VARIABLE_KEYS.has(upper) ||
+    DIALPLAN_VARIABLE_KEYS.has(upper) ||
+    DIALPLAN_VARIABLE_PREFIXES.some((prefix) => upper.startsWith(prefix))
+  );
+}
+
 export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
   private readonly logger = new Logger(AsteriskFastAgiAdapter.name);
 
@@ -40,24 +85,59 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
   private dtmfCallback: ((digit: string) => void) | null = null;
   private isClosed = false;
 
-  constructor(socket: net.Socket, rawEnv: FastAgiRawEnvironment) {
+  constructor(
+    socket: net.Socket,
+    rawEnv: FastAgiRawEnvironment,
+    options: FastAgiAdapterOptions = {},
+  ) {
     this.socket = socket;
     this.id =
       rawEnv.agi_uniqueid ||
       `ast_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
+    const trusted = options.trusted ?? false;
+
     // Extrai variáveis contextuais enviadas pelo dialplan do Asterisk
+    // (whitelist; SYNEXA_SECRET nunca entra no contexto da sessão)
     const customVariables: Record<string, string | unknown> = {};
+    let droppedVariableLogged = false;
+    const warnDropped = (key: string, reason: 'allowlist' | 'untrusted') => {
+      if (droppedVariableLogged) return;
+      droppedVariableLogged = true;
+      if (reason === 'untrusted') {
+        this.logger.warn(
+          `[AsteriskFastAgiAdapter] Ingresso nao confiavel: variavel de roteamento "${key}" ignorada`,
+        );
+      } else {
+        this.logger.warn(
+          `[AsteriskFastAgiAdapter] Variavel fora da allowlist ignorada: "${key}"`,
+        );
+      }
+    };
     for (const [key, value] of Object.entries(rawEnv)) {
       if (value === undefined) continue;
       // Trata variáveis com prefixo personalizado ou argumentos AGI
       if (key.startsWith('agi_variable_')) {
         const cleanKey = key.replace('agi_variable_', '');
+        if (cleanKey.toUpperCase() === 'SYNEXA_SECRET') continue;
+        if (!isAllowedDialplanVariable(cleanKey)) {
+          warnDropped(cleanKey, 'allowlist');
+          continue;
+        }
+        if (ROUTING_VARIABLE_KEYS.has(cleanKey.toUpperCase()) && !trusted) {
+          warnDropped(cleanKey, 'untrusted');
+          continue;
+        }
         customVariables[cleanKey] = this.tryParseJson(value);
       } else if (
         key.toUpperCase().startsWith('SYNEXA_') ||
         key.toUpperCase().startsWith('VAR_')
       ) {
+        if (key.toUpperCase() === 'SYNEXA_SECRET') continue;
+        if (ROUTING_VARIABLE_KEYS.has(key.toUpperCase()) && !trusted) {
+          warnDropped(key, 'untrusted');
+          continue;
+        }
         customVariables[key] = this.tryParseJson(value);
       }
     }
@@ -65,8 +145,19 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
     // Suporte a JSON direto passado em agi_arg_3 ou SYNEXA_VARIABLES
     if (rawEnv.agi_arg_3 && rawEnv.agi_arg_3.startsWith('{')) {
       try {
-        const parsed = JSON.parse(rawEnv.agi_arg_3);
-        Object.assign(customVariables, parsed);
+        const parsed = JSON.parse(rawEnv.agi_arg_3) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(parsed)) {
+          if (key.toUpperCase() === 'SYNEXA_SECRET') continue;
+          if (ROUTING_VARIABLE_KEYS.has(key.toUpperCase()) && !trusted) {
+            warnDropped(key, 'untrusted');
+            continue;
+          }
+          if (!isAllowedDialplanVariable(key)) {
+            warnDropped(key, 'allowlist');
+            continue;
+          }
+          customVariables[key] = value;
+        }
       } catch {
         // Ignora se não for JSON válido
       }

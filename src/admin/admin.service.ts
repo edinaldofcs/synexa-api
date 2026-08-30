@@ -5,12 +5,14 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { LocalAdminService } from '../common/auth/local/local-admin.service';
+import { SessionService } from '../common/auth/session.service';
 import { ROLES, isPlatformAdmin } from '../common/auth/roles.constants';
 
 export interface ActorContext {
@@ -27,6 +29,7 @@ export class AdminService {
   constructor(
     private prisma: PrismaService,
     private localAdminService: LocalAdminService,
+    @Optional() private sessionService?: SessionService,
   ) {}
 
   private get adminClient(): SupabaseClient<any, 'public', any> {
@@ -296,6 +299,7 @@ export class AdminService {
         where: { id },
         data: { password_hash },
       });
+      await this.sessionService?.destroyAllForUser(id);
       delete dto.password;
     }
 
@@ -354,6 +358,7 @@ export class AdminService {
         where: { id },
         data: { password_hash },
       });
+      await this.sessionService?.destroyAllForUser(id);
       return { success: true, temporary_password: temporaryPassword };
     }
 

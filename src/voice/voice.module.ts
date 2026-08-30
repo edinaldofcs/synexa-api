@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { CommonModule } from '../common/common.module';
 import { VoiceGateway } from './voice.gateway';
 import { VoiceService } from './voice.service';
@@ -21,8 +23,19 @@ import { ProviderKeyResolverService } from '../orchestrator/services/provider-ke
 import { AnalyticsModule } from '../analytics/analytics.module';
 import { SessionService } from '../common/auth/session.service';
 
+// No standalone (SERVICE_ROLE=voice) o VoiceModule nao passa pelo AppModule,
+// que registra o ThrottlerGuard global — aqui registramos o Throttler apenas
+// quando standalone para nao duplicar o guard na API principal
+const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
+
 @Module({
-  imports: [CommonModule, AnalyticsModule],
+  imports: [
+    CommonModule,
+    AnalyticsModule,
+    ...(voiceStandalone
+      ? [ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])]
+      : []),
+  ],
   controllers: [VoiceController],
   providers: [
     VoiceGateway,
@@ -43,6 +56,14 @@ import { SessionService } from '../common/auth/session.service';
     ModelPricingService,
     ProviderKeyResolverService,
     VoiceToolsService,
+    ...(voiceStandalone
+      ? [
+          {
+            provide: APP_GUARD,
+            useClass: ThrottlerGuard,
+          },
+        ]
+      : []),
   ],
   exports: [
     VoiceService,

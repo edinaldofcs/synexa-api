@@ -1,11 +1,13 @@
 import { CredentialsController } from './credentials.controller';
-import { randomBytes } from 'crypto';
+import { randomBytes, scryptSync } from 'crypto';
 
-jest.mock('crypto', () => ({
-  randomBytes: jest.fn(() => ({
-    toString: () => 'a'.repeat(64),
-  })),
-}));
+jest.mock('crypto', () => {
+  const actual = jest.requireActual('crypto');
+  return {
+    ...actual,
+    randomBytes: jest.fn((size: number) => Buffer.alloc(size, 0xaa)),
+  };
+});
 
 describe('CredentialsController - secret exposure', () => {
   const prisma = {
@@ -17,7 +19,14 @@ describe('CredentialsController - secret exposure', () => {
     },
     painel_clients: { findFirst: jest.fn() },
   };
-  const controller = new CredentialsController(prisma as never);
+  const configService = { get: jest.fn().mockReturnValue('k'.repeat(32)) };
+  const credentialAudit = { logAction: jest.fn().mockResolvedValue(undefined) };
+  const controller = new CredentialsController(
+    prisma as never,
+    configService as never,
+    credentialAudit as never,
+  );
+  const request = { ip: '127.0.0.1', headers: { 'user-agent': 'jest' } } as any;
   const user = { id: 'user-1', company_id: 'company-1', role: 'company_admin' };
 
   beforeEach(() => {
@@ -63,7 +72,7 @@ describe('CredentialsController - secret exposure', () => {
       });
       prisma.channel_connections.update.mockResolvedValue({ id: 'conn-1' });
 
-      const result = await controller.rotateKey(user, 'conn-1');
+      const result = await controller.rotateKey(user, 'conn-1', request);
 
       expect(result).toEqual({
         id: 'conn-1',
@@ -72,7 +81,18 @@ describe('CredentialsController - secret exposure', () => {
       });
       expect(prisma.channel_connections.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ inbound_secret_hash: 'sk_' + 'a'.repeat(64) }),
+          data: expect.objectContaining({
+            inbound_secret_hash: expect.stringMatching(/^enc:/),
+          }),
+        }),
+      );
+      expect(prisma.channel_connections.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            inbound_secret_hash: expect.not.stringContaining(
+              'sk_' + 'a'.repeat(64),
+            ),
+          }),
         }),
       );
       expect(randomBytes).toHaveBeenCalledWith(32);
@@ -82,7 +102,7 @@ describe('CredentialsController - secret exposure', () => {
       prisma.channel_connections.findFirst.mockResolvedValue(null);
 
       await expect(
-        controller.rotateKey(user, 'other-conn'),
+        controller.rotateKey(user, 'other-conn', request),
       ).rejects.toMatchObject({ status: 404 });
  expect(prisma.channel_connections.update).not.toHaveBeenCalled();
     });
@@ -97,10 +117,10 @@ describe('CredentialsController - secret exposure', () => {
         client_id: 'client-1',
         channel_type: 'api',
         status: 'active',
-        inbound_secret_hash: 'sk_' + 'a'.repeat(64),
+        inbound_secret_hash: 'enc:xyz',
       });
 
-      const result = await controller.createApiConnection(user, 'client-1');
+      const result = await controller.createApiConnection(user, 'client-1', request);
 
       expect(result).toEqual({
         id: 'conn-new',
@@ -109,6 +129,13 @@ describe('CredentialsController - secret exposure', () => {
         status: 'active',
         inbound_secret: 'sk_' + 'a'.repeat(64),
       });
+      expect(prisma.channel_connections.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            inbound_secret_hash: expect.stringMatching(/^enc:/),
+          }),
+        }),
+      );
     });
   });
 });

@@ -67,6 +67,14 @@ async function bootstrap() {
     ? corsOrigin.split(',').map((s) => s.trim())
     : ['http://localhost:5173'];
 
+  if (corsOrigins.includes('*') && environment !== 'development') {
+    throw new Error(
+      'CORS_ORIGIN="*" is not allowed with credentials outside development',
+    );
+  }
+
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   app.enableCors({
     origin: (origin, callback) => {
       if (!origin) {
@@ -115,7 +123,14 @@ async function bootstrap() {
   }
 
   const bodyLimit = configService.get<string>('BODY_LIMIT', '5mb');
-  app.use(express.json({ limit: bodyLimit }));
+  app.use(
+    express.json({
+      limit: bodyLimit,
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf.toString('utf8');
+      },
+    }),
+  );
   app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
 
   app.useGlobalPipes(

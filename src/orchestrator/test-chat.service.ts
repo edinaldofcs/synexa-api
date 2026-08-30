@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -35,6 +40,16 @@ const TEST_CHAT_CONTEXT_KEY = 'test_chat_context_variables';
 const PAINEL_MESSAGES_LIMIT = 50;
 const LOCK_RETRY_ATTEMPTS = 2;
 const LOCK_RETRY_DELAY_MS = 300;
+
+/**
+ * S02: contexto do usuario autenticado extraido do token (@CurrentUser).
+ * Quando presente, o acesso a clients de outros tenants e bloqueado.
+ */
+export interface TestChatUserContext {
+  id: string;
+  company_id: string | null;
+  role: string;
+}
 
 export interface TestChatDebug {
   conversationId?: string;
@@ -96,7 +111,19 @@ export class TestChatService {
     return this.llmToolLoop.listModels(provider, finalKey);
   }
 
-  async clear(dto: ClearTestChatDto) {
+  async clear(dto: ClearTestChatDto, user?: TestChatUserContext) {
+    // S02: sem user autenticado (uso interno/testes) o comportamento atual
+    // e mantido; com user, o client precisa pertencer a mesma company.
+    if (user) {
+      const client = await this.prisma.painel_clients.findUnique({
+        where: { id: dto.clientId },
+        select: { company_id: true },
+      });
+      if (!client || client.company_id !== user.company_id) {
+        throw new ForbiddenException('Client not found or access denied');
+      }
+    }
+
     const originChannel = dto.originChannel || 'webchat_test';
     const conversations = await this.prisma.conversations.findMany({
       where: {
@@ -126,6 +153,7 @@ export class TestChatService {
   async send(
     dto: TestChatDto,
     onToken?: (chunk: string) => void,
+    user?: TestChatUserContext,
   ): Promise<{
     text: string;
     agentName?: string;
@@ -156,6 +184,11 @@ export class TestChatService {
 
     if (clientId) {
       client = await this.loadPainelClient(clientId);
+      // S02: com usuario autenticado, client inexistente ou de outra company
+      // recebem a MESMA mensagem (sem enumerar existencia de clients).
+      if (user && (!client || client.company_id !== user.company_id)) {
+        throw new ForbiddenException('Client not found or access denied');
+      }
       if (!client) throw new Error('Cliente nao encontrado');
       companyId = client.company_id;
 

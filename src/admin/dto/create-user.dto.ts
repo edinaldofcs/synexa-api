@@ -17,6 +17,9 @@ export class AdminCreateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(8, { message: 'Senha deve ter no mínimo 8 caracteres' })
+  @Matches(/(?=.*[a-zA-Z])(?=.*\d)/, {
+    message: 'Senha deve conter letras e números',
+  })
   password?: string;
 
   @IsOptional()

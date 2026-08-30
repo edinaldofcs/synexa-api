@@ -717,6 +717,7 @@ describe('MediaService', () => {
       mockPrisma.media_assets.findUnique.mockResolvedValue({
         id: 'asset-1',
         client_id: 'client-1',
+        company_id: 'company-1',
         storage_bucket: 'synexa-media',
         storage_path: 'test.png',
       });
@@ -784,6 +785,7 @@ describe('MediaService', () => {
       mockPrisma.media_assets.findUnique.mockResolvedValue({
         id: 'asset-1',
         client_id: 'client-1',
+        company_id: 'company-1',
         storage_bucket: null,
         storage_path: null,
       });
@@ -791,6 +793,29 @@ describe('MediaService', () => {
       await expect(
         service.createSignedUrl('asset-1', 'user-1'),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw ForbiddenException when asset belongs to another company (cross-tenant)', async () => {
+      mockPrisma.media_assets.findUnique.mockResolvedValue({
+        id: 'asset-1',
+        client_id: 'client-1',
+        company_id: 'company-2',
+        storage_bucket: 'synexa-media',
+        storage_path: 'test.png',
+      });
+
+      await expect(
+        service.createSignedUrl('asset-1', 'user-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockStorageProvider.createSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('should throw ForbiddenException when requester has no company', async () => {
+      mockPrisma.users.findUnique.mockResolvedValue({ company_id: null });
+
+      await expect(
+        service.createSignedUrl('asset-1', 'user-1'),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('should throw NotFoundException for non-existent asset', async () => {
@@ -894,6 +919,90 @@ describe('MediaService', () => {
       await expect(
         service.update('asset-1', { status: 'stored' }, 'user-1'),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should reject attempt to change storage_bucket', async () => {
+      await expect(
+        service.update(
+          'asset-1',
+          { status: 'ready', storage_bucket: 'other-bucket' } as any,
+          'user-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.media_assets.update).not.toHaveBeenCalled();
+    });
+
+    it('should reject attempt to change storage_path', async () => {
+      await expect(
+        service.update(
+          'asset-1',
+          { storage_path: '../../etc/passwd' } as any,
+          'user-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.media_assets.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // storeInlineAsset
+  // ---------------------------------------------------------------------------
+  describe('storeInlineAsset', () => {
+    const baseParams = {
+      companyId: 'company-1',
+      clientId: 'client-1',
+      messageId: 'msg-1',
+      mimeType: 'image/png',
+      data: Buffer.from('fake-image-data').toString('base64'),
+    };
+
+    beforeEach(() => {
+      mockStorageProvider.ensureBucket.mockResolvedValue(undefined);
+      mockStorageProvider.upload.mockResolvedValue({
+        path: 'uploads/inline.png',
+      });
+      mockPrisma.media_assets.create.mockResolvedValue(assetStub());
+    });
+
+    it('should store inline asset when magic bytes match an allowed type', async () => {
+      (fileTypeFromBuffer as jest.Mock).mockResolvedValue({
+        mime: 'image/png',
+        ext: 'png',
+      });
+
+      const result = await service.storeInlineAsset(baseParams);
+
+      expect(result).toHaveProperty('id', 'asset-1');
+      expect(mockStorageProvider.upload).toHaveBeenCalled();
+    });
+
+    it('should reject inline asset whose magic bytes are not allowed', async () => {
+      (fileTypeFromBuffer as jest.Mock).mockResolvedValue({
+        mime: 'application/x-msdownload',
+        ext: 'exe',
+      });
+
+      await expect(service.storeInlineAsset(baseParams)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockStorageProvider.upload).not.toHaveBeenCalled();
+    });
+
+    it('should reject inline asset when content type cannot be detected', async () => {
+      (fileTypeFromBuffer as jest.Mock).mockResolvedValue(null);
+
+      await expect(service.storeInlineAsset(baseParams)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should reject declared SVG mime type', async () => {
+      await expect(
+        service.storeInlineAsset({
+          ...baseParams,
+          mimeType: 'image/svg+xml',
+        }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

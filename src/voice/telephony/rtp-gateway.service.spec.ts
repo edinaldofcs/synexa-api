@@ -46,4 +46,29 @@ describe('RtpGatewayService', () => {
       expect(session.codec).toBe('ulaw');
     });
   });
+
+  describe('RtpChannelSession remote pinning (S09)', () => {
+    it('fixa o remote esperado no setup e aceita apenas pacotes dele', () => {
+      const session = service.createSession({
+        onPcmAudioIn: jest.fn(),
+      });
+
+      session.setExpectedRemote('10.0.0.5', 10000);
+
+      expect(session.remoteIp).toBe('10.0.0.5');
+      expect(session.remotePort).toBe(10000);
+      expect(session.shouldAcceptPeer('10.0.0.5')).toBe(true);
+      expect(session.shouldAcceptPeer('::ffff:10.0.0.5')).toBe(true);
+      expect(session.shouldAcceptPeer('203.0.113.7')).toBe(false);
+    });
+
+    it('sem remote esperado, aceita o primeiro pacote (first-packet)', () => {
+      const session = service.createSession({
+        onPcmAudioIn: jest.fn(),
+      });
+      expect(session.shouldAcceptPeer('198.51.100.1')).toBe(true);
+      expect(session.remoteIp).toBe('');
+      expect(session.remotePort).toBe(0);
+    });
+  });
 });

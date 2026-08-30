@@ -3,6 +3,7 @@ import { randomBytes } from 'crypto';
 import { RedisService } from '../redis/redis.service';
 
 export const SESSION_TTL_SECONDS = 60 * 60 * 24;
+export const IMPERSONATION_TTL_MS = 60 * 60 * 1000;
 
 export interface SessionUser {
   id: string;
@@ -15,6 +16,7 @@ export interface SessionUser {
   original_role?: string | null;
   original_company_id?: string | null;
   original_company_name?: string | null;
+  impersonating_until?: number | null;
 }
 
 export interface AuthSession {
@@ -63,6 +65,14 @@ export class SessionService {
       return null;
     }
 
+    if (
+      session.user.impersonating_until &&
+      session.user.impersonating_until <= Date.now()
+    ) {
+      session.user = this.restoreOriginalUser(session.user);
+      await this.save(session);
+    }
+
     const now = Date.now();
     if (now - session.lastSeenAt >= 5 * 60 * 1000) {
       session.lastSeenAt = now;
@@ -90,6 +100,22 @@ export class SessionService {
       sessionIds.map((sessionId) => this.redis.del(this.key(sessionId))),
     );
     await this.redis.del(this.userKey(userId));
+  }
+
+  private restoreOriginalUser(user: SessionUser): SessionUser {
+    if (!user.original_role) {
+      const { impersonating_until: _expired, ...restored } = user;
+      void _expired;
+      return restored;
+    }
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name ?? null,
+      role: user.original_role,
+      company_id: user.original_company_id ?? null,
+      company_name: user.original_company_name ?? null,
+    };
   }
 
   private key(sessionId: string) {

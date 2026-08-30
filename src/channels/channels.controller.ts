@@ -24,6 +24,8 @@ import { CurrentUser } from '../common/auth/current-user.decorator';
 import { extractTenantContext } from '../common/utils/tenant-access.helper';
 import { sanitize } from '../common/utils/sanitize-log.util';
 import { randomBytes } from 'crypto';
+import { encrypt } from '../common/utils/crypto.util';
+import { ConfigService } from '@nestjs/config';
 
 @Controller()
 export class ChannelsController {
@@ -32,6 +34,7 @@ export class ChannelsController {
   constructor(
     private readonly channelsService: ChannelsService,
     private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
   ) {}
 
   @Get('channels')
@@ -169,8 +172,12 @@ export class ChannelsController {
     }
 
     const secret = 'whsec_' + randomBytes(24).toString('hex');
+    const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+    if (!encryptionKey) {
+      throw new UnauthorizedException('Server encryption not configured');
+    }
 
-    return this.prisma.channel_connections.create({
+    const created = await this.prisma.channel_connections.create({
       data: {
         company_id: ctx.companyId,
         client_id: body.client_id,
@@ -178,10 +185,24 @@ export class ChannelsController {
         provider: body.provider,
         provider_account_id: body.provider_account_id || null,
         status: body.status || 'active',
-        inbound_secret_hash: secret,
+        inbound_secret_hash: 'enc:' + encrypt(secret, encryptionKey),
         config: body.config || {},
       },
     });
+
+    return {
+      id: created.id,
+      company_id: created.company_id,
+      client_id: created.client_id,
+      channel_type: created.channel_type,
+      provider: created.provider,
+      provider_account_id: created.provider_account_id,
+      status: created.status,
+      config: created.config,
+      created_at: created.created_at,
+      updated_at: created.updated_at,
+      inbound_secret: secret,
+    };
   }
 
   @Public()

@@ -12,10 +12,47 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { extractTenantContext } from '../common/utils/tenant-access.helper';
 import { randomBytes } from 'crypto';
+import { Request } from 'express';
+import { encrypt } from '../common/utils/crypto.util';
+import { ConfigService } from '@nestjs/config';
+import { Req } from '@nestjs/common';
+import { CredentialAuditService } from '../common/services/credential-audit.service';
 
 @Controller('credentials')
 export class CredentialsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+    private readonly credentialAudit: CredentialAuditService,
+  ) {}
+
+  private storeSecret(secret: string): string {
+    const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
+    if (!encryptionKey) {
+      throw new UnauthorizedException('Server encryption not configured');
+    }
+    return 'enc:' + encrypt(secret, encryptionKey);
+  }
+
+  private async logSecretAction(
+    action: 'created' | 'rotated',
+    ctx: { companyId: string },
+    connection: { client_id: string },
+    user: any,
+    request: any,
+  ): Promise<void> {
+    void this.credentialAudit
+      .logAction({
+        companyId: ctx.companyId,
+        clientId: connection.client_id,
+        userId: user?.id,
+        provider: 'api',
+        action,
+        ipAddress: request?.ip,
+        userAgent: request?.headers?.['user-agent'],
+      })
+      .catch(() => undefined);
+  }
 
   @Get('keys')
   async listKeys(@CurrentUser() user: any) {
@@ -48,6 +85,7 @@ export class CredentialsController {
   async rotateKey(
     @CurrentUser() user: any,
     @Body('connection_id', ParseUUIDPipe) connectionId: string,
+    @Req() request: Request,
   ) {
     const ctx = extractTenantContext(user);
 
@@ -68,10 +106,12 @@ export class CredentialsController {
     await this.prisma.channel_connections.update({
       where: { id: connectionId },
       data: {
-        inbound_secret_hash: newSecret,
+        inbound_secret_hash: this.storeSecret(newSecret),
         updated_at: new Date(),
       },
     });
+
+    await this.logSecretAction('rotated', ctx, connection, user, request);
 
     // Segredo exibido apenas uma vez, na rotação
     return {
@@ -85,6 +125,7 @@ export class CredentialsController {
   async createApiConnection(
     @CurrentUser() user: any,
     @Body('client_id', ParseUUIDPipe) clientId: string,
+    @Req() request: Request,
   ) {
     const ctx = extractTenantContext(user);
 
@@ -109,7 +150,13 @@ export class CredentialsController {
     });
 
     if (existing) {
-      return existing;
+      return {
+        id: existing.id,
+        client_id: existing.client_id,
+        channel_type: existing.channel_type,
+        status: existing.status,
+        has_secret: Boolean(existing.inbound_secret_hash),
+      };
     }
 
     const secret = 'sk_' + randomBytes(32).toString('hex');
@@ -121,10 +168,12 @@ export class CredentialsController {
         channel_type: 'api',
         provider: 'custom_api',
         status: 'active',
-        inbound_secret_hash: secret,
+        inbound_secret_hash: this.storeSecret(secret),
         config: {},
       },
     });
+
+    await this.logSecretAction('created', ctx, created, user, request);
 
     // Segredo exibido apenas uma vez, na criação
     return {

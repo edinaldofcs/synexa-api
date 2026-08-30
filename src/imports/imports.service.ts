@@ -6,9 +6,7 @@ export class ImportsService {
   private readonly logger = new Logger(ImportsService.name);
 
   async importContacts(dto: ImportContactDto) {
-    this.logger.log(
-      `Importing ${dto.data.length} contacts for user ${dto.userId}`,
-    );
+    this.logger.log(`Importing ${dto.data.length} contacts`);
 
     return {
       success: true,

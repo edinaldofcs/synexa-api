@@ -22,11 +22,17 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ImpersonateDto } from './dto/impersonate.dto';
 import { ConfigService } from '@nestjs/config';
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { AuthSession } from './session.service';
 
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly authService: AuthService,
     private readonly sessionService: SessionService,
@@ -39,8 +45,13 @@ export class AuthController {
   async login(
     @Body() body: LoginDto,
     @Res({ passthrough: true }) response: Response,
+    @Req() request: Request,
   ) {
-    const user = await this.authService.login(body.email, body.password);
+    const user = await this.authService.login(
+      body.email,
+      body.password,
+      request.ip,
+    );
     const session = await this.sessionService.create(user);
     setAuthCookies(
       response,
@@ -103,9 +114,11 @@ export class AuthController {
     const effective = await this.authService.enterImpersonation(
       session.user,
       body.company_id,
+      request.user as SessionUser | undefined,
     );
     session.user = effective;
     await this.sessionService.save(session);
+    this.logImpersonation('impersonation_enter', effective, request);
     return { user: effective };
   }
 
@@ -115,8 +128,10 @@ export class AuthController {
   async exitImpersonation(@Req() request: Request) {
     const session = await this.requireMutableSession(request);
     const restored = this.authService.exitImpersonation(session.user);
+    const viewing = session.user;
     session.user = restored;
     await this.sessionService.save(session);
+    this.logImpersonation('impersonation_exit', viewing, request);
     return { user: restored };
   }
 
@@ -197,6 +212,25 @@ export class AuthController {
   async resetPassword(@Body() body: ResetPasswordDto) {
     await this.authService.resetPassword(body.token, body.password);
     return { ok: true };
+  }
+
+  private logImpersonation(
+    action: 'impersonation_enter' | 'impersonation_exit',
+    user: SessionUser,
+    request: Request,
+  ) {
+    this.logger.log(
+      JSON.stringify({
+        action,
+        actor_id: user.id,
+        actor_email: user.email,
+        original_company_id: user.original_company_id ?? user.company_id,
+        target_company_id: user.company_id,
+        ip: request.ip,
+        user_agent: request.get('user-agent'),
+        timestamp: new Date().toISOString(),
+      }),
+    );
   }
 
   private callbackUrl(request: Request) {

@@ -8,6 +8,7 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsConfigDto } from './dto/analytics.dto';
 import { CurrentUser } from '../common/auth/current-user.decorator';
@@ -56,6 +57,7 @@ export class AnalyticsController {
     });
   }
 
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @Get('bi-dashboard')
   async biDashboard(
     @CurrentUser() user: any,
@@ -74,6 +76,7 @@ export class AnalyticsController {
     });
   }
 
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @Get('interactions-report')
   async interactionsReport(
     @CurrentUser() user: any,
@@ -97,7 +100,7 @@ export class AnalyticsController {
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
       page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 25,
+      limit: limit ? Math.min(Number(limit), 1000) : 25,
     });
   }
 
@@ -125,6 +128,7 @@ export class AnalyticsController {
     return this.analyticsService.getInteractionsMessages(ctx.companyId, idList);
   }
 
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @Get('consumption-costs')
   async consumptionCosts(
     @CurrentUser() user: any,

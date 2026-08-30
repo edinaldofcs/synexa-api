@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHmac, timingSafeEqual } from 'crypto';
 import {
   ChannelAdapter,
   NormalizedMessage,
@@ -95,6 +96,14 @@ export class ApiAdapter implements ChannelAdapter {
     signature: string,
     payload: unknown,
   ): boolean {
-    return true;
+    const sharedSecret = connection.config?.sharedSecret as string | undefined;
+    if (!sharedSecret || !signature) return false;
+    const expected = createHmac('sha256', sharedSecret)
+      .update(JSON.stringify(payload ?? null))
+      .digest('hex');
+    const a = Buffer.from(expected);
+    const b = Buffer.from(signature);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
   }
 }

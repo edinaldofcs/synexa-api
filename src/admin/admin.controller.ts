@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -51,7 +52,15 @@ export class AdminController {
 
   @Delete('companies/:id')
   @Roles(ROLES.PLATFORM_ADMIN)
-  async deleteCompany(@Param('id', ParseUUIDPipe) id: string) {
+  async deleteCompany(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('confirm') confirm?: string,
+  ) {
+    if (confirm !== id) {
+      throw new BadRequestException(
+        'Confirmation required: provide ?confirm=<company_id>',
+      );
+    }
     return this.adminService.deleteCompany(id);
   }
 

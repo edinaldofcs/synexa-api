@@ -9,10 +9,12 @@ export interface HealthCheckResult {
   uptime: number;
   service_role: string;
   environment: string;
-  details?: {
-    database: { status: 'up' | 'down'; latency_ms?: number; error?: string };
-    redis: { status: 'up' | 'down'; latency_ms?: number; error?: string };
-  };
+  details?:
+    | string
+    | {
+        database: { status: 'up' | 'down'; latency_ms?: number; error?: string };
+        redis: { status: 'up' | 'down'; latency_ms?: number; error?: string };
+      };
 }
 
 @Injectable()
@@ -66,6 +68,9 @@ export class HealthService {
     }
 
     const isHealthy = dbStatus === 'up' && redisStatus === 'up';
+    const isDevelopment =
+      this.configService.get<string>('ENVIRONMENT', 'development') ===
+      'development';
 
     return {
       status: isHealthy ? 'ok' : 'degraded',
@@ -73,18 +78,20 @@ export class HealthService {
       uptime: Math.floor(process.uptime()),
       service_role: this.configService.get<string>('SERVICE_ROLE', 'api'),
       environment: this.configService.get<string>('ENVIRONMENT', 'development'),
-      details: {
-        database: {
-          status: dbStatus,
-          latency_ms: dbLatency,
-          ...(dbError ? { error: dbError } : {}),
-        },
-        redis: {
-          status: redisStatus,
-          latency_ms: redisLatency,
-          ...(redisError ? { error: redisError } : {}),
-        },
-      },
+      details: isDevelopment
+        ? {
+            database: {
+              status: dbStatus,
+              latency_ms: dbLatency,
+              ...(dbError ? { error: dbError } : {}),
+            },
+            redis: {
+              status: redisStatus,
+              latency_ms: redisLatency,
+              ...(redisError ? { error: redisError } : {}),
+            },
+          }
+        : 'unavailable',
     };
   }
 }

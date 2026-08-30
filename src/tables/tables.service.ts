@@ -19,6 +19,8 @@ interface ColumnResult {
 
 @Injectable()
 export class TablesService {
+  private readonly logger = new Logger(TablesService.name);
+
   private readonly ALLOWED_TABLES = new Set([
     'painel_clients',
     'painel_agents',
@@ -142,9 +144,16 @@ export class TablesService {
         query = Prisma.sql`${query} AND created_at <= ${new Date(endDate)}`;
       }
 
-      query = Prisma.sql`${query} ORDER BY created_at DESC`;
+      query = Prisma.sql`${query} ORDER BY created_at DESC LIMIT 50001`;
 
-      const data = await this.prisma.$queryRaw<unknown[]>(query);
+      const rows = await this.prisma.$queryRaw<unknown[]>(query);
+      let data = rows;
+      if (rows.length > 50000) {
+        data = rows.slice(0, 50000);
+        this.logger.warn(
+          `Export of table ${tableName} for company ${companyId} truncated at 50000 rows`,
+        );
+      }
       return { success: true, data };
     } catch (err: unknown) {
       const error = err as Error;

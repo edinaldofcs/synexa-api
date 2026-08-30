@@ -83,6 +83,59 @@ describe('Telephony Adapters & Variable Injection', () => {
       );
       expect(adapter.getVariable('SYNEXA_STATUS')).toBe('RESOLVIDO');
     });
+
+    it('ignora variaveis fora da allowlist', () => {
+      const mockSocket = new net.Socket();
+      const adapter = new AsteriskFastAgiAdapter(mockSocket, {
+        agi_variable_CPF_CLIENTE: '12345678900',
+        agi_variable_VAR_MALICIOSA: 'x',
+        agi_variable_TOTALMENTE_DESCONHECIDA: 'y',
+        SYNEXA_SALDO: '250.50',
+      });
+
+      expect(adapter.metadata.customVariables?.CPF_CLIENTE).toBe('12345678900');
+      expect(adapter.metadata.customVariables?.VAR_MALICIOSA).toBe('x');
+      expect(adapter.metadata.customVariables?.TOTALMENTE_DESCONHECIDA).toBeUndefined();
+    });
+
+    it('ignora SYNEXA_CLIENT_ID e SYNEXA_SECRET em ingresso nao confiavel', () => {
+      const mockSocket = new net.Socket();
+      const rawAgiEnv = {
+        agi_variable_SYNEXA_CLIENT_ID: 'client-9',
+        agi_variable_SYNEXA_AGENT_STEP: 'cobranca',
+        agi_variable_SYNEXA_SECRET: 's3cr3t',
+        agi_variable_CPF_CLIENTE: '12345678900',
+        SYNEXA_SALDO: '10.00',
+      };
+
+      const untrusted = new AsteriskFastAgiAdapter(mockSocket, rawAgiEnv);
+      expect(
+        untrusted.metadata.customVariables?.SYNEXA_CLIENT_ID,
+      ).toBeUndefined();
+      expect(untrusted.metadata.customVariables?.SYNEXA_AGENT_STEP).toBeUndefined();
+      expect(untrusted.metadata.customVariables?.SYNEXA_SECRET).toBeUndefined();
+      expect(untrusted.metadata.customVariables?.CPF_CLIENTE).toBe('12345678900');
+      expect(untrusted.metadata.customVariables?.SYNEXA_SALDO).toBe('10.00');
+
+      const trusted = new AsteriskFastAgiAdapter(mockSocket, rawAgiEnv, {
+        trusted: true,
+      });
+      expect(trusted.metadata.customVariables?.SYNEXA_CLIENT_ID).toBe(
+        'client-9',
+      );
+    });
+
+    it('mantem SYNEXA_CLIENT_ID quando a conexao é confiavel', () => {
+      const mockSocket = new net.Socket();
+      const adapter = new AsteriskFastAgiAdapter(
+        mockSocket,
+        { agi_variable_SYNEXA_CLIENT_ID: 'client-1' },
+        { trusted: true },
+      );
+      expect(adapter.metadata.customVariables?.SYNEXA_CLIENT_ID).toBe(
+        'client-1',
+      );
+    });
   });
 
   describe('CallFlexAdapter', () => {

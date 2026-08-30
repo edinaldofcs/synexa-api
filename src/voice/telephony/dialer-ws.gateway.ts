@@ -20,7 +20,9 @@ const IDENTIFICATION_TIMEOUT_MS = 5000;
  * (CallFlex, NexCore etc.).
  *
  * Contrato Synexa v1:
- *   Conexão: /ws/dialer?provider=callflex&token=<secret>
+ * Contrato Synexa v1:
+ *   Conexão: /ws/dialer?provider=callflex (token via header x-telephony-token,
+ *            Authorization: Bearer ou, só com TELEPHONY_WS_TOKEN_IN_QUERY=true, ?token=)
  *   Auth:    sha256(token + pepper) == telephony_endpoints.inbound_secret_hash
  *   Frame 1: JSON  { type:'start', call_id, from, did, variables }
  *   Mídia:   frames binários no formato de áudio configurado no endpoint
@@ -54,10 +56,33 @@ export class DialerWsIngress
   ) {
     this.wsTokenPepper =
       this.configService.get<string>('TELEPHONY_WS_TOKEN_PEPPER') || '';
+    if (
+      this.configService.get<string>('ENVIRONMENT') === 'production' &&
+      !this.wsTokenPepper
+    ) {
+      this.logger.error(
+        '[DialerWS] TELEPHONY_WS_TOKEN_PEPPER ausente em production: recusando todas as conexões.',
+      );
+      throw new Error(
+        'TELEPHONY_WS_TOKEN_PEPPER is required in production environment',
+      );
+    }
   }
 
   public async handleConnection(clientWs: WebSocket): Promise<void> {
     try {
+      const environment = this.configService.get<string>(
+        'ENVIRONMENT',
+        'development',
+      );
+      if (environment === 'production' && !this.wsTokenPepper) {
+        this.logger.error(
+          '[DialerWS] TELEPHONY_WS_TOKEN_PEPPER ausente: conexões recusadas.',
+        );
+        clientWs.close(1011, 'server_misconfigured');
+        return;
+      }
+
       const request = (clientWs as any).handshakeRequest as
         | {
             url?: string;
@@ -72,7 +97,23 @@ export class DialerWsIngress
       const headerAuth = String(
         request?.headers?.['authorization'] || '',
       ).replace(/^Bearer\s+/i, '');
-      const token = url.searchParams.get('token') || headerAuth;
+      const headerToken =
+        String(request?.headers?.['x-telephony-token'] || '') || headerAuth;
+
+      // Token por query string só com TELEPHONY_WS_TOKEN_IN_QUERY=true
+      // (padrão desligado: token em URL vaza em logs/access logs)
+      const queryToken = url.searchParams.get('token');
+      const tokenInQueryAllowed =
+        this.configService.get<string>('TELEPHONY_WS_TOKEN_IN_QUERY') ===
+        'true';
+      if (queryToken && !tokenInQueryAllowed) {
+        this.logger.warn(
+          '[DialerWS] Token na query string recusado (TELEPHONY_WS_TOKEN_IN_QUERY!=true); use o header x-telephony-token.',
+        );
+      }
+      const token = tokenInQueryAllowed
+        ? queryToken || headerToken
+        : headerToken;
 
       if (!token) {
         this.logger.warn('[DialerWS] Conexão sem token. Rejeitada.');

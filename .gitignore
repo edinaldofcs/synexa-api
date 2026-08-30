@@ -68,3 +68,9 @@ trigger_deliver.js
 
 # Runtime media files
 /uploads/
+
+# Certificates and private keys
+*.pem
+*.key
+*.p12
+*.pfx

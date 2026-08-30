@@ -17,7 +17,11 @@ import { RedisService } from '../redis/redis.service';
 import { MailService } from '../mail/mail.service';
 import { SessionService } from './session.service';
 import type { SessionUser } from './session.service';
+import { IMPERSONATION_TTL_MS } from './session.service';
 import { ROLES } from './roles.constants';
+
+export const DUMMY_PASSWORD_HASH =
+  '$2b$10$XW5ATkoiQmMvAX/B1PGy3.86FWR2WNZH5KG1n8NKaI9eZACX14gLy';
 
 @Injectable()
 export class AuthService {
@@ -31,10 +35,31 @@ export class AuthService {
     private readonly sessionService: SessionService,
   ) {}
 
-  async login(email: string, password: string): Promise<SessionUser> {
+  async login(
+    email: string,
+    password: string,
+    ip?: string,
+  ): Promise<SessionUser> {
     const normalizedEmail = email.trim().toLowerCase();
+
+    if (ip) {
+      const ipRate = await this.redis.checkRateLimit(
+        `auth:login:ip:${ip}`,
+        20,
+        60,
+      );
+      if (!ipRate.allowed) {
+        throw new HttpException(
+          'Muitas tentativas. Tente novamente em instantes.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
     const rate = await this.redis.checkRateLimit(
-      `auth:login:email:${normalizedEmail}`,
+      ip
+        ? `auth:login:${ip}:${normalizedEmail}`
+        : `auth:login:email:${normalizedEmail}`,
       5,
       60,
     );
@@ -111,10 +136,15 @@ export class AuthService {
       },
     });
 
+    const passwordMatches = await bcrypt.compare(
+      password,
+      user?.password_hash ?? DUMMY_PASSWORD_HASH,
+    );
+
     if (
       !user?.password_hash ||
       user.companies.status !== 'active' ||
-      !(await bcrypt.compare(password, user.password_hash))
+      !passwordMatches
     ) {
       throw new UnauthorizedException('Credenciais inválidas');
     }
@@ -174,8 +204,10 @@ export class AuthService {
   async enterImpersonation(
     user: SessionUser,
     companyId: string,
+    actor?: SessionUser,
   ): Promise<SessionUser> {
-    if (user.role !== ROLES.PLATFORM_ADMIN) {
+    const gate = actor ?? user;
+    if ((gate.original_role ?? gate.role) !== ROLES.PLATFORM_ADMIN) {
       throw new ForbiddenException(
         'Apenas platform_admin pode usar esta função',
       );
@@ -209,6 +241,7 @@ export class AuthService {
       role: ROLES.COMPANY_ADMIN,
       company_id: company.id,
       company_name: company.name,
+      impersonating_until: Date.now() + IMPERSONATION_TTL_MS,
     };
   }
 
@@ -233,6 +266,18 @@ export class AuthService {
     resetUrlBase: string,
   ): Promise<void> {
     const normalizedEmail = email.trim().toLowerCase();
+    const rate = await this.redis.checkRateLimit(
+      `auth:forgot:email:${normalizedEmail}`,
+      3,
+      300,
+    );
+    if (!rate.allowed) {
+      throw new HttpException(
+        'Muitas tentativas. Tente novamente em instantes.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const user = await this.prisma.users.findUnique({
       where: { email: normalizedEmail },
       include: { companies: { select: { status: true } } },

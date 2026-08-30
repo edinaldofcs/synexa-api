@@ -13,6 +13,7 @@ import { MockVoiceProvider } from './providers/mock-voice.provider';
 import { GeminiLiveVoiceProvider } from './providers/gemini-live-voice.provider';
 import { AudioGateService } from './services/audio-gate.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { VoiceToolsService } from './voice-tools.service';
 import {
   evaluateConditionsWithDetails,
@@ -37,6 +38,8 @@ import {
 
 const MAX_SESSION_STATE_BYTES = 32 * 1024;
 const MAX_SESSION_STATE_KEYS = 40;
+// Timeout de identificacao: conexao WS sem 'start' dentro da janela e fechada
+const VOICE_IDENTIFICATION_TIMEOUT_MS = 30000;
 
 function pruneSessionState(
   state: Record<string, unknown>,
@@ -82,6 +85,7 @@ export class VoiceGateway
     private readonly analyticsService: AnalyticsService,
     private readonly nativeToolsService: NativeToolsService,
     private readonly telemetryService: VoiceTelemetryService,
+    private readonly redis: RedisService,
   ) {}
 
   handleConnection(clientWs: AuthenticatedWebSocket) {
@@ -93,11 +97,37 @@ export class VoiceGateway
       return;
     }
 
+    this.enforcePreAuthConnectionLimit(clientWs);
+
     this.logger.log('🟢 [VoiceGateway] Cliente conectado via WebSocket');
     let telemetryTimer: ReturnType<typeof setInterval> | null = null;
     // Sinaliza que a sessão de voz foi encerrada; evita criar timers/providers
     // quando um 'start' assíncrono retoma depois do close
     let voiceSessionClosed = false;
+
+    // Conexão pre-auth sem 'start' dentro da janela é fechada (evita
+    // sockets pendentes de identificação acumulando)
+    let identificationTimer: ReturnType<typeof setTimeout> | null = setTimeout(
+      () => {
+        identificationTimer = null;
+        if (clientWs.readyState === WebSocket.OPEN) {
+          this.logger.warn(
+            '[VoiceGateway] Conexão sem identificação (start) dentro do tempo limite; encerrando',
+          );
+          clientWs.close(1013, 'Identification timeout');
+        }
+      },
+      this.configService.get<number>(
+        'VOICE_IDENTIFICATION_TIMEOUT_MS',
+        VOICE_IDENTIFICATION_TIMEOUT_MS,
+      ),
+    );
+    const clearIdentificationTimer = () => {
+      if (identificationTimer) {
+        clearTimeout(identificationTimer);
+        identificationTimer = null;
+      }
+    };
 
     const session = new VoiceClientSession(clientWs);
     this.sessions.set(clientWs, session);
@@ -195,6 +225,8 @@ export class VoiceGateway
         const msg = JSON.parse(raw.toString());
         switch (msg.type) {
           case 'start': {
+            clearIdentificationTimer();
+            clearIdentificationTimer();
             let authenticatedUser;
             try {
               const sessionId = clientWs.handshakeRequest
@@ -1106,6 +1138,7 @@ export class VoiceGateway
 
     clientWs.on('close', async () => {
       this.logger.log('🔴 [VoiceGateway] Cliente desconectado');
+      clearIdentificationTimer();
       if (session.mockSession) {
         session.mockSession.close();
         session.mockSession = null;
@@ -1128,14 +1161,45 @@ export class VoiceGateway
     }
   }
 
-  private isTrustedOrigin(clientWs: AuthenticatedWebSocket) {
-    const origin = clientWs.handshakeRequest?.headers.origin;
-    if (!origin) return true;
+  /**
+   * Teto de conexoes pre-auth por IP (Redis INCR com janela de 60s): sem
+   * este limite, sockets sem identificacao acumulam sessoes pendentes.
+   */
+  private enforcePreAuthConnectionLimit(clientWs: AuthenticatedWebSocket) {
+    const ip = clientIpOf(clientWs);
+    const max =
+      this.configService.get<number>('VOICE_MAX_PREAUTH_PER_IP', 10) || 10;
+    const key = `voice:preauth:${ip}`;
+    void this.redis
+      .getClient()
+      .incr(key)
+      .then(async (current) => {
+        if (current === 1) {
+          await this.redis.getClient().expire(key, 60);
+        }
+        if (current > max) {
+          this.logger.warn(
+            `[VoiceGateway] Limite de conexões pre-auth excedido por IP (${ip}): ${current}/${max}`,
+          );
+          clientWs.close(1013, 'Too many connections');
+        }
+      })
+      .catch(() => {
+        // Redis indisponivel: fail-open (disponibilidade da voz)
+      });
+  }
 
+  private isTrustedOrigin(clientWs: AuthenticatedWebSocket) {
+    const origin = clientWs.handshakeRequest?.headers?.origin;
     const environment = this.configService.get<string>(
       'ENVIRONMENT',
       'development',
     );
+    if (!origin) {
+      // Em production, handshake sem Origin é recusado (S20)
+      return environment !== 'production';
+    }
+
     if (environment === 'development' || environment === 'test') return true;
 
     const allowedOrigins = (this.configService.get<string>('CORS_ORIGIN') || '')
@@ -1144,4 +1208,14 @@ export class VoiceGateway
       .filter(Boolean);
     return typeof origin === 'string' && allowedOrigins.includes(origin);
   }
+}
+
+function clientIpOf(clientWs: AuthenticatedWebSocket): string {
+  const forwarded = clientWs.handshakeRequest?.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return (
+    clientWs.handshakeRequest?.socket?.remoteAddress?.toString() || 'unknown'
+  );
 }

@@ -7,14 +7,6 @@ export class UpdateMediaAssetDto {
 
   @IsOptional()
   @IsString()
-  storage_bucket?: string;
-
-  @IsOptional()
-  @IsString()
-  storage_path?: string;
-
-  @IsOptional()
-  @IsString()
   transcript?: string;
 
   @IsOptional()

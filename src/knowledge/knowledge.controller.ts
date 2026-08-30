@@ -7,6 +7,7 @@ import {
   Patch,
   Delete,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { CreateKnowledgeDocumentDto } from './dto/create-knowledge-document.dto';
@@ -56,6 +57,7 @@ export class KnowledgeController {
     return this.knowledgeService.listAllBases(user.id);
   }
 
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @Post('knowledge-bases/:baseId/search')
   search(
     @Param('baseId') baseId: string,

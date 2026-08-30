@@ -1,7 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join, resolve, normalize } from 'path';
-import { randomUUID } from 'crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { StorageProvider } from './storage-provider.interface';
 
 @Injectable()
@@ -75,8 +75,33 @@ export class LocalStorageProvider implements StorageProvider {
     expiresInSeconds = 300,
   ): Promise<{ signedUrl: string; error?: string }> {
     const safePath = this.sanitizePath(bucket, path);
-    const signedUrl = `${this.baseUrl}/${safePath.dir}/${safePath.file}?t=${Date.now()}&expires=${expiresInSeconds}`;
+    const exp = Date.now() + expiresInSeconds * 1000;
+    const sig = this.signKey(safePath.dir, safePath.file, exp);
+    const signedUrl = `${this.baseUrl}/${safePath.dir}/${safePath.file}?exp=${exp}&sig=${sig}`;
     return { signedUrl };
+  }
+
+  verifySignedParams(
+    key: string,
+    file: string,
+    exp: string | number,
+    sig: string,
+  ): boolean {
+    const expMs = Number(exp);
+    if (!Number.isFinite(expMs) || expMs < Date.now()) return false;
+    if (!sig) return false;
+    const expected = this.signKey(key, file, expMs);
+    const a = Buffer.from(expected);
+    const b = Buffer.from(sig);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  }
+
+  private signKey(key: string, file: string, expMs: number): string {
+    const secret = process.env.ENCRYPTION_KEY || '';
+    return createHmac('sha256', secret)
+      .update(`${key}:${file}:${expMs}`)
+      .digest('hex');
   }
 
   async ensureBucket(bucket: string): Promise<void> {

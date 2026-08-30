@@ -9,6 +9,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { ConfigService } from '@nestjs/config';
+import { decrypt } from '../utils/crypto.util';
 
 export const REQUIRES_API_KEY = 'requires_api_key';
 
@@ -64,8 +65,13 @@ export class ApiKeyGuard implements CanActivate {
       throw new UnauthorizedException('invalid_signature');
     }
 
-    const payload = JSON.stringify(request.body);
-    const expectedSig = createHmac('sha256', connection.inbound_secret_hash)
+    const rawBody = request.rawBody;
+    const payload =
+      typeof rawBody === 'string' && rawBody.length > 0
+        ? rawBody
+        : JSON.stringify(request.body);
+    const hmacKey = this.resolveHmacKey(connection.inbound_secret_hash);
+    const expectedSig = createHmac('sha256', hmacKey)
       .update(`${timestamp}.${payload}`)
       .digest('hex');
 
@@ -93,5 +99,19 @@ export class ApiKeyGuard implements CanActivate {
     await this.redisService.set(replayKey, '1');
 
     return true;
+  }
+
+  private resolveHmacKey(storedSecret: string): string {
+    if (storedSecret.startsWith('enc:')) {
+      try {
+        return decrypt(
+          storedSecret.slice('enc:'.length),
+          this.configService.get<string>('ENCRYPTION_KEY') ?? '',
+        );
+      } catch {
+        throw new UnauthorizedException('invalid_signature');
+      }
+    }
+    return storedSecret;
   }
 }
