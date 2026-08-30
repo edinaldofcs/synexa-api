@@ -1,9 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'crypto';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { RedisService } from '../../common/redis/redis.service';
 import { ProviderKeyResolverService } from './provider-key-resolver.service';
 import type { AgentConfig } from '../types/capabilities.types';
+
+const EMBEDDING_CACHE_TTL_SECONDS = 300;
+const CONTEXT_CHUNK_MAX_CHARS = 2000;
 
 @Injectable()
 export class RagSearchService {
@@ -14,6 +19,7 @@ export class RagSearchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly providerKeyResolver: ProviderKeyResolverService,
+    private readonly redisService: RedisService,
   ) {}
 
   async buildRagContext(
@@ -50,7 +56,7 @@ export class RagSearchService {
     return results
       .map(
         (item, index) =>
-          `[${index + 1}] ${item.document_title || item.document_id}\n${item.content}`,
+          `[${index + 1}] ${item.document_title || item.document_id}\n${item.content.slice(0, CONTEXT_CHUNK_MAX_CHARS)}`,
       )
       .join('\n\n');
   }
@@ -84,13 +90,27 @@ export class RagSearchService {
     ].filter(Boolean) as string[];
     const uniqueCandidates = Array.from(new Set(candidates));
 
-    for (const provider of uniqueCandidates) {
-      const apiKey = await this.providerKeyResolver.resolveApiKey(
-        clientId,
-        provider,
-      );
-      if (apiKey) {
-        providersToTry.push({ name: provider, apiKey });
+    const resolved = await Promise.all(
+      uniqueCandidates.map(async (provider) => {
+        try {
+          return {
+            name: provider,
+            apiKey: await this.providerKeyResolver.resolveApiKey(
+              clientId,
+              provider,
+            ),
+          };
+        } catch {
+          return { name: provider, apiKey: undefined };
+        }
+      }),
+    );
+    for (const resolvedProvider of resolved) {
+      if (resolvedProvider.apiKey) {
+        providersToTry.push({
+          name: resolvedProvider.name,
+          apiKey: resolvedProvider.apiKey,
+        });
       }
     }
 
@@ -120,11 +140,32 @@ export class RagSearchService {
 
     let lastError: Error | null = null;
 
+    const embeddingCacheKey = `rag:emb:${createHash('sha256')
+      .update(query)
+      .digest('hex')}`;
+    let cachedEmbedding: {
+      provider: string;
+      model: string;
+      embedding: string;
+    } | null = null;
+    try {
+      cachedEmbedding = await this.redisService.get<{
+        provider: string;
+        model: string;
+        embedding: string;
+      }>(embeddingCacheKey);
+    } catch {}
+
     for (const providerConfig of providersToTry) {
       try {
         let embedding: string;
 
-        if (providerConfig.name === 'gemini') {
+        if (
+          cachedEmbedding &&
+          cachedEmbedding.provider === providerConfig.name
+        ) {
+          embedding = cachedEmbedding.embedding;
+        } else if (providerConfig.name === 'gemini') {
           const genAI = new GoogleGenerativeAI(providerConfig.apiKey);
           const genAIModel = genAI.getGenerativeModel({
             model: 'text-embedding-004',
@@ -134,6 +175,12 @@ export class RagSearchService {
           );
           const embeddingResponse = await genAIModel.embedContent(query);
           embedding = `[${embeddingResponse.embedding.values.join(',')}]`;
+          await this.cacheEmbedding(
+            embeddingCacheKey,
+            providerConfig.name,
+            'text-embedding-004',
+            embedding,
+          );
         } else {
           let client: OpenAI;
           let model: string;
@@ -171,6 +218,12 @@ export class RagSearchService {
             input: query,
           });
           embedding = `[${embeddingResponse.data[0].embedding.join(',')}]`;
+          await this.cacheEmbedding(
+            embeddingCacheKey,
+            providerConfig.name,
+            model,
+            embedding,
+          );
         }
 
         const results = await this.prisma.$queryRawUnsafe<
@@ -318,6 +371,21 @@ export class RagSearchService {
     });
 
     return [];
+  }
+
+  private async cacheEmbedding(
+    cacheKey: string,
+    provider: string,
+    model: string,
+    embedding: string,
+  ): Promise<void> {
+    try {
+      await this.redisService.set(
+        cacheKey,
+        { provider, model, embedding },
+        EMBEDDING_CACHE_TTL_SECONDS,
+      );
+    } catch {}
   }
 
   ragToolDefinition() {

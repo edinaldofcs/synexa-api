@@ -24,7 +24,7 @@ export interface TelephonyOutboundPacerOptions {
   frameMs?: number;
 }
 
-const MAX_QUEUE_SECONDS = 120;
+const MAX_QUEUE_SECONDS = 15;
 const PREBUFFER_FRAMES = 3;
 const PACER_INTERVAL_MS = 20;
 const DECAY_SAMPLES = 20;
@@ -51,7 +51,7 @@ export class TelephonyOutboundPacer {
     const frameMs = options?.frameMs ?? 20;
     this.frameBytes = Math.round((this.sampleRate * 2 * frameMs) / 1000);
     // O Gemini gera mais rápido que o tempo real: teto baixo descartava
-    // frames no meio da fala. 120s ≈ 1,9MB por chamada — sem descarte.
+    // frames no meio da fala. 15s ≈ 240KB por chamada.
     this.maxQueueBytes = this.sampleRate * 2 * MAX_QUEUE_SECONDS;
   }
 

@@ -95,6 +95,9 @@ model conversations {
   @@index([channel_connection_id])
   @@index([end_user_id])
   @@index([status])
+  @@index([company_id, mode, status, assigned_to])
+  @@index([company_id, last_message_at(sort: Desc)])
+  @@index([company_id, last_inbound_at(sort: Desc)])
   @@unique([client_id, external_conversation_key])
 }
 
@@ -131,6 +134,7 @@ model messages {
   response_agent_runs agent_runs[] @relation("AgentRunResponseMessage")
 
   @@index([conversation_id])
+  @@index([conversation_id, created_at(sort: Desc)])
   @@unique([company_id, idempotency_key])
   @@index([status])
 }
@@ -252,6 +256,8 @@ model painel_clients {
   context_compression_enabled Boolean?        @default(false)
   context_compression_target_tokens Int?
   metadata            Json?           @default("{}") @db.JsonB
+
+  @@index([company_id])
 }
 
 model painel_agents {
@@ -562,6 +568,8 @@ model business_events {
   @@unique([conversation_id, marker_code])
   @@index([company_id, marker_code, created_at])
   @@index([client_id, marker_code, created_at])
+  @@index([company_id, created_at])
+  @@index([client_id, created_at])
 }
 
 model agent_runs {
@@ -974,6 +982,8 @@ model painel_interactions {
   // ── Índices ──
   @@index([company_id, client_id, created_at(sort: Desc)])
   @@index([client_id, has_human_answer, is_right_party, is_debt_presented, is_agreement_reached, is_promise_to_pay])
+  @@index([company_id, created_at(sort: Desc)])
+  @@index([company_id, status])
   @@index([client_identifier])
   @@index([disposition])
   @@index([call_id])

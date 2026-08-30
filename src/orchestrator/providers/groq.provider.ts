@@ -3,7 +3,13 @@ import { Logger } from '@nestjs/common';
 import { parseStructuredResponse } from '../utils/llm-parser.util';
 import { logBenchmark } from '../utils/benchmark-logger.util';
 import { llmConfig } from './llm-config';
-import type { LLMProvider, ChatParams } from './llm-provider.interface';
+import { runOpenAiCompatibleChatStream } from '../utils/openai-chat-stream.util';
+import type {
+  LLMProvider,
+  ChatParams,
+  AgentChatParams,
+} from './llm-provider.interface';
+import type { AgentOutput } from '../types/agent-message.types';
 
 function formatHistoryForOpenAI(
   history: { role: string; content: string }[],
@@ -63,6 +69,8 @@ const SYSTEM_SUFFIX =
 export class GroqProvider implements LLMProvider {
   private readonly logger = new Logger(GroqProvider.name);
   private openai: OpenAI;
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
 
   constructor(
     apiKey?: string,
@@ -72,6 +80,8 @@ export class GroqProvider implements LLMProvider {
       baseURL,
       apiKey: apiKey || '',
     });
+    this.baseUrl = baseURL;
+    this.apiKey = apiKey || '';
   }
 
   async chat({
@@ -267,5 +277,24 @@ export class GroqProvider implements LLMProvider {
 
       throw error;
     }
+  }
+
+  async chatWithPartsStream(
+    params: AgentChatParams,
+    onToken: (chunk: string) => void,
+  ): Promise<AgentOutput> {
+    return runOpenAiCompatibleChatStream({
+      logger: this.logger,
+      providerName: 'Groq',
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      model: params.agentConfig.model || llmConfig.models.groq,
+      params: { ...params, systemPrompt: params.systemPrompt + SYSTEM_SUFFIX },
+      toolsDefinition:
+        params.tools.length > 0
+          ? buildOpenAIToolDefinition(params.tools)
+          : [],
+      onToken,
+    });
   }
 }

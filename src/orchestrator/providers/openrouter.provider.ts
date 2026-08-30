@@ -3,7 +3,13 @@ import { Logger } from '@nestjs/common';
 import { parseStructuredResponse } from '../utils/llm-parser.util';
 import { logBenchmark } from '../utils/benchmark-logger.util';
 import { llmConfig } from './llm-config';
-import type { LLMProvider, ChatParams } from './llm-provider.interface';
+import { runOpenAiCompatibleChatStream } from '../utils/openai-chat-stream.util';
+import type {
+  LLMProvider,
+  ChatParams,
+  AgentChatParams,
+} from './llm-provider.interface';
+import type { AgentOutput } from '../types/agent-message.types';
 
 function formatHistoryForOpenAI(
   history: { role: string; content: string }[],
@@ -56,6 +62,7 @@ const SYSTEM_SUFFIX =
 export class OpenRouterProvider implements LLMProvider {
   private readonly logger = new Logger(OpenRouterProvider.name);
   private openai: OpenAI;
+  private readonly apiKey: string;
 
   constructor(apiKey?: string) {
     this.openai = new OpenAI({
@@ -66,6 +73,7 @@ export class OpenRouterProvider implements LLMProvider {
         'X-Title': 'Synexa Orchestrator',
       },
     });
+    this.apiKey = apiKey || '';
   }
 
   async chat({
@@ -261,5 +269,28 @@ export class OpenRouterProvider implements LLMProvider {
 
       throw error;
     }
+  }
+
+  async chatWithPartsStream(
+    params: AgentChatParams,
+    onToken: (chunk: string) => void,
+  ): Promise<AgentOutput> {
+    return runOpenAiCompatibleChatStream({
+      logger: this.logger,
+      providerName: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: this.apiKey,
+      model: params.agentConfig.model || llmConfig.models.openrouter,
+      params: { ...params, systemPrompt: params.systemPrompt + SYSTEM_SUFFIX },
+      toolsDefinition:
+        params.tools.length > 0
+          ? buildOpenAIToolDefinition(params.tools)
+          : [],
+      extraHeaders: {
+        'HTTP-Referer': 'https://github.com/antigravity',
+        'X-Title': 'Synexa Orchestrator',
+      },
+      onToken,
+    });
   }
 }

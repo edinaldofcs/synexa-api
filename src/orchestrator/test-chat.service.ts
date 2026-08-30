@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -32,6 +32,9 @@ import {
 } from './services/llm-tool-loop.service';
 
 const TEST_CHAT_CONTEXT_KEY = 'test_chat_context_variables';
+const PAINEL_MESSAGES_LIMIT = 50;
+const LOCK_RETRY_ATTEMPTS = 2;
+const LOCK_RETRY_DELAY_MS = 300;
 
 export interface TestChatDebug {
   conversationId?: string;
@@ -120,7 +123,10 @@ export class TestChatService {
     return { cleared: true, conversations: conversations.length };
   }
 
-  async send(dto: TestChatDto): Promise<{
+  async send(
+    dto: TestChatDto,
+    onToken?: (chunk: string) => void,
+  ): Promise<{
     text: string;
     agentName?: string;
     transcription?: string;
@@ -140,11 +146,16 @@ export class TestChatService {
     let resolvedAgentId: string | undefined = agentId;
     let resolvedAgentName: string | undefined;
     let resolvedAgentConfig: AgentConfig | undefined;
+    // Leituras deduplicadas por turno (P31): client/conversation/state são
+    // carregados uma única vez e repassados ao longo do fluxo.
+    let client: Awaited<ReturnType<TestChatService['loadPainelClient']>> = null;
+    let conversationRecord: Awaited<
+      ReturnType<TestChatService['loadConversationRecord']>
+    > = null;
+    let state: Record<string, unknown> = {};
 
     if (clientId) {
-      const client = await this.prisma.painel_clients.findUnique({
-        where: { id: clientId },
-      });
+      client = await this.loadPainelClient(clientId);
       if (!client) throw new Error('Cliente nao encontrado');
       companyId = client.company_id;
 
@@ -198,15 +209,23 @@ export class TestChatService {
           originChannel,
           externalUserId,
         });
-        const persistedContext =
-          await this.loadConversationContext(conversationId);
+        // P31: conversation e state sao independentes -> lidas em paralelo,
+        // uma unica vez por turno, e reaproveitadas no fim do turno.
+        const [record, loadedState] = await Promise.all([
+          this.loadConversationRecord(conversationId),
+          this.loadState(conversationId),
+        ]);
+        conversationRecord = record;
+        state = loadedState;
+        const persistedContext = this.asRecord(
+          this.asRecord(conversationRecord?.metadata)[TEST_CHAT_CONTEXT_KEY],
+        );
         contextVariables = {
           ...contextVariables,
           ...persistedContext,
         };
         Object.assign(contextVariables, this.withMessageAliases(message));
 
-        const state = await this.loadState(conversationId);
         const hadPendingAgent = Boolean(state.pending_agent_id);
         resolvedAgentId = await this.resolveAgentId(
           clientId,
@@ -216,7 +235,11 @@ export class TestChatService {
         );
         if (hadPendingAgent) {
           // Consome a transferência pendente para não colar nas próximas mensagens
-          await this.saveState(conversationId, { pending_agent_id: null });
+          state = await this.saveState(
+            conversationId,
+            { pending_agent_id: null },
+            state,
+          );
         }
       } else {
         resolvedAgentId = await this.resolveAgentId(
@@ -316,7 +339,8 @@ export class TestChatService {
       const result = await this.llmToolLoop.run({
         provider,
         model,
-        apiKey,
+apiKey,
+        onToken,
         message,
         files,
         systemPrompt: this.buildContextualSystemPrompt(
@@ -350,13 +374,13 @@ export class TestChatService {
 
     const lockKey = `lock:test-chat:${conversationId}`;
     let acquired = await this.redisService.acquireLock(lockKey, 15);
-    if (!acquired) {
-      // Pequena espera e retry para evitar bloqueios transitórios
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+    for (let attempt = 0; !acquired && attempt < LOCK_RETRY_ATTEMPTS; attempt++) {
+      // Tentativas rápidas (300ms) no lugar da espera fixa de 1,5s
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
       acquired = await this.redisService.acquireLock(lockKey, 15);
     }
     if (!acquired) {
-      throw new Error(
+      throw new ConflictException(
         'Conversa em processamento. Tente novamente em instantes.',
       );
     }
@@ -406,7 +430,8 @@ export class TestChatService {
         result = await this.llmToolLoop.run({
           provider,
           model,
-          apiKey,
+apiKey,
+          onToken,
           message,
           files,
           systemPrompt: this.buildContextualSystemPrompt(
@@ -499,12 +524,18 @@ export class TestChatService {
         apiTools,
         allClientApiNames,
       );
-      await this.saveConversationContext(conversationId, contextVariables);
+      await this.saveConversationContext(
+        conversationId,
+        contextVariables,
+        this.asRecord(conversationRecord?.metadata),
+      );
 
       if (resolvedAgentId) {
-        await this.saveState(conversationId, {
-          current_agent_id: resolvedAgentId,
-        });
+        state = await this.saveState(
+          conversationId,
+          { current_agent_id: resolvedAgentId },
+          state,
+        );
       }
 
       // Transição pós-API: avalia condições de ativação sobre o estado
@@ -527,6 +558,7 @@ export class TestChatService {
             contextVariables,
             history,
             memory,
+            onToken,
           );
           if (immediateResult) {
             const immediateResponseMessage = await this.saveMessage({
@@ -561,11 +593,16 @@ export class TestChatService {
             await this.saveConversationContext(
               conversationId,
               immediateResult.contextVariables,
+              this.asRecord(conversationRecord?.metadata),
             );
-            await this.saveState(conversationId, {
-              current_agent_id: activation.agent.id,
-              pending_agent_id: null,
-            });
+            state = await this.saveState(
+              conversationId,
+              {
+                current_agent_id: activation.agent.id,
+                pending_agent_id: null,
+              },
+              state,
+            );
             await this.syncPainelInteraction({
               companyId,
               clientId,
@@ -604,36 +641,32 @@ export class TestChatService {
           }
         } else if (activation) {
           // Modo "próxima mensagem": agenda o novo agente para o próximo turno
-          await this.saveState(conversationId, {
-            current_agent_id: activation.agent.id,
-            pending_agent_id: null,
-          });
+          state = await this.saveState(
+            conversationId,
+            {
+              current_agent_id: activation.agent.id,
+              pending_agent_id: null,
+            },
+            state,
+          );
         }
       }
 
       let crmRecord: Record<string, unknown> | undefined;
       if (conversationId) {
         try {
-          const freshConv = await this.prisma.conversations.findUnique({
-            where: { id: conversationId },
-            include: { end_users: true },
-          });
+          // P31: reaproveita client/conversation/state lidos no início do turno
+          // (nenhuma re-leitura de painel_clients, conversations ou
+          // conversation_state aqui).
+          const freshConv = conversationRecord;
 
-          const client = clientId
-            ? await this.prisma.painel_clients.findUnique({
-                where: { id: clientId },
-                select: { metadata: true },
-              })
-            : null;
           const clientMeta =
             (client?.metadata as Record<string, unknown>) || {};
           const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
 
-          const freshState =
-            await this.conversationsService.getState(conversationId);
           const combinedState = {
             ...contextVariables,
-            ...freshState,
+            ...state,
           };
 
           // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
@@ -668,6 +701,9 @@ export class TestChatService {
               data: {
                 metadata: {
                   ...existingMeta,
+                  // Reconstitui o contexto persistido neste turno
+                  // (saveConversationContext) sem reler o documento.
+                  [TEST_CHAT_CONTEXT_KEY]: contextVariables,
                   crm_record: crmRecord,
                 } as any,
               },
@@ -831,24 +867,44 @@ export class TestChatService {
     return safeMetadata;
   }
 
-  private async loadConversationContext(conversationId: string) {
-    const conversation = await this.prisma.conversations.findUnique({
+  /**
+   * P31: leitura única da conversa por turno (com end_users para o bloco de
+   * CRM/analytics). O resultado é cacheado em `conversationRecord` no send().
+   */
+  private loadConversationRecord(conversationId: string) {
+    return this.prisma.conversations.findUnique({
       where: { id: conversationId },
-      select: { metadata: true },
+      include: { end_users: true },
     });
-    const metadata = this.asRecord(conversation?.metadata);
-    return this.asRecord(metadata[TEST_CHAT_CONTEXT_KEY]);
+  }
+
+  /**
+   * P31: leitura única do client por turno. O resultado é cacheado em
+   * `client` no send() e reutilizado no bloco de CRM.
+   */
+  private loadPainelClient(clientId: string) {
+    return this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+    });
   }
 
   private async saveConversationContext(
     conversationId: string,
     contextVariables: Record<string, unknown>,
+    existingMetadata?: Record<string, any>,
   ) {
-    const conversation = await this.prisma.conversations.findUnique({
-      where: { id: conversationId },
-      select: { metadata: true },
-    });
-    const metadata = this.asRecord(conversation?.metadata);
+    // P31: quando o caller já tem o metadata carregado no turno, evita a
+    // re-leitura da conversa antes do update.
+    const metadata =
+      existingMetadata ??
+      this.asRecord(
+        (
+          await this.prisma.conversations.findUnique({
+            where: { id: conversationId },
+            select: { metadata: true },
+          })
+        )?.metadata,
+      );
 
     const nextMetadata = {
       ...metadata,
@@ -872,15 +928,18 @@ export class TestChatService {
     return (cs?.state as Record<string, unknown>) || {};
   }
 
+  /**
+   * P31: grava o state sem reler `conversation_state` — o caller repassa o
+   * estado já carregado no turno (`existingState`), mantendo o merge idêntico
+   * ao comportamento anterior. Retorna o estado mesclado.
+   */
   private async saveState(
     conversationId: string,
     partialState: Record<string, unknown>,
-  ) {
-    const existing = await this.prisma.conversation_state.findUnique({
-      where: { conversation_id: conversationId },
-    });
+    existingState?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const merged = {
-      ...((existing?.state as Record<string, unknown>) || {}),
+      ...((existingState as Record<string, unknown>) || {}),
       ...partialState,
     };
     await this.prisma.conversation_state.upsert({
@@ -891,6 +950,7 @@ export class TestChatService {
         state: merged as any,
       },
     });
+    return merged;
   }
 
   private async resolveAgentId(
@@ -996,6 +1056,7 @@ export class TestChatService {
     contextVariables: Record<string, unknown>,
     history: MemoryMessage[],
     _memory: any,
+    onToken?: (chunk: string) => void,
   ) {
     const transitions = agent.transitions || {};
     const provider =
@@ -1042,7 +1103,8 @@ export class TestChatService {
       const result = await this.llmToolLoop.run({
         provider,
         model,
-        apiKey,
+apiKey,
+        onToken,
         message,
         systemPrompt: this.buildContextualSystemPrompt(
           agent.system_prompt || undefined,
@@ -1414,6 +1476,15 @@ export class TestChatService {
         });
       }
 
+      // F2.5/P31: teto no array persistido (últimas N mensagens) e escrita
+      // ignorada quando nada mudou (mesmo tamanho e mesmo último item).
+      const cappedMessages = newMsgs.slice(-PAINEL_MESSAGES_LIMIT);
+      const messagesUnchanged =
+        cappedMessages.length === currentMessages.length &&
+        JSON.stringify(cappedMessages[cappedMessages.length - 1]) ===
+          JSON.stringify(currentMessages[currentMessages.length - 1]);
+      if (messagesUnchanged) return;
+
       const totalTokens =
         (existing?.total_tokens || 0) + (params.usage?.total_tokens || 0);
       const promptTokens =
@@ -1473,7 +1544,7 @@ export class TestChatService {
           prompt_tokens: promptTokens,
           completion_tokens: completionTokens,
           context_variables: vars as any,
-          messages: newMsgs as any,
+          messages: cappedMessages as any,
           started_at: existing?.started_at || now,
           status: isAgreementReached ? 'completed' : 'ongoing',
         },
@@ -1513,7 +1584,7 @@ export class TestChatService {
           prompt_tokens: promptTokens,
           completion_tokens: completionTokens,
           context_variables: vars as any,
-          messages: newMsgs as any,
+          messages: cappedMessages as any,
           status: isAgreementReached
             ? 'completed'
             : existing?.status || 'ongoing',

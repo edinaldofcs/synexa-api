@@ -13,7 +13,10 @@ export class IngestionProcessor {
     private readonly textAiExecutionService: TextAiExecutionService,
   ) {}
 
-  @Process(JOB_NORMALIZE_INBOUND)
+  @Process({
+    name: JOB_NORMALIZE_INBOUND,
+    concurrency: Number(process.env.WORKER_INGESTION_CONCURRENCY) || 4,
+  })
   async process(job: Job<IngestJobData>) {
     const data = job.data;
     this.logger.log(

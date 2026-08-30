@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -16,6 +17,27 @@ import { extractTenantContext } from '../common/utils/tenant-access.helper';
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
+  private resolveTimeWindow(
+    from?: string,
+    to?: string,
+  ): { from: Date; to: Date } {
+    const toDate = to ? new Date(to) : new Date();
+    const fromDate = from
+      ? new Date(from)
+      : new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+    if (
+      Number.isNaN(fromDate.getTime()) ||
+      Number.isNaN(toDate.getTime()) ||
+      fromDate >= toDate
+    ) {
+      throw new BadRequestException(
+        "Parâmetro 'from' deve ser uma data válida anterior a 'to'",
+      );
+    }
+    const maxToDate = new Date(fromDate.getTime() + 90 * 24 * 60 * 60 * 1000);
+    return { from: fromDate, to: toDate > maxToDate ? maxToDate : toDate };
+  }
+
   @Get('business')
   async business(
     @CurrentUser() user: any,
@@ -25,9 +47,10 @@ export class AnalyticsController {
     @Query('channel') channel?: string,
   ) {
     const ctx = extractTenantContext(user);
+    const timeWindow = this.resolveTimeWindow(from, to);
     return this.analyticsService.getBusinessAnalytics(ctx.companyId, {
-      from: from ? new Date(from) : undefined,
-      to: to ? new Date(to) : undefined,
+      from: timeWindow.from,
+      to: timeWindow.to,
       clientId: clientId || undefined,
       channel: channel || undefined,
     });
@@ -42,11 +65,12 @@ export class AnalyticsController {
     @Query('to') to?: string,
   ) {
     const ctx = extractTenantContext(user);
+    const timeWindow = this.resolveTimeWindow(from, to);
     return this.analyticsService.getBiDashboard(ctx.companyId, {
       clientId: clientId || undefined,
       channel: channel || undefined,
-      from: from ? new Date(from) : undefined,
-      to: to ? new Date(to) : undefined,
+      from: timeWindow.from,
+      to: timeWindow.to,
     });
   }
 
@@ -109,10 +133,11 @@ export class AnalyticsController {
     @Query('to') to?: string,
   ) {
     const ctx = extractTenantContext(user);
+    const timeWindow = this.resolveTimeWindow(from, to);
     return this.analyticsService.getCostsAndConsumption(ctx.companyId, {
       clientId: clientId || undefined,
-      from: from ? new Date(from) : undefined,
-      to: to ? new Date(to) : undefined,
+      from: timeWindow.from,
+      to: timeWindow.to,
     });
   }
 

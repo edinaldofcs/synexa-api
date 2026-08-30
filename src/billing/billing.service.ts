@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
 
@@ -44,6 +45,18 @@ export interface DailyUsageItem {
   billableBrl: number;
 }
 
+interface AgentRunUsageRow {
+  provider_key: string;
+  model_key: string;
+  total_runs: number;
+  voice_runs: number;
+  voice_seconds: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
@@ -77,28 +90,36 @@ export class BillingService {
     const markupPercent = this.pricingService.getMarkupPercent();
     const exchangeRate = this.pricingService.getExchangeRate();
 
-    // Consulta agent_runs no mês para o tenant
-    const runs = await this.prisma.agent_runs.findMany({
-      where: {
-        company_id: companyId,
-        started_at: {
-          gte: startOfMonth,
-          lte: endOfMonth,
-        },
-      },
-      select: {
-        id: true,
-        provider: true,
-        model: true,
-        input_tokens: true,
-        output_tokens: true,
-        total_tokens: true,
-        cost: true,
-        status: true,
-        started_at: true,
-        trace: true,
-      },
-    });
+    const usageRows = await this.prisma.$queryRaw<AgentRunUsageRow[]>(
+      Prisma.sql`
+        /* billing_usage_by_model */
+        SELECT
+          COALESCE(NULLIF(provider, ''), 'synexa') AS provider_key,
+          COALESCE(NULLIF(model, ''), 'default') AS model_key,
+          COUNT(*)::int AS total_runs,
+          COUNT(*) FILTER (
+            WHERE provider = 'gemini-live' OR model LIKE '%live%'
+          )::int AS voice_runs,
+          COALESCE(
+            SUM((trace ->> 'duration_seconds')::float8) FILTER (
+              WHERE provider = 'gemini-live' OR model LIKE '%live%'
+            ),
+            0
+          )::float8 AS voice_seconds,
+          COALESCE(SUM(COALESCE(input_tokens, 0)), 0)::float8 AS input_tokens,
+          COALESCE(SUM(COALESCE(output_tokens, 0)), 0)::float8 AS output_tokens,
+          COALESCE(
+            SUM(COALESCE(NULLIF(total_tokens, 0), COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0))),
+            0
+          )::float8 AS total_tokens,
+          COALESCE(SUM(COALESCE(cost, 0)), 0)::float8 AS cost_usd
+        FROM agent_runs
+        WHERE company_id = ${companyId}::uuid
+          AND started_at >= ${startOfMonth}
+          AND started_at <= ${endOfMonth}
+        GROUP BY 1, 2
+      `,
+    );
 
     let textInteractions = 0;
     let voiceInteractions = 0;
@@ -106,6 +127,7 @@ export class BillingService {
     let totalOutputTokens = 0;
     let totalVoiceSeconds = 0;
     let rawCostUsd = 0;
+    let totalInteractions = 0;
 
     const modelMap = new Map<string, ModelUsageSummary>();
     const providerMap: Record<
@@ -113,32 +135,25 @@ export class BillingService {
       { runs: number; tokens: number; costUsd: number }
     > = {};
 
-    for (const run of runs) {
-      const isVoice =
-        run.provider === 'gemini-live' ||
-        (run.model && run.model.includes('live'));
+    for (const row of usageRows) {
+      const runs = Number(row.total_runs);
+      const voiceRuns = Number(row.voice_runs);
+      const inputTokens = Number(row.input_tokens);
+      const outputTokens = Number(row.output_tokens);
+      const totalTokens = Number(row.total_tokens);
+      const cost = Number(row.cost_usd);
 
-      if (isVoice) {
-        voiceInteractions++;
-        const trace = (run.trace as any) || {};
-        totalVoiceSeconds += trace.duration_seconds || 0;
-      } else {
-        textInteractions++;
-      }
-
-      const inputTokens = run.input_tokens || 0;
-      const outputTokens = run.output_tokens || 0;
-      const totalTokens = run.total_tokens || inputTokens + outputTokens;
-      const cost = Number(run.cost || 0);
-
+      totalInteractions += runs;
+      voiceInteractions += voiceRuns;
+      textInteractions += runs - voiceRuns;
       totalInputTokens += inputTokens;
       totalOutputTokens += outputTokens;
+      totalVoiceSeconds += Number(row.voice_seconds);
       rawCostUsd += cost;
 
-      const modelKey = run.model || 'default';
-      const providerKey = run.provider || 'synexa';
+      const modelKey = row.model_key;
+      const providerKey = row.provider_key;
 
-      // Agrupamento por modelo
       if (!modelMap.has(modelKey)) {
         modelMap.set(modelKey, {
           model: modelKey,
@@ -153,17 +168,16 @@ export class BillingService {
       }
 
       const m = modelMap.get(modelKey)!;
-      m.totalRuns++;
+      m.totalRuns += runs;
       m.inputTokens += inputTokens;
       m.outputTokens += outputTokens;
       m.totalTokens += totalTokens;
       m.costUsd += cost;
 
-      // Agrupamento por provedor
       if (!providerMap[providerKey]) {
         providerMap[providerKey] = { runs: 0, tokens: 0, costUsd: 0 };
       }
-      providerMap[providerKey].runs++;
+      providerMap[providerKey].runs += runs;
       providerMap[providerKey].tokens += totalTokens;
       providerMap[providerKey].costUsd += cost;
     }
@@ -197,7 +211,7 @@ export class BillingService {
       markupPercent,
       exchangeRate,
       totals: {
-        totalInteractions: runs.length,
+        totalInteractions,
         textInteractions,
         voiceInteractions,
         inputTokens: totalInputTokens,
@@ -217,58 +231,40 @@ export class BillingService {
     const since = new Date();
     since.setDate(since.getDate() - days);
 
-    const runs = await this.prisma.agent_runs.findMany({
-      where: {
-        company_id: companyId,
-        started_at: { gte: since },
-      },
-      select: {
-        started_at: true,
-        total_tokens: true,
-        input_tokens: true,
-        output_tokens: true,
-        cost: true,
-        provider: true,
-        trace: true,
-      },
-      orderBy: { started_at: 'asc' },
-    });
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        date: string;
+        runs: number;
+        tokens: number;
+        voice_seconds: number;
+        cost_usd: number;
+      }>
+    >(
+      Prisma.sql`
+        /* billing_usage_by_day */
+        SELECT
+          to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+          COUNT(*)::int AS runs,
+          COALESCE(SUM(COALESCE(NULLIF(total_tokens, 0), COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0))), 0)::float8 AS tokens,
+          COALESCE(SUM((trace ->> 'duration_seconds')::float8), 0)::float8 AS voice_seconds,
+          COALESCE(SUM(COALESCE(cost, 0)), 0)::float8 AS cost_usd
+        FROM agent_runs
+        WHERE company_id = ${companyId}::uuid
+          AND started_at >= ${since}
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `,
+    );
 
-    const dayMap = new Map<string, DailyUsageItem>();
-
-    for (const run of runs) {
-      const dateKey = (run.started_at || new Date())
-        .toISOString()
-        .split('T')[0];
-      const tokens =
-        run.total_tokens || (run.input_tokens || 0) + (run.output_tokens || 0);
-      const cost = Number(run.cost || 0);
-      const trace = (run.trace as any) || {};
-      const voiceSec = trace.duration_seconds || 0;
-
-      if (!dayMap.has(dateKey)) {
-        dayMap.set(dateKey, {
-          date: dateKey,
-          runs: 0,
-          tokens: 0,
-          voiceSeconds: 0,
-          costUsd: 0,
-          billableBrl: 0,
-        });
-      }
-
-      const d = dayMap.get(dateKey)!;
-      d.runs++;
-      d.tokens += tokens;
-      d.voiceSeconds += voiceSec;
-      d.costUsd += cost;
-    }
-
-    return Array.from(dayMap.values()).map((d) => {
-      const billable = this.pricingService.calculateBillable(d.costUsd, false);
+    return rows.map((row) => {
+      const costUsd = Number(row.cost_usd);
+      const billable = this.pricingService.calculateBillable(costUsd, false);
       return {
-        ...d,
-        costUsd: Number(d.costUsd.toFixed(6)),
+        date: row.date,
+        runs: Number(row.runs),
+        tokens: Number(row.tokens),
+        voiceSeconds: Number(row.voice_seconds),
+        costUsd: Number(costUsd.toFixed(6)),
         billableBrl: billable.billableCostBrl,
       };
     });

@@ -1,10 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { getLLMProvider } from './providers/llm-provider.factory';
 import { llmConfig } from './providers/llm-config';
 import type {
   AgentChatParams,
+  LLMProvider,
   ProviderCapabilities,
 } from './providers/llm-provider.interface';
 import type {
@@ -40,7 +42,7 @@ export interface ProcessMessageResult {
 import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
 import { FallbackProviderService } from './services/fallback-provider.service';
-import { retryWithBackoff } from './utils/retry-with-backoff.util';
+import { retryWithBackoff, isRetryableError } from './utils/retry-with-backoff.util';
 import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 
@@ -50,6 +52,7 @@ export class OrchestrationService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly redisService: RedisService,
     private readonly conversationsService: ConversationsService,
     private readonly agentConfigResolver: AgentConfigResolver,
     private readonly providerKeyResolver: ProviderKeyResolverService,
@@ -134,16 +137,23 @@ export class OrchestrationService {
       },
     });
 
-    await this.waitForMediaProcessing(messageId);
+    const hasMediaParts = (inboundMessage?.message_parts || []).some(
+      (part: any) => part.part_type === 'image' || part.part_type === 'audio',
+    );
 
-    const updatedMessage =
-      (await this.prisma.messages.findUnique({
-        where: { id: messageId },
-        include: {
-          message_parts: { orderBy: { order_index: 'asc' } },
-          media_assets: true,
-        },
-      })) || inboundMessage;
+    let updatedMessage = inboundMessage;
+    if (hasMediaParts) {
+      await this.waitForMediaProcessing(messageId);
+
+      updatedMessage =
+        (await this.prisma.messages.findUnique({
+          where: { id: messageId },
+          include: {
+            message_parts: { orderBy: { order_index: 'asc' } },
+            media_assets: true,
+          },
+        })) || inboundMessage;
+    }
 
     const inputParts = await this.buildInputParts(
       updatedMessage,
@@ -152,29 +162,40 @@ export class OrchestrationService {
     );
 
     const history = await this.buildHistory(
-      conversationId,
+      conversation,
       messageId,
       agentConfig,
       providerCapabilities,
     );
 
+    const ragToolEnabled =
+      agentConfig.capabilities.rag ||
+      agentConfig.allowed_knowledge_base_ids.length > 0;
+
     let ragContext: string | undefined;
-    try {
-      ragContext = await this.ragSearchService.buildRagContext(
-        agentConfig,
-        text,
-        clientId,
-        agentRun.id,
-        conversationId,
-        messageId,
-        companyId,
-        requestId,
+    if (ragToolEnabled) {
+      this.logger.log(
+        { agentId: sanitize(agentConfig.agentId) },
+        'RAG proativo pulado: tool rag.search registrada no turno',
       );
-    } catch (ragError) {
-      this.logger.warn(
-        { error: (ragError as Error).message },
-        'RAG search failed, continuing without context',
-      );
+    } else {
+      try {
+        ragContext = await this.ragSearchService.buildRagContext(
+          agentConfig,
+          text,
+          clientId,
+          agentRun.id,
+          conversationId,
+          messageId,
+          companyId,
+          requestId,
+        );
+      } catch (ragError) {
+        this.logger.warn(
+          { error: (ragError as Error).message },
+          'RAG search failed, continuing without context',
+        );
+      }
     }
 
     const hasMedia = inputParts.some(
@@ -211,6 +232,7 @@ export class OrchestrationService {
       },
       ragContext,
       onToolCall: async (toolName, args) => {
+        toolCallExecuted = true;
         const result = await this.toolCallDispatcher.dispatch(
           String(toolName),
           args || {},
@@ -278,6 +300,7 @@ export class OrchestrationService {
     let activeProviderName = llmProvider;
     let activeModel = agentConfig.model || llmConfig.models.gemini;
     let fallbackUsed = false;
+    let toolCallExecuted = false;
 
     // 1. Verifica se o circuito do provedor primário está aberto
     const canUsePrimary = await this.circuitBreaker.canExecute(
@@ -322,18 +345,10 @@ export class OrchestrationService {
           'Processing with chatWithParts',
         );
 
-        output = await retryWithBackoff(
-          async () => activeProvider.chatWithParts!(params),
-          {
-            maxRetries: 2,
-            initialDelayMs: 300,
-            onRetry: (err, attempt) => {
-              this.logger.warn(
-                { attempt, error: (err as Error).message },
-                'Retry na chamada de LLM',
-              );
-            },
-          },
+        output = await this.chatWithPartsWithRetry(
+          activeProvider,
+          params,
+          () => toolCallExecuted,
         );
 
         await this.circuitBreaker.recordSuccess(activeProviderName, clientId);
@@ -488,6 +503,47 @@ export class OrchestrationService {
     );
   }
 
+  /**
+   * Retry do turno somente enquanto NENHUMA tool call tiver executado:
+   * após a 1a tool call, um novo retry re-executaria side effects
+   * (RAG, APIs de cliente) sem idempotência.
+   */
+  private async chatWithPartsWithRetry(
+    provider: LLMProvider,
+    params: AgentChatParams,
+    hasToolCalls: () => boolean,
+  ): Promise<AgentOutput> {
+    const maxRetries = 2;
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await provider.chatWithParts!(params);
+      } catch (error) {
+        lastError = error;
+        if (
+          hasToolCalls() ||
+          attempt >= maxRetries ||
+          !isRetryableError(error)
+        ) {
+          if (hasToolCalls()) {
+            this.logger.warn(
+              { attempt, error: (error as Error).message },
+              'Tool calls já executadas no turno; erro propagado sem retry',
+            );
+          }
+          throw error;
+        }
+        const delay = Math.min(300 * Math.pow(2, attempt), 3000);
+        this.logger.warn(
+          { attempt: attempt + 1, error: (error as Error).message },
+          'Retry na chamada de LLM',
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError;
+  }
+
   private async waitForMediaProcessing(messageId: string): Promise<void> {
     const started = Date.now();
     const timeoutMs = 15_000;
@@ -582,14 +638,12 @@ export class OrchestrationService {
   }
 
   private async buildHistory(
-    conversationId: string,
+    conversation: unknown,
     currentMessageId: string,
     agentConfig: AgentConfig,
     providerCapabilities: ProviderCapabilities,
   ): Promise<AgentMessage[]> {
-    const conversation =
-      await this.conversationsService.getConversation(conversationId);
-    const messages = (conversation as any).messages || [];
+    const messages = (conversation as any)?.messages || [];
 
     const history: AgentMessage[] = [];
 
@@ -672,6 +726,31 @@ export class OrchestrationService {
     return history;
   }
 
+  private async getActiveAgents(clientId: string): Promise<any[]> {
+    const cacheKey = `agents:active:${clientId}`;
+    try {
+      const cached = await this.redisService.get<any[]>(cacheKey);
+      if (cached) return cached;
+    } catch {}
+
+    const agents = await this.prisma.painel_agents.findMany({
+      where: { client_id: clientId, is_active: true },
+      select: {
+        id: true,
+        service_step: true,
+        activation_conditions: true,
+        activation_mode: true,
+      },
+      orderBy: { execution_order: 'asc' },
+    });
+
+    try {
+      await this.redisService.set(cacheKey, agents, 30);
+    } catch {}
+
+    return agents;
+  }
+
   /**
    * Avalia as condições de ativação dos outros agentes após o retorno de uma
    * API/tool, sobre o estado enriquecido. Retorna o primeiro agente (por
@@ -683,16 +762,7 @@ export class OrchestrationService {
     state: Record<string, unknown>,
   ): Promise<{ agent: any; mode: string } | null> {
     try {
-      const agents = await this.prisma.painel_agents.findMany({
-        where: { client_id: clientId, is_active: true },
-        select: {
-          id: true,
-          service_step: true,
-          activation_conditions: true,
-          activation_mode: true,
-        },
-        orderBy: { execution_order: 'asc' },
-      });
+      const agents = await this.getActiveAgents(clientId);
 
       for (const agent of agents) {
         if (agent.id === currentAgentId) continue;

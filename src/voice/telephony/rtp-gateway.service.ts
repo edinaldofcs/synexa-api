@@ -183,9 +183,10 @@ export class RtpChannelSession {
       pcm24Or16,
       this.codec,
     );
-    // Teto da fila (120s @ 8kHz = 1.920 frames de 160B): o Gemini produz mais
-    // rápido que o dreno de 1 frame/20ms; sem teto a memória cresce sem bound
-    const maxQueueBytes = 160 * 9600;
+    // Teto da fila (32s @ 8kHz = 1.600 frames de 160B ≈ 256KB): o Gemini
+    // produz mais rápido que o dreno de 1 frame/20ms; sem teto a memória
+    // cresce sem bound
+    const maxQueueBytes = 160 * 1600;
     while (this.outboundQueueBytes + encodedG711.length > maxQueueBytes) {
       const dropped = this.outboundQueue.shift();
       if (!dropped) break;

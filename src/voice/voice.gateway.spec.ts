@@ -38,6 +38,7 @@ describe('VoiceGateway security', () => {
       {
         flushAiBuffer: jest.fn(),
         persistSessionTelemetry: jest.fn(),
+        persistConversationState: jest.fn(),
         buildTelemetryPayload: jest.fn().mockReturnValue(null),
       } as any,
     );

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   QUEUE_INGESTION,
@@ -64,77 +65,119 @@ export class ObservabilityService {
   async getLatencyMetrics(hours: number = 24, companyId?: string | null) {
     const since = new Date(Date.now() - hours * 3600_000);
 
-    const where: any = {
-      started_at: { gte: since },
-      status: { in: ['success', 'failed'] },
+    const conditions: Prisma.Sql[] = [
+      Prisma.sql`started_at >= ${since}`,
+      Prisma.sql`status IN ('success', 'failed')`,
+    ];
+    if (companyId) conditions.push(Prisma.sql`company_id = ${companyId}::uuid`);
+    const where = Prisma.join(conditions, ' AND ');
+
+    const [metricsRows, modelRows] = await Promise.all([
+      this.prisma.$queryRaw<
+        Array<{
+          total_runs: number;
+          failed_runs: number;
+          avg_latency_ms: number;
+          p95_latency_ms: number;
+        }>
+      >(
+        Prisma.sql`
+          /* obs_latency_metrics */
+          SELECT
+            COUNT(*)::int AS total_runs,
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_runs,
+            COALESCE(AVG(latency_ms), 0)::float8 AS avg_latency_ms,
+            COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)::float8 AS p95_latency_ms
+          FROM agent_runs
+          WHERE ${where}
+        `,
+      ),
+      this.prisma.$queryRaw<Array<{ model: string; runs: number }>>(
+        Prisma.sql`
+          /* obs_latency_by_model */
+          SELECT
+            COALESCE(NULLIF(model, ''), 'unknown') AS model,
+            COUNT(*)::int AS runs
+          FROM agent_runs
+          WHERE ${where}
+          GROUP BY 1
+        `,
+      ),
+    ]);
+
+    const metrics = metricsRows[0] ?? {
+      total_runs: 0,
+      failed_runs: 0,
+      avg_latency_ms: 0,
+      p95_latency_ms: 0,
     };
-    if (companyId) where.company_id = companyId;
-
-    const agentRuns = await this.prisma.agent_runs.findMany({
-      where,
-      select: { latency_ms: true, status: true, model: true, started_at: true },
-      orderBy: { started_at: 'desc' },
-    });
-
-    const latencies = agentRuns
-      .filter((r) => r.latency_ms != null)
-      .map((r) => r.latency_ms!);
-    const avgLatency =
-      latencies.length > 0
-        ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
-        : 0;
-    const p95Latency =
-      latencies.length > 0
-        ? latencies.sort((a, b) => a - b)[Math.floor(latencies.length * 0.95)]
-        : 0;
-    const errorRate =
-      agentRuns.length > 0
-        ? Math.round(
-            (agentRuns.filter((r) => r.status === 'failed').length /
-              agentRuns.length) *
-              100,
-          )
-        : 0;
 
     return {
       period_hours: hours,
-      total_runs: agentRuns.length,
-      avg_latency_ms: avgLatency,
-      p95_latency_ms: p95Latency,
-      error_rate_percent: errorRate,
-      by_model: this.groupBy(agentRuns, 'model'),
+      total_runs: Number(metrics.total_runs),
+      avg_latency_ms: Math.round(Number(metrics.avg_latency_ms)),
+      p95_latency_ms: Math.round(Number(metrics.p95_latency_ms)),
+      error_rate_percent:
+        Number(metrics.total_runs) > 0
+          ? Math.round(
+              (Number(metrics.failed_runs) / Number(metrics.total_runs)) * 100,
+            )
+          : 0,
+      by_model: Object.fromEntries(
+        modelRows.map((row) => [row.model, Number(row.runs)]),
+      ),
     };
   }
 
   async getCostMetrics(hours: number = 168, companyId?: string | null) {
     const since = new Date(Date.now() - hours * 3600_000);
 
-    const where: any = { started_at: { gte: since }, status: 'success' };
-    if (companyId) where.company_id = companyId;
+    const conditions: Prisma.Sql[] = [
+      Prisma.sql`started_at >= ${since}`,
+      Prisma.sql`status = 'success'`,
+    ];
+    if (companyId) conditions.push(Prisma.sql`company_id = ${companyId}::uuid`);
+    const where = Prisma.join(conditions, ' AND ');
 
-    const runs = await this.prisma.agent_runs.findMany({
-      where,
-      select: {
-        cost: true,
-        input_tokens: true,
-        output_tokens: true,
-        model: true,
-        provider: true,
-      },
-    });
-
-    const totalCost = runs.reduce((sum, r) => sum + Number(r.cost || 0), 0);
-    const totalTokens = runs.reduce(
-      (sum, r) => sum + (r.input_tokens || 0) + (r.output_tokens || 0),
-      0,
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        provider: string;
+        runs: number;
+        total_cost: number;
+        total_tokens: number;
+      }>
+    >(
+      Prisma.sql`
+        /* obs_cost_by_provider */
+        SELECT
+          COALESCE(NULLIF(provider, ''), 'unknown') AS provider,
+          COUNT(*)::int AS runs,
+          COALESCE(SUM(COALESCE(cost, 0)), 0)::float8 AS total_cost,
+          COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0)::float8 AS total_tokens
+        FROM agent_runs
+        WHERE ${where}
+        GROUP BY 1
+      `,
     );
+
+    let totalRuns = 0;
+    let totalCost = 0;
+    let totalTokens = 0;
+    const byProvider: Record<string, number> = {};
+
+    for (const row of rows) {
+      totalRuns += Number(row.runs);
+      totalCost += Number(row.total_cost);
+      totalTokens += Number(row.total_tokens);
+      byProvider[row.provider] = Number(row.runs);
+    }
 
     return {
       period_hours: hours,
-      total_runs: runs.length,
+      total_runs: totalRuns,
       total_cost: totalCost,
       total_tokens: totalTokens,
-      by_provider: this.groupBy(runs, 'provider'),
+      by_provider: byProvider,
     };
   }
 
@@ -164,13 +207,5 @@ export class ObservabilityService {
         failures: r._count.id,
       })),
     };
-  }
-
-  private groupBy(items: any[], field: string): Record<string, number> {
-    return items.reduce((acc: Record<string, number>, item: any) => {
-      const key = String(item[field] || 'unknown');
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
   }
 }

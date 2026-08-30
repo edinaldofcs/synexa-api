@@ -7,6 +7,7 @@ export type OperatorPresenceStatus = 'available' | 'finishing';
 export class OperatorPresenceService {
   private readonly logger = new Logger(OperatorPresenceService.name);
   private readonly PRESENCE_TTL_SECONDS = 35; // Heartbeat a cada 15s no frontend
+  private readonly LAST_SEEN_TTL_SECONDS = 604800; // 7 dias
 
   constructor(private readonly redisService: RedisService) {}
 
@@ -37,7 +38,7 @@ export class OperatorPresenceService {
     await redis
       .pipeline()
       .set(presenceKey, payload, 'EX', this.PRESENCE_TTL_SECONDS)
-      .set(lastSeenKey, now)
+      .set(lastSeenKey, now, 'EX', this.LAST_SEEN_TTL_SECONDS)
       .exec();
 
     this.logger.debug(
@@ -68,10 +69,27 @@ export class OperatorPresenceService {
     return exists === 1;
   }
 
-  async listOnline(companyId: string): Promise<string[]> {
+  private async scanPresenceKeys(companyId: string): Promise<string[]> {
     const redis = this.redisService.getClient();
     const pattern = `operator:presence:${companyId}:*`;
-    const keys = await redis.keys(pattern);
+    const keys: string[] = [];
+    let cursor = '0';
+    do {
+      const [next, batch] = await redis.scan(
+        cursor,
+        'MATCH',
+        pattern,
+        'COUNT',
+        100,
+      );
+      cursor = next;
+      keys.push(...batch);
+    } while (cursor !== '0');
+    return keys;
+  }
+
+  async listOnline(companyId: string): Promise<string[]> {
+    const keys = await this.scanPresenceKeys(companyId);
     const prefix = `operator:presence:${companyId}:`;
 
     return keys.map((key) => key.replace(prefix, ''));
@@ -82,9 +100,8 @@ export class OperatorPresenceService {
    */
   async listAvailable(companyId: string): Promise<string[]> {
     const redis = this.redisService.getClient();
-    const pattern = `operator:presence:${companyId}:*`;
-    const keys = await redis.keys(pattern);
     const prefix = `operator:presence:${companyId}:`;
+    const keys = await this.scanPresenceKeys(companyId);
     if (!keys || keys.length === 0) return [];
 
     const values = await redis.mget(keys);
@@ -112,9 +129,8 @@ export class OperatorPresenceService {
     companyId: string,
   ): Promise<Map<string, OperatorPresenceStatus>> {
     const redis = this.redisService.getClient();
-    const pattern = `operator:presence:${companyId}:*`;
-    const keys = await redis.keys(pattern);
     const prefix = `operator:presence:${companyId}:`;
+    const keys = await this.scanPresenceKeys(companyId);
     const map = new Map<string, OperatorPresenceStatus>();
     if (!keys || keys.length === 0) return map;
 

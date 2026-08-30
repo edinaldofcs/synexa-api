@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { ConversationsRepository } from './repositories/conversations.repository';
 import { OperatorPresenceService } from './operator-presence.service';
 import { HandoffDistributorService } from './handoff-distributor.service';
@@ -18,6 +19,7 @@ import {
 @Injectable()
 export class ConversationsService {
   private readonly logger = new Logger(ConversationsService.name);
+  private readonly HANDOFF_SCAN_THROTTLE_SECONDS = 60;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -25,6 +27,7 @@ export class ConversationsService {
     private readonly presenceService: OperatorPresenceService,
     private readonly distributorService: HandoffDistributorService,
     private readonly inboundDataMapper: InboundDataMapperService,
+    private readonly redisService: RedisService,
   ) {}
 
   async findOrCreate(
@@ -131,46 +134,51 @@ export class ConversationsService {
   }
 
   async addMessage(dto: AddMessageDto) {
-    const message = await this.prisma.messages.create({
-      data: {
-        conversation_id: dto.conversation_id,
-        company_id: dto.company_id,
-        sender_type: dto.sender_type,
-        channel: dto.channel,
-        direction: dto.direction,
-        message_type: dto.message_type || 'text',
-        content: dto.content || null,
-        idempotency_key: dto.idempotency_key || null,
-        request_id: dto.request_id || null,
-        raw_payload: (dto.raw_payload as any) || null,
-        metadata: (dto.metadata as any) || null,
-        status: 'received',
-      },
+    const message = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.messages.create({
+        data: {
+          conversation_id: dto.conversation_id,
+          company_id: dto.company_id,
+          sender_type: dto.sender_type,
+          channel: dto.channel,
+          direction: dto.direction,
+          message_type: dto.message_type || 'text',
+          content: dto.content || null,
+          idempotency_key: dto.idempotency_key || null,
+          request_id: dto.request_id || null,
+          raw_payload: (dto.raw_payload as any) || null,
+          metadata: (dto.metadata as any) || null,
+          status: 'received',
+        },
+      });
+
+      await this.addMessageParts(created.id, dto, tx);
+
+      await tx.message_events.create({
+        data: {
+          company_id: dto.company_id,
+          client_id: dto.client_id || null,
+          conversation_id: dto.conversation_id,
+          message_id: created.id,
+          request_id: dto.request_id || null,
+          event_type: 'message.created',
+          status: created.status,
+          payload: {
+            direction: dto.direction,
+            sender_type: dto.sender_type,
+            channel: dto.channel,
+            message_type: created.message_type,
+          } as any,
+        },
+      });
+
+      return created;
     });
 
     await this.conversationsRepo.updateLastMessage(
       dto.conversation_id,
       dto.direction,
     );
-
-    await this.addMessageParts(message.id, dto);
-    await this.prisma.message_events.create({
-      data: {
-        company_id: dto.company_id,
-        client_id: dto.client_id || null,
-        conversation_id: dto.conversation_id,
-        message_id: message.id,
-        request_id: dto.request_id || null,
-        event_type: 'message.created',
-        status: message.status,
-        payload: {
-          direction: dto.direction,
-          sender_type: dto.sender_type,
-          channel: dto.channel,
-          message_type: message.message_type,
-        } as any,
-      },
-    });
 
     return message;
   }
@@ -250,6 +258,7 @@ export class ConversationsService {
     return this.prisma.messages.findMany({
       where,
       orderBy: { created_at: 'asc' },
+      take: 100,
       include: {
         message_parts: {
           orderBy: { order_index: 'asc' },
@@ -363,9 +372,19 @@ export class ConversationsService {
       options || {};
 
     // Verifica e redistribui atendimentos órfãos de operadores offline > 5min
+    // (throttle: no máximo 1 varredura por minuto por empresa)
     if (companyId) {
       try {
-        await this.distributorService.checkAndRedistributeAbandoned(companyId);
+        const scanLockKey = `handoff:scan:${companyId}`;
+        const claimed = await this.redisService.acquireLock(
+          scanLockKey,
+          this.HANDOFF_SCAN_THROTTLE_SECONDS,
+        );
+        if (claimed) {
+          await this.distributorService.checkAndRedistributeAbandoned(
+            companyId,
+          );
+        }
       } catch (err) {
         this.logger.error(
           `Erro ao verificar atendimentos abandonados: ${err?.message}`,
@@ -607,25 +626,32 @@ export class ConversationsService {
       select: { id: true, name: true, email: true, role: true },
     });
 
-    const withLoads = await Promise.all(
-      operators.map(async (op) => {
-        const activeChats = await this.prisma.conversations.count({
-          where: {
-            company_id: companyId,
-            mode: 'manual',
-            status: 'active',
-            assigned_to: op.id,
-          },
-        });
-        const presenceStatus = statusMap.get(op.id) || 'available';
-        return {
-          ...op,
-          active_chats: activeChats,
-          is_online: true,
-          presence_status: presenceStatus,
-        };
-      }),
-    );
+    const activeByOperator = new Map<string, number>();
+    const loadRows = await this.prisma.conversations.groupBy({
+      by: ['assigned_to'],
+      where: {
+        company_id: companyId,
+        mode: 'manual',
+        status: 'active',
+        assigned_to: { in: operators.map((op) => op.id) },
+      },
+      _count: { assigned_to: true },
+    });
+    for (const row of loadRows) {
+      if (row.assigned_to) {
+        activeByOperator.set(row.assigned_to, row._count.assigned_to);
+      }
+    }
+
+    const withLoads = operators.map((op) => {
+      const presenceStatus = statusMap.get(op.id) || 'available';
+      return {
+        ...op,
+        active_chats: activeByOperator.get(op.id) ?? 0,
+        is_online: true,
+        presence_status: presenceStatus,
+      };
+    });
 
     return withLoads;
   }
@@ -675,12 +701,25 @@ export class ConversationsService {
     };
   }
 
-  private async addMessageParts(messageId: string, dto: AddMessageDto) {
+  private async addMessageParts(
+    messageId: string,
+    dto: AddMessageDto,
+    tx: Prisma.TransactionClient,
+  ) {
     const parts = dto.parts?.length
       ? dto.parts
       : dto.content
         ? [{ type: 'text', text: dto.content }]
         : [];
+
+    const rows: {
+      message_id: string;
+      part_type: string;
+      text_content: string | null;
+      media_asset_id: string | null;
+      order_index: number;
+      metadata: any;
+    }[] = [];
 
     for (const [orderIndex, part] of parts.entries()) {
       let mediaAssetId: string | null = null;
@@ -694,7 +733,7 @@ export class ConversationsService {
           continue;
         }
 
-        const mediaAsset = await this.prisma.media_assets.create({
+        const mediaAsset = await tx.media_assets.create({
           data: {
             company_id: dto.company_id,
             client_id: dto.client_id,
@@ -710,16 +749,18 @@ export class ConversationsService {
         mediaAssetId = mediaAsset.id;
       }
 
-      await this.prisma.message_parts.create({
-        data: {
-          message_id: messageId,
-          part_type: part.type,
-          text_content: part.text || null,
-          media_asset_id: mediaAssetId,
-          order_index: orderIndex,
-          metadata: (part.metadata || {}) as any,
-        },
+      rows.push({
+        message_id: messageId,
+        part_type: part.type,
+        text_content: part.text || null,
+        media_asset_id: mediaAssetId,
+        order_index: orderIndex,
+        metadata: (part.metadata || {}) as any,
       });
+    }
+
+    if (rows.length > 0) {
+      await tx.message_parts.createMany({ data: rows });
     }
   }
 

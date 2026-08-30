@@ -5,6 +5,8 @@ import {
   ApiToolExecutorService,
   ToolCallDebug,
 } from './api-tool-executor.service';
+import { truncateToolResult } from '../utils/truncate-tool-result.util';
+import { readOpenAiSseChunks } from '../utils/sse-stream.util';
 
 export interface MemoryMessage {
   role: 'user' | 'assistant';
@@ -33,6 +35,7 @@ export interface LlmToolLoopParams {
     agentRunId?: string;
     agentConfig?: import('../types/capabilities.types').AgentConfig;
   };
+  onToken?: (chunk: string) => void;
 }
 
 export interface LlmToolLoopResult {
@@ -223,6 +226,11 @@ export class LlmToolLoopService {
     const toolCalls: ToolCallDebug[] = [];
     let currentTools = openAiTools.length ? [...openAiTools] : [];
 
+    const streaming =
+      typeof params.onToken === 'function' &&
+      !baseUrl.includes('google') &&
+      !baseUrl.includes('generativelanguage');
+
     for (let loop = 0; loop < 8; loop++) {
       const payload: Record<string, unknown> = {
         model,
@@ -233,6 +241,7 @@ export class LlmToolLoopService {
         payload.tools = currentTools;
         payload.tool_choice = 'auto';
       }
+      if (streaming) payload.stream = true;
 
       const requestHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -249,10 +258,69 @@ export class LlmToolLoopService {
         method: 'POST',
         headers: requestHeaders,
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok)
         throw new Error(`${baseUrl} error ${res.status}: ${await res.text()}`);
-      const json = await res.json();
+      let json: any;
+      if (streaming) {
+        let content = '';
+        const streamedCalls = new Map<
+          number,
+          { id: string; name: string; arguments: string }
+        >();
+        for await (const chunk of readOpenAiSseChunks(res)) {
+          if (chunk.usage) {
+            totalInputTokens += chunk.usage.prompt_tokens;
+            totalOutputTokens += chunk.usage.completion_tokens;
+          }
+          if (chunk.deltaContent) {
+            content += chunk.deltaContent;
+            params.onToken!(chunk.deltaContent);
+          }
+          for (const fragment of chunk.toolCallFragments) {
+            const acc =
+              streamedCalls.get(fragment.index) || {
+                id: '',
+                name: '',
+                arguments: '',
+              };
+            if (fragment.id) acc.id = fragment.id;
+            if (fragment.name) acc.name += fragment.name;
+            if (fragment.argumentsFragment)
+              acc.arguments += fragment.argumentsFragment;
+            streamedCalls.set(fragment.index, acc);
+          }
+        }
+        const callsFromStream = [...streamedCalls.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, value]) => value)
+          .filter((value) => value.id && value.name);
+        json = {
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content,
+                ...(callsFromStream.length
+                  ? {
+                      tool_calls: callsFromStream.map((call) => ({
+                        id: call.id,
+                        type: 'function',
+                        function: {
+                          name: call.name,
+                          arguments: call.arguments || '{}',
+                        },
+                      })),
+                    }
+                  : {}),
+              },
+            },
+          ],
+        };
+      } else {
+        json = await res.json();
+      }
       if (json?.usage) {
         totalInputTokens += json.usage.prompt_tokens || 0;
         totalOutputTokens += json.usage.completion_tokens || 0;
@@ -321,7 +389,7 @@ export class LlmToolLoopService {
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
-            content: JSON.stringify(result),
+            content: truncateToolResult(result),
           });
 
           if (hasFailure) {
@@ -354,7 +422,7 @@ export class LlmToolLoopService {
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
-            content: JSON.stringify(result),
+            content: truncateToolResult(result),
           });
 
           this.logger.warn(
@@ -384,32 +452,51 @@ export class LlmToolLoopService {
     // como switch_agent), faz uma chamada final sem ferramentas para forçar texto
     if (!finalText.trim() && messages.length > 0) {
       try {
+        const retryPayload: Record<string, unknown> = {
+          model,
+          messages: [
+            ...messages,
+            {
+              role: 'user',
+              content:
+                'Use as informações das ferramentas executadas acima e responda ao usuário em texto de forma clara e objetiva.',
+            },
+          ],
+          max_tokens: 4096,
+        };
+        if (streaming) retryPayload.stream = true;
         const retryRes = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({
-            model,
-            messages: [
-              ...messages,
-              {
-                role: 'user',
-                content:
-                  'Use as informações das ferramentas executadas acima e responda ao usuário em texto de forma clara e objetiva.',
-              },
-            ],
-            max_tokens: 4096,
-          }),
+          body: JSON.stringify(retryPayload),
+          signal: AbortSignal.timeout(15_000),
         });
         if (retryRes.ok) {
-          const retryJson = await retryRes.json();
-          if (retryJson?.usage) {
-            totalInputTokens += retryJson.usage.prompt_tokens || 0;
-            totalOutputTokens += retryJson.usage.completion_tokens || 0;
+          let retryContent: unknown = null;
+          if (streaming) {
+            let retryText = '';
+            for await (const chunk of readOpenAiSseChunks(retryRes)) {
+              if (chunk.usage) {
+                totalInputTokens += chunk.usage.prompt_tokens;
+                totalOutputTokens += chunk.usage.completion_tokens;
+              }
+              if (chunk.deltaContent) {
+                retryText += chunk.deltaContent;
+                params.onToken!(chunk.deltaContent);
+              }
+            }
+            retryContent = retryText;
+          } else {
+            const retryJson = await retryRes.json();
+            if (retryJson?.usage) {
+              totalInputTokens += retryJson.usage.prompt_tokens || 0;
+              totalOutputTokens += retryJson.usage.completion_tokens || 0;
+            }
+            retryContent = retryJson?.choices?.[0]?.message?.content;
           }
-          const retryContent = retryJson?.choices?.[0]?.message?.content;
           if (typeof retryContent === 'string' && retryContent.trim()) {
             finalText = retryContent.trim();
           }
@@ -504,6 +591,7 @@ export class LlmToolLoopService {
                   },
                 ],
               }),
+              signal: AbortSignal.timeout(15_000),
             },
           );
           if (transRes.ok) {
@@ -532,6 +620,7 @@ export class LlmToolLoopService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents }),
+        signal: AbortSignal.timeout(15_000),
       },
     );
     if (!res.ok)
@@ -587,6 +676,7 @@ export class LlmToolLoopService {
             Authorization: `Bearer ${apiKey}`,
           },
           body: formData,
+          signal: AbortSignal.timeout(15_000),
         },
       );
       if (!res.ok) {
@@ -651,6 +741,7 @@ export class LlmToolLoopService {
                 },
               ],
             }),
+            signal: AbortSignal.timeout(15_000),
           },
         );
         if (res.ok) {
@@ -720,6 +811,7 @@ export class LlmToolLoopService {
                 },
               ],
             }),
+            signal: AbortSignal.timeout(15_000),
           },
         );
 
@@ -758,6 +850,7 @@ export class LlmToolLoopService {
   private async listGeminiModels(apiKey: string): Promise<string[]> {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      { signal: AbortSignal.timeout(15_000) },
     );
     if (!res.ok)
       throw new Error(`Erro ao listar modelos Gemini: ${res.status}`);
@@ -773,6 +866,7 @@ export class LlmToolLoopService {
   private async listGroqModels(apiKey: string): Promise<string[]> {
     const res = await fetch('https://api.groq.com/openai/v1/models', {
       headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) throw new Error(`Erro ao listar modelos Groq: ${res.status}`);
     const json = await res.json();
@@ -785,6 +879,7 @@ export class LlmToolLoopService {
   private async listOpenRouterModels(apiKey: string): Promise<string[]> {
     const res = await fetch('https://openrouter.ai/api/v1/models', {
       headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok)
       throw new Error(`Erro ao listar modelos OpenRouter: ${res.status}`);

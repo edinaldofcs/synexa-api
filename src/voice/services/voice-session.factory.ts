@@ -24,6 +24,9 @@ export type VoiceSessionFactoryDeps = VoiceCallSessionConfig;
  */
 @Injectable()
 export class VoiceSessionFactory {
+  private activeSessions = 0;
+  private readonly maxSessions: number;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -31,7 +34,20 @@ export class VoiceSessionFactory {
     private readonly pricingService: ModelPricingService,
     private readonly keyResolver: ProviderKeyResolverService,
     private readonly voiceToolsService: VoiceToolsService,
-  ) {}
+  ) {
+    this.maxSessions = this.configService.get<number>('VOICE_MAX_SESSIONS', 50);
+  }
+
+  /** Semáforo global de sessões de voz (web + telefonia) — env VOICE_MAX_SESSIONS. */
+  public tryAcquireSession(): boolean {
+    if (this.activeSessions >= this.maxSessions) return false;
+    this.activeSessions++;
+    return true;
+  }
+
+  public releaseSession(): void {
+    this.activeSessions = Math.max(0, this.activeSessions - 1);
+  }
 
   public async create(
     adapter: ITelephonyAdapter,
@@ -78,6 +94,12 @@ export class VoiceSessionFactory {
       channel: overrides?.channel || 'voice_sip',
     };
 
+    if (!this.tryAcquireSession()) {
+      throw new Error(
+        `Limite de sessões de voz simultâneas atingido (VOICE_MAX_SESSIONS=${this.maxSessions})`,
+      );
+    }
+
     const liveProvider = new GeminiLiveVoiceProvider();
     const session = new VoiceCallSession({
       telephonyAdapter: adapter,
@@ -86,7 +108,10 @@ export class VoiceSessionFactory {
       pricingService: this.pricingService,
       prisma: this.prisma,
       voiceToolsService: this.voiceToolsService,
-      config,
+      config: {
+        ...config,
+        onSessionEnd: () => this.releaseSession(),
+      },
     });
 
     return { session, liveProvider };

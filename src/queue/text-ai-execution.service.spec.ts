@@ -39,6 +39,12 @@ const DISPATCH_DATA: DispatchJobData = {
   ...AGENT_DATA,
 };
 
+function deadLetterCalls(redis: Record<string, any>): any[][] {
+  return redis.set.mock.calls.filter((call: any[]) =>
+    String(call[0]).startsWith('inline-dead-letter'),
+  );
+}
+
 describe('TextAiExecutionService', () => {
   let prisma: Record<string, any>;
 
@@ -74,6 +80,7 @@ describe('TextAiExecutionService', () => {
     redis = {
       acquireLock: jest.fn().mockResolvedValue(true),
       releaseLock: jest.fn().mockResolvedValue(undefined),
+      get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue(undefined),
     };
     conversations = {
@@ -148,7 +155,7 @@ describe('TextAiExecutionService', () => {
     expect(orchestration.processMessage).toHaveBeenCalled();
     expect(channels.sendOutbound).toHaveBeenCalledTimes(1);
     expect(channels.sendOutbound.mock.calls[0][2]).toBe('oi!');
-    expect(redis.set).not.toHaveBeenCalled(); // nenhum erro → sem dead-letter
+    expect(deadLetterCalls(redis)).toHaveLength(0); // nenhum erro → sem dead-letter
   });
 
   it('falha ao consultar o cliente faz fallback para a fila (fail-safe)', async () => {
@@ -176,8 +183,8 @@ describe('TextAiExecutionService', () => {
       }
 
       expect(redis.acquireLock).toHaveBeenCalledTimes(2);
-      expect(redis.set).toHaveBeenCalledTimes(1);
-      const payload = redis.set.mock.calls[0][1] as Record<string, unknown>;
+      expect(deadLetterCalls(redis)).toHaveLength(1);
+      const payload = deadLetterCalls(redis)[0][1] as Record<string, unknown>;
       expect(payload.stage).toBe('agent');
     } finally {
       jest.useRealTimers();
@@ -194,7 +201,7 @@ describe('TextAiExecutionService', () => {
     await new Promise((r) => setImmediate(r));
 
     expect(orchestration.processMessage).not.toHaveBeenCalled();
-    expect(redis.set).not.toHaveBeenCalled();
+    expect(deadLetterCalls(redis)).toHaveLength(0);
   });
 
   it('dispatch respeita o mesmo toggle para envio externo', async () => {
@@ -209,5 +216,79 @@ describe('TextAiExecutionService', () => {
 
     expect(queue.addDispatchJob).not.toHaveBeenCalled();
     expect(channels.sendOutbound).toHaveBeenCalledTimes(1);
+  });
+
+  it('isQueueEnabled cacheia a decisão por client no Redis (TTL 30s)', async () => {
+    const cache: Record<string, unknown> = {};
+    redis.get.mockImplementation(
+      async (key: string) => cache[key] ?? null,
+    );
+    redis.set.mockImplementation(async (key: string, value: unknown) => {
+      cache[key] = value;
+    });
+
+    await service.isQueueEnabled('client-1');
+    await service.isQueueEnabled('client-1');
+
+    expect(prisma.painel_clients.findUnique).toHaveBeenCalledTimes(1);
+    expect(redis.set).toHaveBeenCalledWith(
+      'queue_enabled:client-1',
+      true,
+      30,
+    );
+  });
+
+  it('conflito de lock no ingestion: aguarda com polling antes de falhar', async () => {
+    jest.useFakeTimers();
+    try {
+      prisma.painel_clients.findUnique.mockResolvedValue({
+        queue_enabled: false,
+      });
+      redis.acquireLock
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+
+      await service.dispatchIngestion(baseIngest());
+
+      await jest.advanceTimersByTimeAsync(300);
+      for (let i = 0; i < 8; i++) {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      }
+
+      expect(redis.acquireLock.mock.calls[0][0]).toContain(
+        'lock:conversation:',
+      );
+      expect(redis.acquireLock.mock.calls[0][1]).toBe(30);
+      expect(redis.releaseLock).toHaveBeenCalled();
+      expect(channels.sendOutbound).toHaveBeenCalledTimes(1);
+      expect(deadLetterCalls(redis)).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('lock não liberado dentro do teto de 5s: ingestion falha e vai para dead-letter', async () => {
+    jest.useFakeTimers();
+    try {
+      prisma.painel_clients.findUnique.mockResolvedValue({
+        queue_enabled: false,
+      });
+      redis.acquireLock.mockResolvedValue(false);
+
+      await service.dispatchIngestion(baseIngest());
+
+      await jest.advanceTimersByTimeAsync(13_000);
+      for (let i = 0; i < 12; i++) {
+        await Promise.resolve();
+        await jest.advanceTimersByTimeAsync(0);
+      }
+
+      const calls = deadLetterCalls(redis);
+      expect(calls).toHaveLength(1);
+      expect((calls[0][1] as Record<string, unknown>).stage).toBe('ingestion');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

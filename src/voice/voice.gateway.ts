@@ -12,7 +12,6 @@ import { VoiceAuthService } from './voice-auth.service';
 import { MockVoiceProvider } from './providers/mock-voice.provider';
 import { GeminiLiveVoiceProvider } from './providers/gemini-live-voice.provider';
 import { AudioGateService } from './services/audio-gate.service';
-import { HybridSttService } from './services/hybrid-stt.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { VoiceToolsService } from './voice-tools.service';
 import {
@@ -29,11 +28,37 @@ import {
   summarizeState,
 } from './sessions/voice-client-session';
 import { VoiceTelemetryService } from './services/voice-telemetry.service';
+import { VoiceSessionFactory } from './services/voice-session.factory';
 import { WebRtcAdapter } from './adapters/webrtc/web-webrtc.adapter';
 import {
   resolveAudioGateConfig,
   buildVoiceSystemPrompt,
 } from './services/voice-runtime.util';
+
+const MAX_SESSION_STATE_BYTES = 32 * 1024;
+const MAX_SESSION_STATE_KEYS = 40;
+
+function pruneSessionState(
+  state: Record<string, unknown>,
+): Record<string, unknown> {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(state);
+  } catch {
+    return state;
+  }
+  if (!serialized || serialized.length <= MAX_SESSION_STATE_BYTES) return state;
+  const entries = Object.entries(state);
+  const preserved = entries.filter(
+    ([key]) => key.startsWith('system') || key.startsWith('config'),
+  );
+  const recent = entries
+    .filter(
+      ([key]) => !key.startsWith('system') && !key.startsWith('config'),
+    )
+    .slice(-MAX_SESSION_STATE_KEYS);
+  return Object.fromEntries([...preserved, ...recent]);
+}
 
 @WebSocketGateway({ path: '/ws/voice' })
 export class VoiceGateway
@@ -50,7 +75,7 @@ export class VoiceGateway
     private readonly voiceAuthService: VoiceAuthService,
     private readonly mockVoiceProvider: MockVoiceProvider,
     private readonly audioGateService: AudioGateService,
-    private readonly hybridSttService: HybridSttService,
+    private readonly voiceSessionFactory: VoiceSessionFactory,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly voiceToolsService: VoiceToolsService,
@@ -108,6 +133,42 @@ export class VoiceGateway
       sendToClient({ type: 'telemetry', telemetry: payload });
     };
 
+    const acquireVoiceSlot = (): boolean => {
+      if (session.holdsSessionSlot) return true;
+      if (!this.voiceSessionFactory.tryAcquireSession()) {
+        this.logger.warn(
+          '[VoiceGateway] Limite global de sessões de voz atingido; recusando nova sessão',
+        );
+        return false;
+      }
+      session.holdsSessionSlot = true;
+      return true;
+    };
+
+    const releaseVoiceSlot = () => {
+      if (!session.holdsSessionSlot) return;
+      session.holdsSessionSlot = false;
+      this.voiceSessionFactory.releaseSession();
+    };
+
+    let statePersistTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleConversationStatePersist = () => {
+      if (statePersistTimer) return;
+      statePersistTimer = setTimeout(() => {
+        statePersistTimer = null;
+        void this.telemetryService
+          .persistConversationState(session)
+          .catch(() => {});
+      }, 3000);
+    };
+    const flushConversationState = async () => {
+      if (statePersistTimer) {
+        clearTimeout(statePersistTimer);
+        statePersistTimer = null;
+      }
+      await this.telemetryService.persistConversationState(session);
+    };
+
     const closeVoiceSession = async () => {
       voiceSessionClosed = true;
       if (telemetryTimer) {
@@ -115,12 +176,18 @@ export class VoiceGateway
         telemetryTimer = null;
       }
       sendTelemetry();
+      if (statePersistTimer) {
+        clearTimeout(statePersistTimer);
+        statePersistTimer = null;
+      }
+      await flushConversationState();
       if (session.liveProvider) {
         session.liveProvider.close();
         session.liveProvider = null;
         session.isReady = false;
       }
       await this.telemetryService.persistSessionTelemetry(session);
+      releaseVoiceSlot();
     };
 
     clientWs.on('message', async (raw: any) => {
@@ -161,6 +228,12 @@ export class VoiceGateway
               clientWs.close(1008, 'Unauthorized');
               return;
             }
+
+            const clientDbPromise: Promise<any> = session.clientId
+              ? this.prisma.painel_clients
+                  .findUnique({ where: { id: session.clientId } })
+                  .catch(() => null)
+              : Promise.resolve(null);
 
             let selectedAgent: any = null;
             const requestedAgentId =
@@ -235,13 +308,9 @@ export class VoiceGateway
                 : {},
             });
 
-            // Busca configurações salvas do cliente
-            let clientDb: any = null;
-            if (session.clientId) {
-              clientDb = await this.prisma.painel_clients.findUnique({
-                where: { id: session.clientId },
-              });
-            }
+            // Configurações salvas do cliente (buscadas em paralelo à seleção
+            // do agente durante a abertura)
+            const clientDb = await clientDbPromise;
 
             session.model =
               selectedAgent?.model ||
@@ -385,7 +454,7 @@ export class VoiceGateway
               generation: number,
             ) => {
               if (generation !== session.providerGeneration) return;
-              session.state = {
+              session.state = pruneSessionState({
                 ...session.state,
                 user_transcript: text,
                 mensagem_usuario: text,
@@ -394,8 +463,8 @@ export class VoiceGateway
                 message: text,
                 text,
                 texto: text,
-              };
-              await this.telemetryService.persistConversationState(session);
+              });
+              scheduleConversationStatePersist();
             };
 
             const handleToolCalls = async (
@@ -468,9 +537,7 @@ export class VoiceGateway
                     ].includes(call.name) &&
                     nativeRes.ok
                   ) {
-                    await this.telemetryService.persistConversationState(
-                      session,
-                    );
+                    await flushConversationState();
                     sendDebug(
                       'session',
                       `💾 Variável salva na sessão pelo assistente.`,
@@ -530,16 +597,14 @@ export class VoiceGateway
                     Object.keys(returnedState).length > 0;
                   const hasSessionSaves = Object.keys(sessionSaves).length > 0;
                   if (hasReturnedState || hasSessionSaves) {
-                    session.state = {
+                    session.state = pruneSessionState({
                       ...session.state,
                       ...(hasReturnedState
-                        ? { retorno_api: returnedState, ...returnedState }
+                        ? { retorno_api: returnedState }
                         : {}),
                       ...sessionSaves,
-                    };
-                    await this.telemetryService.persistConversationState(
-                      session,
-                    );
+                    });
+                    await flushConversationState();
                     sendDebug(
                       'session',
                       `📊 Variáveis do estado: ${summarizeState(session.state)}`,
@@ -644,20 +709,19 @@ export class VoiceGateway
 
             connectAgent = async (agent: any, handoffText?: string) => {
               const generation = session.nextGeneration();
-              const voiceTools =
+              const [voiceTools, voiceSubagents] =
                 agent && session.clientId
-                  ? await this.voiceToolsService.getAgentTools(
-                      session.clientId,
-                      agent.id,
-                    )
-                  : [];
-              const voiceSubagents =
-                agent && session.clientId
-                  ? await this.voiceToolsService.getAgentSubagents(
-                      session.clientId,
-                      agent.id,
-                    )
-                  : [];
+                  ? await Promise.all([
+                      this.voiceToolsService.getAgentTools(
+                        session.clientId,
+                        agent.id,
+                      ),
+                      this.voiceToolsService.getAgentSubagents(
+                        session.clientId,
+                        agent.id,
+                      ),
+                    ])
+                  : [[], []];
 
               // 'start' concorrente: este connectAgent ficou obsoleto quando
               // outra iteração avançou a generation da sessão
@@ -770,6 +834,17 @@ export class VoiceGateway
                 return;
               }
 
+              if (!acquireVoiceSlot()) {
+                sendToClient({
+                  type: 'error',
+                  code: 'VOICE_MAX_SESSIONS',
+                  message:
+                    'Limite de sessões de voz simultâneas atingido. Tente novamente em instantes.',
+                });
+                clientWs.close(1013, 'Too many voice sessions');
+                return;
+              }
+
               const provider = new GeminiLiveVoiceProvider();
               // Fecha o provider anterior antes de sobrescrever: 'start'
               // concorrente sem este close deixava o WS do Gemini aberto
@@ -800,7 +875,7 @@ export class VoiceGateway
                 voiceName: session.voiceName,
                 systemPrompt,
                 contextCompressionEnabled:
-                  clientDb?.context_compression_enabled ?? false,
+                  clientDb?.context_compression_enabled ?? true,
                 contextCompressionTargetTokens:
                   clientDb?.context_compression_target_tokens ?? 8000,
                 tools: voiceToolDeclarations.length
@@ -933,12 +1008,12 @@ export class VoiceGateway
                 targetAgent.model || this.voiceService.getDefaultModel();
               session.voiceName =
                 targetAgent.voice_name || this.voiceService.getDefaultVoice();
-              session.state = {
+              session.state = pruneSessionState({
                 ...session.state,
                 current_agent_id: targetAgent.id,
                 switch_reason: reason,
-              };
-              await this.telemetryService.persistConversationState(session);
+              });
+              await flushConversationState();
               if (session.conversationId) {
                 const conversation = await this.prisma.conversations.findUnique(
                   {
@@ -984,7 +1059,7 @@ export class VoiceGateway
               break;
             }
             sendTelemetry();
-            telemetryTimer = setInterval(sendTelemetry, 1000);
+            telemetryTimer = setInterval(sendTelemetry, 5000);
             break;
           }
 
@@ -1044,6 +1119,10 @@ export class VoiceGateway
   handleDisconnect(clientWs: WebSocket) {
     const session = this.sessions.get(clientWs);
     if (session) {
+      if (session.holdsSessionSlot) {
+        session.holdsSessionSlot = false;
+        this.voiceSessionFactory.releaseSession();
+      }
       session.liveProvider?.close();
       this.sessions.delete(clientWs);
     }

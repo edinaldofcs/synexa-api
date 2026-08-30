@@ -16,6 +16,7 @@ export class ProviderCircuitBreakerService {
   private readonly logger = new Logger(ProviderCircuitBreakerService.name);
   private readonly failureThreshold = 3;
   private readonly cooldownPeriodMs = 60_000; // 60 segundos
+  private readonly probeTtlSeconds = 10;
   private readonly inMemoryState = new Map<string, CircuitInfo>();
 
   constructor(
@@ -28,23 +29,40 @@ export class ProviderCircuitBreakerService {
     return clientId ? `circuit:${clientId}:${p}` : `circuit:global:${p}`;
   }
 
+  private getProbeKey(key: string): string {
+    return `cb:probe:${key}`;
+  }
+
   async getState(provider: string, clientId?: string): Promise<CircuitInfo> {
     const key = this.getCircuitKey(provider, clientId);
 
+    let cached: CircuitInfo | null = null;
     try {
-      const cached = await this.redisService.get<CircuitInfo>(key);
-      if (cached) {
-        return this.evaluateState(cached);
-      }
+      cached = await this.redisService.get<CircuitInfo>(key);
     } catch {
       // Fallback para memória em caso de falha transitória do Redis
     }
 
-    const local = this.inMemoryState.get(key) || {
-      state: 'CLOSED',
-      consecutiveFailures: 0,
-    };
-    return this.evaluateState(local);
+    const local = this.inMemoryState.get(key);
+    let info: CircuitInfo | undefined = cached ?? undefined;
+    if (
+      local &&
+      (!cached || (local.lastFailureTime ?? 0) >= (cached.lastFailureTime ?? 0))
+    ) {
+      info = local;
+    }
+    if (!info) {
+      info = { state: 'CLOSED', consecutiveFailures: 0 };
+    }
+
+    const evaluated = this.evaluateState(info);
+    if (evaluated.state !== info.state) {
+      // Transição lazy OPEN→HALF_OPEN: persiste somente na mudança de estado
+      this.inMemoryState.set(key, evaluated);
+      await this.persistState(key, evaluated);
+    }
+
+    return evaluated;
   }
 
   private evaluateState(info: CircuitInfo): CircuitInfo {
@@ -63,23 +81,40 @@ export class ProviderCircuitBreakerService {
   }
 
   async canExecute(provider: string, clientId?: string): Promise<boolean> {
+    const key = this.getCircuitKey(provider, clientId);
     const info = await this.getState(provider, clientId);
-    return info.state === 'CLOSED' || info.state === 'HALF_OPEN';
+
+    if (info.state === 'CLOSED') return true;
+    if (info.state !== 'HALF_OPEN') return false;
+
+    // HALF_OPEN: probe única via SETNX — somente 1 request passa; os demais
+    // são rejeitados até a probe concluir (sucesso/falha) ou expirar
+    try {
+      return await this.redisService.acquireLock(this.getProbeKey(key), this.probeTtlSeconds);
+    } catch {
+      return true;
+    }
   }
 
   async recordSuccess(provider: string, clientId?: string): Promise<void> {
     const key = this.getCircuitKey(provider, clientId);
+    const current = await this.getState(provider, clientId);
     const updated: CircuitInfo = {
       state: 'CLOSED',
       consecutiveFailures: 0,
     };
 
-    await this.persistState(key, updated);
     this.inMemoryState.set(key, updated);
 
-    // Atualiza status de saúde para healthy no banco
-    if (clientId) {
-      void this.updateCredentialHealth(clientId, provider, 'healthy');
+    // Persistência (Redis + PG) somente em transição de estado; em CLOSED
+    // estável (fluxo normal por turno) nada é escrito
+    if (current.state !== 'CLOSED') {
+      await this.persistState(key, updated);
+      await this.releaseProbe(key);
+
+      if (clientId) {
+        void this.updateCredentialHealth(clientId, provider, 'healthy');
+      }
     }
   }
 
@@ -121,13 +156,24 @@ export class ProviderCircuitBreakerService {
       nextAttemptTime,
     };
 
-    await this.persistState(key, updated);
     this.inMemoryState.set(key, updated);
 
-    if (clientId) {
-      const healthStatus = isRateLimit ? 'quota_exceeded' : 'error';
-      void this.updateCredentialHealth(clientId, provider, healthStatus);
+    // Persistência (Redis + PG) somente na transição de estado
+    if (state !== current.state) {
+      await this.persistState(key, updated);
+      await this.releaseProbe(key);
+
+      if (clientId) {
+        const healthStatus = isRateLimit ? 'quota_exceeded' : 'error';
+        void this.updateCredentialHealth(clientId, provider, healthStatus);
+      }
     }
+  }
+
+  private async releaseProbe(key: string): Promise<void> {
+    try {
+      await this.redisService.del(this.getProbeKey(key));
+    } catch {}
   }
 
   private async persistState(key: string, info: CircuitInfo): Promise<void> {

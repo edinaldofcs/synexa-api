@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { resolveChainedApiId } from '../common/utils/api-chaining.util';
 import { LEGACY_TOOL_NAMES } from '../orchestrator/constants/tools.constants';
+
+const TOOLS_CACHE_TTL_SECONDS = 30;
 
 export interface VoiceToolDeclaration {
   name: string;
@@ -27,9 +30,30 @@ export class VoiceToolsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly providerKeyResolver: ProviderKeyResolverService,
+    private readonly redis: RedisService,
   ) {}
 
   async getAgentTools(clientId: string, agentId: string): Promise<VoiceTool[]> {
+    const cacheKey = `voice:tools:${clientId}:${agentId}`;
+    try {
+      const cached = await this.redis.get<VoiceTool[]>(cacheKey);
+      if (cached) return cached;
+    } catch {
+      // Cache indisponível: segue com consulta ao banco
+    }
+    const tools = await this.loadAgentTools(clientId, agentId);
+    try {
+      await this.redis.set(cacheKey, tools, TOOLS_CACHE_TTL_SECONDS);
+    } catch {
+      // Sem cache: segue o fluxo
+    }
+    return tools;
+  }
+
+  private async loadAgentTools(
+    clientId: string,
+    agentId: string,
+  ): Promise<VoiceTool[]> {
     const agent = await this.prisma.painel_agents.findFirst({
       where: { id: agentId, client_id: clientId },
       select: { allowed_tool_names: true },
@@ -383,6 +407,25 @@ export class VoiceToolsService {
   }
 
   private async findAllowedSubagents(clientId: string, agentId: string) {
+    const cacheKey = `voice:tools:subagents:${clientId}:${agentId}`;
+    try {
+      const cached = await this.redis.get<Array<Record<string, any>>>(
+        cacheKey,
+      );
+      if (cached) return cached;
+    } catch {
+      // Cache indisponível: segue com consulta ao banco
+    }
+    const subagents = await this.loadAllowedSubagents(clientId, agentId);
+    try {
+      await this.redis.set(cacheKey, subagents, TOOLS_CACHE_TTL_SECONDS);
+    } catch {
+      // Sem cache: segue o fluxo
+    }
+    return subagents;
+  }
+
+  private async loadAllowedSubagents(clientId: string, agentId: string) {
     const agent = await this.prisma.painel_agents.findFirst({
       where: { id: agentId, client_id: clientId },
       select: { transitions: true },

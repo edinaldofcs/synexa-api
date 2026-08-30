@@ -14,7 +14,10 @@ export class KnowledgeProcessor {
 
   constructor(private readonly knowledgeService: KnowledgeService) {}
 
-  @Process(JOB_INGEST_KNOWLEDGE_DOCUMENT)
+  @Process({
+    name: JOB_INGEST_KNOWLEDGE_DOCUMENT,
+    concurrency: Number(process.env.WORKER_KNOWLEDGE_CONCURRENCY) || 2,
+  })
   async process(job: Job<KnowledgeJobData>) {
     this.logger.log(
       { document_id: job.data.document_id },

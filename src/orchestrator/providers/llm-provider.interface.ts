@@ -62,5 +62,9 @@ export interface LLMProvider {
     };
   }>;
   chatWithParts?(params: AgentChatParams): Promise<AgentOutput>;
+  chatWithPartsStream?(
+    params: AgentChatParams,
+    onToken: (chunk: string) => void,
+  ): Promise<AgentOutput>;
   getCapabilities?(): ProviderCapabilities;
 }

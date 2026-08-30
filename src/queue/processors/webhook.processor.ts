@@ -12,7 +12,10 @@ export class WebhookProcessor {
 
   constructor(private readonly webhooksService: WebhooksService) {}
 
-  @Process(JOB_DELIVER_WEBHOOK)
+  @Process({
+    name: JOB_DELIVER_WEBHOOK,
+    concurrency: Number(process.env.WORKER_WEBHOOK_CONCURRENCY) || 4,
+  })
   async process(job: Job<WebhookJobData>): Promise<void> {
     const { delivery_id: deliveryId } = job.data;
     this.logger.log({ delivery_id: deliveryId }, 'Delivering webhook');

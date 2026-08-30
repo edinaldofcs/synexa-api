@@ -14,23 +14,30 @@ import { CrmDataTransformerService } from '../common/services/crm-data-transform
 import { AnalyticsService } from '../analytics/analytics.service';
 
 jest.mock('./providers/llm-provider.factory', () => ({
-  getLLMProvider: () => ({
-    chatWithParts: jest
-      .fn()
-      .mockResolvedValue({ text: 'Mock response', parts: [], citations: [] }),
-    getCapabilities: () => ({
-      text: true,
-      vision: false,
-      audio: false,
-      tools: true,
-    }),
-    chat: jest
-      .fn()
-      .mockResolvedValue({ text: 'Mock legacy response', action: 'speak' }),
-  }),
+  getLLMProvider: jest.fn(),
 }));
 
 import { OrchestrationService } from './orchestration.service';
+import { getLLMProvider } from './providers/llm-provider.factory';
+
+const mockedGetLLMProvider = getLLMProvider as jest.Mock;
+
+const mockProvider = {
+  chatWithParts: jest.fn().mockResolvedValue({
+    text: 'Mock response',
+    parts: [],
+    citations: [],
+  }),
+  getCapabilities: () => ({
+    text: true,
+    vision: false,
+    audio: false,
+    tools: true,
+  }),
+  chat: jest
+    .fn()
+    .mockResolvedValue({ text: 'Mock legacy response', action: 'speak' }),
+};
 
 describe('OrchestrationService', () => {
   let service: OrchestrationService;
@@ -259,6 +266,7 @@ describe('OrchestrationService', () => {
 
     service = module.get<OrchestrationService>(OrchestrationService);
     jest.clearAllMocks();
+    mockedGetLLMProvider.mockReturnValue(mockProvider);
   });
 
   it('should be defined', () => {
@@ -324,18 +332,84 @@ describe('OrchestrationService', () => {
       expect(mockConversationsService.addMessage).toHaveBeenCalled();
       expect(mockPrisma.agent_runs.update).toHaveBeenCalled();
     });
+
+    it('não faz polling de mídia quando a mensagem não tem parts de mídia', async () => {
+      mockPrisma.messages.findUnique.mockResolvedValue({
+        id: 'msg-1',
+        content: 'Hello',
+        message_parts: [],
+        media_assets: [],
+      });
+
+      await service.processMessage(
+        'conv-1',
+        'msg-1',
+        'company-1',
+        'client-1',
+        'Hello',
+        'req-1',
+      );
+
+      expect(mockPrisma.media_assets.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('pula o buildRagContext proativo quando a tool rag.search está registrada', async () => {
+      mockPrisma.messages.findUnique.mockResolvedValue({
+        id: 'msg-1',
+        content: 'test',
+        message_parts: [],
+        media_assets: [],
+      });
+      mockAgentConfigResolver.resolveAgentConfig.mockResolvedValueOnce({
+        ...mockAgentConfig,
+        capabilities: { ...mockAgentConfig.capabilities, rag: true },
+        allowed_knowledge_base_ids: ['kb-1'],
+      });
+
+      await service.processMessage(
+        'conv-1',
+        'msg-1',
+        'company-1',
+        'client-1',
+        'test',
+        'req-1',
+      );
+
+      expect(mockRagSearchService.buildRagContext).not.toHaveBeenCalled();
+    });
+
+    it('não reexecuta o turno por retry após a primeira tool call', async () => {
+      mockPrisma.messages.findUnique.mockResolvedValue({
+        id: 'msg-1',
+        content: 'test',
+        message_parts: [],
+        media_assets: [],
+      });
+      mockProvider.chatWithParts.mockImplementationOnce(async (params: any) => {
+        await params.onToolCall('rag.search', { query: 'teste' });
+        throw new Error('500 upstream unavailable');
+      });
+
+      await expect(
+        service.processMessage(
+          'conv-1',
+          'msg-1',
+          'company-1',
+          'client-1',
+          'test',
+          'req-1',
+        ),
+      ).rejects.toThrow('500 upstream unavailable');
+
+      expect(mockProvider.chatWithParts).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('buildHistory', () => {
     it('should return empty array for conversation without messages', async () => {
-      mockConversationsService.getConversation.mockResolvedValue({
-        id: 'conv-1',
-        messages: [],
-      });
-
       const result = await service['buildHistory'](
-        'conv-1',
-        {} as any,
+        { id: 'conv-1', messages: [] } as any,
+        'msg-1',
         {} as any,
         {} as any,
       );

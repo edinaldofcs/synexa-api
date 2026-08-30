@@ -17,8 +17,23 @@ const buildPrisma = (apiRecord: Record<string, unknown>) => {
       findMany: jest.fn().mockResolvedValue([apiRecord]),
       findFirst: jest.fn().mockResolvedValue(null),
     },
+    painel_subagents: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
   };
-  return { prisma, service: new VoiceToolsService(prisma as any, {} as any) };
+  const redis = {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue(undefined),
+  };
+  return {
+    prisma,
+    redis,
+    service: new VoiceToolsService(
+      prisma as any,
+      {} as any,
+      redis as any,
+    ),
+  };
 };
 
 const captureFetch = (
@@ -133,8 +148,18 @@ describe('VoiceToolsService - encadeamento (tenant scope & cycle guard)', () => 
           ]),
         findFirst: jest.fn().mockResolvedValue(nextRecord),
       },
+      painel_subagents: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
-    const service = new VoiceToolsService(prisma as any, {} as any);
+    const service = new VoiceToolsService(
+      prisma as any,
+      {} as any,
+      {
+        get: jest.fn().mockResolvedValue(null),
+        set: jest.fn().mockResolvedValue(undefined),
+      } as any,
+    );
     const requests = captureFetch({ ok: true, body: { step: 1 } });
 
     const result = await service.execute(
@@ -348,5 +373,56 @@ describe('VoiceToolsService - resolução de payload (source system/sessão)', (
     expect(JSON.parse(String(requests[0].init.body))).toEqual({
       codigo_plano: 'NEG-004',
     });
+  });
+});
+
+describe('VoiceToolsService - cache Redis por (clientId, agentId)', () => {
+  const agentId = '22222222-2222-2222-2222-222222222222';
+
+  it('cacheia getAgentTools com TTL 30s e evita segunda consulta ao DB', async () => {
+    const { service, prisma, redis } = buildPrisma({
+      id: 'api-1',
+      name: 'Consulta',
+      method: 'GET',
+      url: 'https://api.example.com/x',
+      extract_data: null,
+    });
+    redis.get
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce([{ id: 'api-1', name: 'consulta' }]);
+
+    await service.getAgentTools('client-1', agentId);
+    await service.getAgentTools('client-1', agentId);
+
+    expect(prisma.painel_agents.findFirst).toHaveBeenCalledTimes(1);
+    expect(redis.set).toHaveBeenCalledWith(
+      `voice:tools:client-1:${agentId}`,
+      expect.any(Array),
+      30,
+    );
+  });
+
+  it('serve getAgentTools a partir do cache quando disponível', async () => {
+    const { service, prisma } = buildPrisma({
+      id: 'api-1',
+      name: 'Consulta',
+      method: 'GET',
+      url: 'https://api.example.com/x',
+      extract_data: null,
+    });
+    const cachedTool = {
+      id: 'api-1',
+      apiName: 'Consulta',
+      name: 'consulta_cacheada',
+      description: 'cached',
+      parameters: {},
+    };
+
+    (service as any).redis.get.mockResolvedValueOnce([cachedTool]);
+
+    const tools = await service.getAgentTools('client-1', agentId);
+
+    expect(tools).toEqual([cachedTool]);
+    expect(prisma.painel_agents.findFirst).not.toHaveBeenCalled();
   });
 });

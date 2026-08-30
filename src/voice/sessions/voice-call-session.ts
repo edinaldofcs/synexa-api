@@ -29,6 +29,8 @@ export interface VoiceCallSessionConfig {
   model?: string;
   voiceName?: string;
   apiKey?: string;
+  /** Context compression (sliding window) — default ON quando ausente */
+  contextCompressionEnabled?: boolean;
   /** Config de audio gate resolvida (por padrão usa valores do cliente/env) */
   gateConfig?: VoiceGateRuntimeConfig;
   /** Canal usado na sincronização com painel_interactions (ex: voice_sip, voice_webrtc) */
@@ -38,6 +40,8 @@ export interface VoiceCallSessionConfig {
    * (tool `finalizar_chamada`). Ex: AMI hangupChannel no Asterisk.
    */
   onAiHangupRequest?: () => Promise<void> | void;
+  /** Libera o slot do semáforo global de sessões de voz */
+  onSessionEnd?: () => void;
 }
 
 export class VoiceCallSession {
@@ -67,6 +71,9 @@ export class VoiceCallSession {
   private conversationMetadata: Record<string, unknown> = {};
   /** Motivo do encerramento (remoto ou solicitado pela IA) */
   public hangupCause: string | null = null;
+  private aiMessageBuffer: { messageId: string | null; content: string; lastPersist: number } | null = null;
+  private userMessageBuffer: { messageId: string | null; content: string; lastPersist: number } | null = null;
+  private sessionSlotReleased = false;
 
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
@@ -271,6 +278,7 @@ export class VoiceCallSession {
       model: this.config.model || 'gemini-2.0-flash-exp',
       voiceName: this.config.voiceName || 'Aoede',
       systemPrompt,
+      contextCompressionEnabled: this.config.contextCompressionEnabled ?? true,
       tools: toolsDeclarations.length
         ? [{ functionDeclarations: toolsDeclarations }]
         : undefined,
@@ -286,40 +294,10 @@ export class VoiceCallSession {
         this.telephonyAdapter.sendAudio(pcm24k);
       },
       onAiTranscript: async (text) => {
-        if (this.conversationId && companyId && text) {
-          try {
-            await this.prisma.messages.create({
-              data: {
-                conversation_id: this.conversationId,
-                company_id: companyId,
-                sender_type: 'ai',
-                channel: 'voice',
-                direction: 'outbound',
-                content: text,
-              },
-            });
-          } catch {
-            // Silencioso em caso de log
-          }
-        }
+        await this.appendAiTranscript(companyId, text);
       },
       onUserTranscript: async (text) => {
-        if (this.conversationId && companyId && text) {
-          try {
-            await this.prisma.messages.create({
-              data: {
-                conversation_id: this.conversationId,
-                company_id: companyId,
-                sender_type: 'customer',
-                channel: 'voice',
-                direction: 'inbound',
-                content: text,
-              },
-            });
-          } catch {
-            // Silencioso em caso de log
-          }
-        }
+        await this.appendUserTranscript(companyId, text);
       },
       onInterrupted: () => {
         this.isAiSpeaking = false;
@@ -328,10 +306,12 @@ export class VoiceCallSession {
         // a IA pare de falar imediatamente (evita cauda obsoleta tocando)
         this.telephonyAdapter.clearQueuedAudio?.();
         this.gateSession?.notifyAiSpeakingChanged(false);
+        void this.flushTranscriptBuffers();
       },
       onTurnComplete: () => {
         this.isAiSpeaking = false;
         this.gateSession?.notifyAiSpeakingChanged(false);
+        void this.flushTranscriptBuffers();
       },
       onToolCall: async (functionCalls) => {
         if (!clientId || !selectedAgent?.id) return;
@@ -468,7 +448,124 @@ export class VoiceCallSession {
       void this.end(reason ? `remote_${reason}` : 'remote_hangup');
     });
 
-    await this.telephonyAdapter.start();
+    try {
+      await this.telephonyAdapter.start();
+    } catch (err) {
+      this.releaseSessionSlot();
+      throw err;
+    }
+  }
+
+  private releaseSessionSlot(): void {
+    if (this.sessionSlotReleased) return;
+    this.sessionSlotReleased = true;
+    this.config.onSessionEnd?.();
+  }
+
+  /** Transcript da IA: cria 1x e atualiza a mesma linha com throttle 1s. */
+  private async appendAiTranscript(
+    companyId: string | undefined,
+    text: string,
+  ): Promise<void> {
+    if (!this.conversationId || !companyId || !text) return;
+    try {
+      if (!this.aiMessageBuffer) {
+        this.aiMessageBuffer = { messageId: null, content: '', lastPersist: 0 };
+      }
+      const buffer = this.aiMessageBuffer;
+      if (buffer.content && text.startsWith(buffer.content)) {
+        buffer.content = text;
+      } else {
+        buffer.content = buffer.content ? `${buffer.content} ${text}` : text;
+      }
+      const now = Date.now();
+      if (!buffer.messageId) {
+        const created = await this.prisma.messages.create({
+          data: {
+            conversation_id: this.conversationId,
+            company_id: companyId,
+            sender_type: 'ai',
+            channel: 'voice',
+            direction: 'outbound',
+            content: buffer.content,
+          },
+        });
+        buffer.messageId = created.id;
+        buffer.lastPersist = now;
+      } else if (now - buffer.lastPersist > 1000) {
+        await this.prisma.messages.update({
+          where: { id: buffer.messageId },
+          data: { content: buffer.content },
+        });
+        buffer.lastPersist = now;
+      }
+    } catch {
+      // Silencioso em caso de log
+    }
+  }
+
+  /** Transcript do usuário: acumulado no turno e persistido 1x/seg. */
+  private async appendUserTranscript(
+    companyId: string | undefined,
+    text: string,
+  ): Promise<void> {
+    if (!this.conversationId || !companyId || !text) return;
+    try {
+      if (!this.userMessageBuffer) {
+        this.userMessageBuffer = {
+          messageId: null,
+          content: '',
+          lastPersist: 0,
+        };
+      }
+      const buffer = this.userMessageBuffer;
+      if (buffer.content && text.startsWith(buffer.content)) {
+        buffer.content = text;
+      } else {
+        buffer.content = buffer.content ? `${buffer.content} ${text}` : text;
+      }
+      const now = Date.now();
+      if (!buffer.messageId) {
+        const created = await this.prisma.messages.create({
+          data: {
+            conversation_id: this.conversationId,
+            company_id: companyId,
+            sender_type: 'customer',
+            channel: 'voice',
+            direction: 'inbound',
+            content: buffer.content,
+          },
+        });
+        buffer.messageId = created.id;
+        buffer.lastPersist = now;
+      } else if (now - buffer.lastPersist > 1000) {
+        await this.prisma.messages.update({
+          where: { id: buffer.messageId },
+          data: { content: buffer.content },
+        });
+        buffer.lastPersist = now;
+      }
+    } catch {
+      // Silencioso em caso de log
+    }
+  }
+
+  /** Persiste o conteúdo final dos buffers de transcript (fim de turno). */
+  private async flushTranscriptBuffers(): Promise<void> {
+    const buffers = [this.aiMessageBuffer, this.userMessageBuffer];
+    this.aiMessageBuffer = null;
+    this.userMessageBuffer = null;
+    for (const buffer of buffers) {
+      if (!buffer?.messageId || !buffer.content) continue;
+      try {
+        await this.prisma.messages.update({
+          where: { id: buffer.messageId },
+          data: { content: buffer.content },
+        });
+      } catch {
+        // Silencioso em caso de log
+      }
+    }
   }
 
   /**
@@ -478,6 +575,7 @@ export class VoiceCallSession {
     if (this.isEnded) return;
     this.isEnded = true;
     if (reason) this.hangupCause = String(reason);
+    this.releaseSessionSlot();
     const channelId = this.telephonyAdapter.metadata.channelId as
       | string
       | undefined;

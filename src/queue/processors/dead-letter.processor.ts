@@ -22,7 +22,10 @@ export class DeadLetterProcessor {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  @Process(JOB_DEAD_LETTER_STORE)
+  @Process({
+    name: JOB_DEAD_LETTER_STORE,
+    concurrency: Number(process.env.WORKER_DLQ_CONCURRENCY) || 1,
+  })
   async process(job: Job<DeadLetterJobData>) {
     this.logger.warn(
       {

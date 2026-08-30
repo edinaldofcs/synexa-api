@@ -32,10 +32,6 @@ export class HandoffDistributorService {
         { conversation_id: conversationId, company_id: companyId },
         'Distribuição já em andamento para esta empresa; conversa permanece na fila.',
       );
-      await this.prisma.conversations.updateMany({
-        where: { id: conversationId, assigned_to: null },
-        data: { assigned_to: null },
-      });
       return null;
     }
 
@@ -63,10 +59,6 @@ export class HandoffDistributorService {
         { conversation_id: conversationId, company_id: companyId },
         'Nenhum operador disponível para novos atendimentos. Conversa mantida na fila de espera.',
       );
-      await this.prisma.conversations.updateMany({
-        where: { id: conversationId, assigned_to: null },
-        data: { assigned_to: null },
-      });
       return null;
     }
 
@@ -99,24 +91,28 @@ export class HandoffDistributorService {
       return null;
     }
 
-    // Contagem de conversas ativas para cada operador
-    const loads = await Promise.all(
-      operators.map(async (op) => {
-        const activeCount = await this.prisma.conversations.count({
-          where: {
-            company_id: companyId,
-            mode: 'manual',
-            status: 'active',
-            assigned_to: op.id,
-          },
-        });
-        return {
-          operatorId: op.id,
-          name: op.name,
-          activeCount,
-        };
-      }),
-    );
+    // Contagem de conversas ativas para cada operador (1 query agrupada)
+    const loadRows = await this.prisma.conversations.groupBy({
+      by: ['assigned_to'],
+      where: {
+        company_id: companyId,
+        mode: 'manual',
+        status: 'active',
+        assigned_to: { in: operators.map((op) => op.id) },
+      },
+      _count: { assigned_to: true },
+    });
+    const activeByOperator = new Map<string, number>();
+    for (const row of loadRows) {
+      if (row.assigned_to) {
+        activeByOperator.set(row.assigned_to, row._count.assigned_to);
+      }
+    }
+    const loads = operators.map((op) => ({
+      operatorId: op.id,
+      name: op.name,
+      activeCount: activeByOperator.get(op.id) ?? 0,
+    }));
 
     // Filtra operadores que ainda possuem capacidade disponível
     const eligible = loads.filter((op) => op.activeCount < maxCapacity);
@@ -126,10 +122,6 @@ export class HandoffDistributorService {
         { conversation_id: conversationId },
         `Todos os ${operators.length} operadores online atingiram a capacidade máxima (${maxCapacity}). Conversa na fila.`,
       );
-      await this.prisma.conversations.updateMany({
-        where: { id: conversationId, assigned_to: null },
-        data: { assigned_to: null },
-      });
       return null;
     }
 
@@ -248,19 +240,33 @@ export class HandoffDistributorService {
    * Tenta distribuir conversas da fila de espera que estão sem operador
    */
   async redistributeQueue(companyId: string): Promise<void> {
-    const unassignedConvs = await this.prisma.conversations.findMany({
-      where: {
-        company_id: companyId,
-        mode: 'manual',
-        status: 'active',
-        assigned_to: null,
-      },
-      select: { id: true, client_id: true },
-      orderBy: { created_at: 'asc' },
-    });
+    const lockKey = `handoff:distribute:${companyId}`;
+    const acquired = await this.redis.acquireLock(lockKey, 30);
+    if (!acquired) {
+      this.logger.warn(
+        { company_id: companyId },
+        'Distribuição já em andamento para esta empresa; escoamento da fila ignorado.',
+      );
+      return;
+    }
 
-    for (const conv of unassignedConvs) {
-      await this.distribute(conv.id, companyId, conv.client_id);
+    try {
+      const unassignedConvs = await this.prisma.conversations.findMany({
+        where: {
+          company_id: companyId,
+          mode: 'manual',
+          status: 'active',
+          assigned_to: null,
+        },
+        select: { id: true, client_id: true },
+        orderBy: { created_at: 'asc' },
+      });
+
+      for (const conv of unassignedConvs) {
+        await this.distributeLocked(conv.id, companyId, conv.client_id);
+      }
+    } finally {
+      await this.redis.releaseLock(lockKey);
     }
   }
 }

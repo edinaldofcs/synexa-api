@@ -32,6 +32,7 @@ describe('ConversationsService - findOrCreate race (P2002)', () => {
     {} as never,
     {} as never,
     new InboundDataMapperService() as never,
+    {} as never,
   );
 
   beforeEach(() => {
@@ -116,5 +117,62 @@ describe('ConversationsService - findOrCreate race (P2002)', () => {
         origin_channel: 'whatsapp',
       } as any),
     ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+  });
+});
+
+describe('ConversationsService - throttle do checkAndRedistributeAbandoned', () => {
+  const build = () => {
+    const prisma = {
+      conversations: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const distributor = {
+      checkAndRedistributeAbandoned: jest.fn().mockResolvedValue(undefined),
+    };
+    const redis = {
+      acquireLock: jest.fn().mockResolvedValue(true),
+    };
+    const service = new ConversationsService(
+      prisma as never,
+      {
+        findByExternalKey: jest.fn(),
+        findActiveByEndUser: jest.fn(),
+        create: jest.fn(),
+      } as never,
+      {} as never,
+      distributor as never,
+      new InboundDataMapperService() as never,
+      redis as never,
+    );
+    return { prisma, distributor, redis, service };
+  };
+
+  it('executa a varredura com lock SETNX EX 60 por empresa', async () => {
+    const { distributor, redis, service } = build();
+
+    await service.listByClient({ companyId: 'company-1' });
+
+    expect(redis.acquireLock).toHaveBeenCalledWith('handoff:scan:company-1', 60);
+    expect(
+      distributor.checkAndRedistributeAbandoned,
+    ).toHaveBeenCalledWith('company-1');
+  });
+
+  it('não executa a varredura quando o lock de throttle está ocupado', async () => {
+    const { distributor, redis, service } = build();
+    redis.acquireLock.mockResolvedValue(false);
+
+    await service.listByClient({ companyId: 'company-1' });
+
+    expect(redis.acquireLock).toHaveBeenCalledTimes(1);
+    expect(distributor.checkAndRedistributeAbandoned).not.toHaveBeenCalled();
+  });
+
+  it('não throttla quando não há companyId', async () => {
+    const { distributor, redis, service } = build();
+
+    await service.listByClient({});
+
+    expect(redis.acquireLock).not.toHaveBeenCalled();
+    expect(distributor.checkAndRedistributeAbandoned).not.toHaveBeenCalled();
   });
 });

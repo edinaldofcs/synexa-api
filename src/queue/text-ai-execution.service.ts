@@ -21,6 +21,9 @@ export interface DispatchDecision {
 
 const INLINE_RETRY_DELAY_MS = 2_500;
 const INLINE_LOCK_TTL_SECONDS = 30;
+const LOCK_WAIT_INTERVAL_MS = 250;
+const LOCK_WAIT_TIMEOUT_MS = 5_000;
+const QUEUE_ENABLED_CACHE_TTL_SECONDS = 30;
 
 /**
  * Roteia as três etapas da IA de texto (ingestão -> agente -> resposta)
@@ -94,12 +97,21 @@ export class TextAiExecutionService {
 
   async isQueueEnabled(clientId?: string): Promise<boolean> {
     if (!clientId) return true;
+    const cacheKey = `queue_enabled:${clientId}`;
+    try {
+      const cached = await this.redisService.get<boolean>(cacheKey);
+      if (typeof cached === 'boolean') return cached;
+    } catch {}
     try {
       const client = (await (this.prisma.painel_clients as any).findUnique({
         where: { id: clientId },
         select: { queue_enabled: true },
       })) as { queue_enabled?: boolean } | null;
-      return client ? client.queue_enabled !== false : true;
+      const enabled = client ? client.queue_enabled !== false : true;
+      await this.redisService
+        .set(cacheKey, enabled, QUEUE_ENABLED_CACHE_TTL_SECONDS)
+        .catch(() => undefined);
+      return enabled;
     } catch (err) {
       const error = err as Error;
       this.logger.warn(
@@ -114,7 +126,7 @@ export class TextAiExecutionService {
   /** Portado 1:1 de IngestionProcessor.process — normaliza evento + enfileira/encadeia agente. */
   async normalizeInbound(data: IngestJobData): Promise<void> {
     const lockKey = `lock:conversation:${data.client_id}:${data.origin_channel}:${data.external_user_id}`;
-    const acquired = await this.redisService.acquireLock(
+    const acquired = await this.waitForConversationLock(
       lockKey,
       INLINE_LOCK_TTL_SECONDS,
     );
@@ -173,11 +185,6 @@ export class TextAiExecutionService {
           status: 'normalized',
           processed_at: new Date(),
         },
-      });
-
-      await this.prisma.inbound_events.update({
-        where: { id: data.inbound_event_id },
-        data: { status: 'normalized' },
       });
 
       await this.dispatchAgent({
@@ -279,6 +286,22 @@ export class TextAiExecutionService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  private async waitForConversationLock(
+    lockKey: string,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
+    for (;;) {
+      if (await this.redisService.acquireLock(lockKey, ttlSeconds)) {
+        return true;
+      }
+      if (Date.now() + LOCK_WAIT_INTERVAL_MS > deadline) {
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_INTERVAL_MS));
+    }
+  }
 
   /**
    * Execução em background dentro do processo da API. Sem Bull não há retry

@@ -25,6 +25,10 @@ export interface VoiceTelemetryPayload {
 @Injectable()
 export class VoiceTelemetryService {
   private readonly logger = new Logger(VoiceTelemetryService.name);
+  private readonly costCache = new WeakMap<
+    VoiceClientSession,
+    { usageKey: string; costUsd: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -146,11 +150,20 @@ export class VoiceTelemetryService {
 
     const stats = session.gateSession?.getStats();
     const durationSec = Number(session.elapsedSeconds.toFixed(1));
-    const costUsd = this.pricingService.calculateVoiceLiveCost({
-      durationSeconds: durationSec,
-      inputTokens: session.inputTokens,
-      outputTokens: session.outputTokens,
-    });
+    // Custo recalculado apenas quando o uso de tokens muda (telemetria WS 5s)
+    const usageKey = `${session.inputTokens}:${session.outputTokens}`;
+    const cached = this.costCache.get(session);
+    const costUsd =
+      cached?.usageKey === usageKey
+        ? cached.costUsd
+        : this.pricingService.calculateVoiceLiveCost({
+            durationSeconds: durationSec,
+            inputTokens: session.inputTokens,
+            outputTokens: session.outputTokens,
+          });
+    if (cached?.usageKey !== usageKey) {
+      this.costCache.set(session, { usageKey, costUsd });
+    }
 
     return {
       durationSec,

@@ -4,7 +4,8 @@ describe('HandoffDistributorService - corrida na distribuição', () => {
   const build = () => {
     const prisma = {
       conversations: {
-        count: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        groupBy: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       users: { findMany: jest.fn() },
@@ -38,9 +39,10 @@ describe('HandoffDistributorService - corrida na distribuição', () => {
       { id: 'op-1', name: 'Op 1' },
       { id: 'op-2', name: 'Op 2' },
     ]);
-    prisma.conversations.count
-      .mockResolvedValueOnce(0)
-      .mockResolvedValueOnce(2);
+    prisma.conversations.groupBy.mockResolvedValue([
+      { assigned_to: 'op-1', _count: { assigned_to: 0 } },
+      { assigned_to: 'op-2', _count: { assigned_to: 2 } },
+    ]);
 
     const result = await service.distribute('conv-1', 'company-1', null);
 
@@ -51,9 +53,15 @@ describe('HandoffDistributorService - corrida na distribuição', () => {
     expect(redis.releaseLock).toHaveBeenCalled();
     expect(result).toBe('op-1');
     expect(presence.listAvailable).toHaveBeenCalled();
+    expect(prisma.conversations.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ['assigned_to'],
+        where: expect.objectContaining({ company_id: 'company-1' }),
+      }),
+    );
   });
 
-  it('retorna null e mantém conversa na fila quando outro processo já distribui', async () => {
+  it('retorna null sem update no-op quando outro processo já distribui', async () => {
     const { prisma, redis, presence, service } = build();
     redis.acquireLock.mockResolvedValue(false);
 
@@ -61,20 +69,13 @@ describe('HandoffDistributorService - corrida na distribuição', () => {
 
     expect(result).toBeNull();
     expect(presence.listAvailable).not.toHaveBeenCalled();
-    expect(prisma.conversations.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          id: 'conv-1',
-          assigned_to: null,
-        }),
-      }),
-    );
+    expect(prisma.conversations.updateMany).not.toHaveBeenCalled();
   });
 
   it('usa updateMany condicional (não sobrescreve atribuição concorrente)', async () => {
     const { prisma, service } = build();
     prisma.users.findMany.mockResolvedValue([{ id: 'op-1', name: 'Op 1' }]);
-    prisma.conversations.count.mockResolvedValue(0);
+    prisma.conversations.groupBy.mockResolvedValue([]);
     prisma.conversations.updateMany.mockResolvedValue({ count: 0 });
 
     const result = await service.distribute('conv-1', 'company-1', null);
@@ -91,7 +92,7 @@ describe('HandoffDistributorService - corrida na distribuição', () => {
     expect(result).toBe('op-1');
   });
 
-  it('sem operadores disponíveis: marca conversa como não atribuída de forma condicional', async () => {
+  it('sem operadores disponíveis: mantém conversa na fila sem update no-op', async () => {
     const { prisma, redis, presence, service } = build();
     presence.listAvailable.mockResolvedValue([]);
 
@@ -99,13 +100,37 @@ describe('HandoffDistributorService - corrida na distribuição', () => {
 
     expect(result).toBeNull();
     expect(redis.releaseLock).toHaveBeenCalled();
-    expect(prisma.conversations.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          id: 'conv-1',
-          assigned_to: null,
-        }),
-      }),
+    expect(prisma.conversations.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('redistributeQueue distribui todas as conversas em UMA aquisição do lock', async () => {
+    const { prisma, redis, service } = build();
+    prisma.conversations.findMany.mockResolvedValue([
+      { id: 'conv-1', client_id: null },
+      { id: 'conv-2', client_id: 'client-1' },
+    ]);
+    prisma.users.findMany.mockResolvedValue([{ id: 'op-1', name: 'Op 1' }]);
+    prisma.conversations.groupBy.mockResolvedValue([]);
+
+    await service.redistributeQueue('company-1');
+
+    expect(redis.acquireLock).toHaveBeenCalledTimes(1);
+    expect(redis.acquireLock).toHaveBeenCalledWith(
+      'handoff:distribute:company-1',
+      30,
     );
+    expect(redis.releaseLock).toHaveBeenCalledTimes(1);
+    expect(prisma.conversations.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.message_events.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('redistributeQueue ignora a fila quando o lock já está ocupado', async () => {
+    const { prisma, redis, service } = build();
+    redis.acquireLock.mockResolvedValue(false);
+
+    await service.redistributeQueue('company-1');
+
+    expect(prisma.conversations.findMany).not.toHaveBeenCalled();
+    expect(redis.releaseLock).not.toHaveBeenCalled();
   });
 });

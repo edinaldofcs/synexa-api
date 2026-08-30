@@ -44,6 +44,50 @@ export class OrchestratorController {
     }
   }
 
+  @Post('test-chat/stream')
+  async testChatStream(@Body() dto: TestChatDto, @Res() res: Response) {
+    if (process.env.LLM_STREAMING_ENABLED === 'false') {
+      return res.status(404).json({ error: 'Streaming desabilitado' });
+    }
+
+    this.logger.log({ provider: dto.provider, model: dto.model }, 'TestChatStream');
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    let closed = false;
+    res.on('close', () => {
+      closed = true;
+    });
+    const send = (event: string, data: unknown) => {
+      if (closed) return;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const result = await this.testChatService.send(dto, (chunk) =>
+        send('token', { token: chunk }),
+      );
+      send('done', {
+        text: result.text,
+        agentName: result.agentName,
+        transcription: result.transcription,
+        debug: result.debug,
+      });
+    } catch (error: any) {
+      this.logger.error({ error: error.message }, 'TestChatStream error');
+      send('error', { error: error.message });
+      send('done', { error: error.message });
+    } finally {
+      if (!closed) {
+        closed = true;
+        res.end();
+      }
+    }
+  }
+
   @Delete('test-chat')
   async clearTestChat(@Body() dto: ClearTestChatDto) {
     try {

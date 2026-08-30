@@ -13,7 +13,10 @@ export class AgentProcessor {
     private readonly textAiExecutionService: TextAiExecutionService,
   ) {}
 
-  @Process(JOB_PROCESS_WITH_AGENT)
+  @Process({
+    name: JOB_PROCESS_WITH_AGENT,
+    concurrency: Number(process.env.WORKER_AGENT_CONCURRENCY) || 2,
+  })
   async process(job: Job<AgentJobData>) {
     const data = job.data;
     this.logger.log(

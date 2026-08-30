@@ -42,8 +42,7 @@ export class VoiceClientSession {
   aiResponseStarted = false;
   model = 'gemini-3.1-flash-live-preview';
   voiceName = 'Aoede';
-  bufferedUserPcm: Buffer[] = [];
-  bufferedUserPcmBytes = 0;
+  holdsSessionSlot = false;
   telemetryPersisted = false;
   state: Record<string, unknown> = {};
   providerGeneration = 0;
@@ -76,8 +75,6 @@ export class VoiceClientSession {
     this.outputTokens = 0;
     this.totalTokens = 0;
     this.interruptedCount = 0;
-    this.bufferedUserPcm = [];
-    this.bufferedUserPcmBytes = 0;
     this.telemetryPersisted = false;
     this.aiResponseStarted = false;
     this.aiMessageBuffer = null;

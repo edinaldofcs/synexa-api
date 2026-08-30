@@ -13,7 +13,10 @@ export class DispatcherProcessor {
     private readonly textAiExecutionService: TextAiExecutionService,
   ) {}
 
-  @Process(JOB_DISPATCH_RESPONSE)
+  @Process({
+    name: JOB_DISPATCH_RESPONSE,
+    concurrency: Number(process.env.WORKER_DISPATCHER_CONCURRENCY) || 4,
+  })
   async process(job: Job<DispatchJobData>) {
     const data = job.data;
     this.logger.log(

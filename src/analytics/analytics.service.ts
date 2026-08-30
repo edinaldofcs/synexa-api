@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { UUID_SHAPE_REGEX } from '../common/validators/uuid-shape';
 import {
   evaluateConditionsWithDetails,
@@ -28,6 +29,8 @@ interface EvaluateParams {
 const ANALYTICS_CONFIG_KEY = 'analytics_config';
 /** Cache curto da config por cliente para evitar leitura de metadata a cada turno */
 const CONFIG_CACHE_TTL_MS = 30_000;
+/** TTL do cache do BI dashboard (invalidação implícita por TTL curto) */
+const BI_DASHBOARD_CACHE_TTL_S = 45;
 
 export interface MarkerTotal {
   code: string;
@@ -45,7 +48,10 @@ export class AnalyticsService {
     { config: AnalyticsConfigPayload; loadedAt: number }
   >();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redisService: RedisService,
+  ) {}
 
   // ── Configuração ────────────────────────────────────────────────
 
@@ -128,15 +134,17 @@ export class AnalyticsService {
       const { markers } = await this.getConfig(params.clientId);
       if (!markers.length) return;
 
-      for (const marker of markers) {
-        try {
-          await this.evaluateMarker(marker, params);
-        } catch (markerErr) {
-          this.logger.warn(
-            `Erro ao avaliar marcador "${marker.code}": ${(markerErr as Error).message}`,
-          );
-        }
-      }
+      await Promise.all(
+        markers.map(async (marker) => {
+          try {
+            await this.evaluateMarker(marker, params);
+          } catch (markerErr) {
+            this.logger.warn(
+              `Erro ao avaliar marcador "${marker.code}": ${(markerErr as Error).message}`,
+            );
+          }
+        }),
+      );
     } catch (err) {
       this.logger.warn(
         `Analytics: falha ao carregar configuração: ${(err as Error).message}`,
@@ -181,29 +189,31 @@ export class AnalyticsService {
       }
     }
 
-    // Upset idempotente: um evento por conversa/marcador
-    if (params.conversationId) {
-      const existing = await this.prisma.business_events.findFirst({
-        where: {
-          conversation_id: params.conversationId,
-          marker_code: marker.code,
-        },
-        select: { id: true },
-      });
-      if (existing) return;
-    }
+    // Upsert idempotente: um evento por conversa/marcador (unique constraint)
+    const data = {
+      company_id: params.companyId,
+      client_id: params.clientId,
+      conversation_id: params.conversationId || null,
+      end_user_id: params.endUserId || null,
+      marker_code: marker.code,
+      values: values as any,
+      origin_channel: params.originChannel || null,
+    };
 
-    await this.prisma.business_events.create({
-      data: {
-        company_id: params.companyId,
-        client_id: params.clientId,
-        conversation_id: params.conversationId || null,
-        end_user_id: params.endUserId || null,
-        marker_code: marker.code,
-        values: values as any,
-        origin_channel: params.originChannel || null,
-      },
-    });
+    if (params.conversationId) {
+      await this.prisma.business_events.upsert({
+        where: {
+          conversation_id_marker_code: {
+            conversation_id: params.conversationId,
+            marker_code: marker.code,
+          },
+        },
+        update: {},
+        create: data,
+      });
+    } else {
+      await this.prisma.business_events.create({ data });
+    }
     this.logger.log(
       `📊 Marcador de negócio registrado: ${marker.code} (conversa ${params.conversationId})`,
     );
@@ -390,144 +400,274 @@ export class AnalyticsService {
       to?: Date;
     } = {},
   ) {
+    const cacheKey = `bi:dashboard:${companyId}:${opts.clientId ?? 'all'}:${
+      opts.from?.toISOString() ?? 'none'
+    }:${opts.to?.toISOString() ?? 'none'}`;
+    const cached = await this.redisService.get<
+      Awaited<ReturnType<AnalyticsService['buildBiDashboard']>>
+    >(cacheKey);
+    if (cached) return cached;
+
+    const result = await this.buildBiDashboard(companyId, opts);
+    await this.redisService.set(cacheKey, result, BI_DASHBOARD_CACHE_TTL_S);
+    return result;
+  }
+
+  private async buildBiDashboard(
+    companyId: string,
+    opts: {
+      clientId?: string;
+      channel?: string;
+      from?: Date;
+      to?: Date;
+    },
+  ) {
     const where = this.buildInteractionWhere(companyId, opts);
 
-    const [
-      kpiRows,
-      dailyRows,
-      hourlyRows,
-      monthlyRows,
-      channelRows,
-      agentRows,
-    ] = await Promise.all([
-      this.prisma.$queryRaw<
-        Array<{
-          total: number;
-          human_answers: number;
-          cpc: number;
-          cpca: number;
-          agreements: number;
-          promises: number;
-          agreement_value: number;
-          promise_value: number;
-          debt_value: number;
-          total_duration: number;
-          barge_ins: number;
-          total_tokens: number;
-          cost_usd: number;
-        }>
-      >(Prisma.sql`
-          /* bi_kpi */
-          SELECT
-            COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
-            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
-            COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
-            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
-            COUNT(*) FILTER (WHERE is_promise_to_pay)::int AS promises,
-            COALESCE(SUM(agreement_amount), 0)::float8 AS agreement_value,
-            COALESCE(SUM(promise_amount), 0)::float8 AS promise_value,
-            COALESCE(SUM(debt_amount), 0)::float8 AS debt_value,
-            COALESCE(SUM(duration_seconds), 0)::int AS total_duration,
-            COALESCE(SUM(barge_in_count), 0)::int AS barge_ins,
-            COALESCE(SUM(total_tokens), 0)::int AS total_tokens,
-            COALESCE(SUM(estimated_cost_usd), 0)::float8 AS cost_usd
-          FROM painel_interactions
-          WHERE ${where}
-        `),
-      this.prisma.$queryRaw<
-        Array<{
-          date: string;
-          total: number;
-          human_answers: number;
-          cpc: number;
-          cpca: number;
-          agreements: number;
-          promises: number;
-          agreement_value: number;
-        }>
-      >(Prisma.sql`
-          /* bi_by_day */
-          SELECT
-            to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
-            COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
-            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
-            COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
-            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
-            COUNT(*) FILTER (WHERE is_promise_to_pay)::int AS promises,
-            COALESCE(SUM(agreement_amount) FILTER (WHERE is_agreement_reached), 0)::float8 AS agreement_value
-          FROM painel_interactions
-          WHERE ${where}
-          GROUP BY 1
-        `),
-      this.prisma.$queryRaw<
-        Array<{
-          hour: number;
-          total: number;
-          human_answers: number;
-          cpc: number;
-          cpca: number;
-          agreements: number;
-        }>
-      >(Prisma.sql`
-          /* bi_by_hour */
-          SELECT
-            EXTRACT(HOUR FROM created_at AT TIME ZONE ${this.serverTimeZone})::int AS hour,
-            COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
-            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
-            COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
-            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements
-          FROM painel_interactions
-          WHERE ${where}
-          GROUP BY 1
-        `),
-      this.prisma.$queryRaw<
-        Array<{
-          month: string;
-          total: number;
-          cpc: number;
-          agreements: number;
-          agreement_value: number;
-        }>
-      >(Prisma.sql`
-          /* bi_by_month */
-          SELECT
-            to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
-            COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
-            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
-            COALESCE(SUM(agreement_amount) FILTER (WHERE is_agreement_reached), 0)::float8 AS agreement_value
-          FROM painel_interactions
-          WHERE ${where}
-          GROUP BY 1
-        `),
-      this.prisma.$queryRaw<
-        Array<{ channel: string; total: number; agreements: number }>
-      >(Prisma.sql`
-          /* bi_by_channel */
-          SELECT
-            COALESCE(channel, 'webchat') AS channel,
-            COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements
-          FROM painel_interactions
-          WHERE ${where}
-          GROUP BY 1
-        `),
-      this.prisma.$queryRaw<
-        Array<{ agent: string; total: number; agreements: number }>
-      >(Prisma.sql`
-          /* bi_by_agent */
-          SELECT
-            COALESCE(agent_name, 'Agente Padrão') AS agent,
-            COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements
-          FROM painel_interactions
-          WHERE ${where}
-          GROUP BY 1
-        `),
-    ]);
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        kind: 'kpi' | 'day' | 'hour' | 'month' | 'channel' | 'agent';
+        day: string | null;
+        hour: number | null;
+        month: string | null;
+        channel: string | null;
+        agent: string | null;
+        total: number;
+        human_answers: number;
+        cpc: number;
+        cpca: number;
+        agreements: number;
+        promises: number;
+        agreement_value: number;
+        promise_value: number;
+        debt_value: number;
+        total_duration: number;
+        barge_ins: number;
+        total_tokens: number;
+        cost_usd: number;
+      }>
+    >(Prisma.sql`
+        WITH base AS (
+          SELECT * FROM painel_interactions WHERE ${where}
+        )
+        SELECT
+          'kpi' AS kind,
+          NULL::text AS day,
+          NULL::int AS hour,
+          NULL::text AS month,
+          NULL::text AS channel,
+          NULL::text AS agent,
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
+          COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+          COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
+          COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+          COUNT(*) FILTER (WHERE is_promise_to_pay)::int AS promises,
+          COALESCE(SUM(agreement_amount), 0)::float8 AS agreement_value,
+          COALESCE(SUM(promise_amount), 0)::float8 AS promise_value,
+          COALESCE(SUM(debt_amount), 0)::float8 AS debt_value,
+          COALESCE(SUM(duration_seconds), 0)::int AS total_duration,
+          COALESCE(SUM(barge_in_count), 0)::int AS barge_ins,
+          COALESCE(SUM(total_tokens), 0)::int AS total_tokens,
+          COALESCE(SUM(estimated_cost_usd), 0)::float8 AS cost_usd
+        FROM base
+        UNION ALL
+        SELECT
+          'day' AS kind,
+          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+          NULL::int AS hour,
+          NULL::text AS month,
+          NULL::text AS channel,
+          NULL::text AS agent,
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
+          COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+          COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
+          COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+          COUNT(*) FILTER (WHERE is_promise_to_pay)::int AS promises,
+          COALESCE(SUM(agreement_amount) FILTER (WHERE is_agreement_reached), 0)::float8 AS agreement_value,
+          NULL::float8 AS promise_value,
+          NULL::float8 AS debt_value,
+          NULL::int AS total_duration,
+          NULL::int AS barge_ins,
+          NULL::int AS total_tokens,
+          NULL::float8 AS cost_usd
+        FROM base
+        GROUP BY 2
+        UNION ALL
+        SELECT
+          'hour' AS kind,
+          NULL::text AS day,
+          EXTRACT(HOUR FROM created_at AT TIME ZONE ${this.serverTimeZone})::int AS hour,
+          NULL::text AS month,
+          NULL::text AS channel,
+          NULL::text AS agent,
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE has_human_answer)::int AS human_answers,
+          COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+          COUNT(*) FILTER (WHERE is_debt_presented)::int AS cpca,
+          COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+          NULL::int AS promises,
+          NULL::float8 AS agreement_value,
+          NULL::float8 AS promise_value,
+          NULL::float8 AS debt_value,
+          NULL::int AS total_duration,
+          NULL::int AS barge_ins,
+          NULL::int AS total_tokens,
+          NULL::float8 AS cost_usd
+        FROM base
+        GROUP BY 3
+        UNION ALL
+        SELECT
+          'month' AS kind,
+          NULL::text AS day,
+          NULL::int AS hour,
+          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
+          NULL::text AS channel,
+          NULL::text AS agent,
+          COUNT(*)::int AS total,
+          NULL::int AS human_answers,
+          COUNT(*) FILTER (WHERE is_right_party)::int AS cpc,
+          NULL::int AS cpca,
+          COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+          NULL::int AS promises,
+          COALESCE(SUM(agreement_amount) FILTER (WHERE is_agreement_reached), 0)::float8 AS agreement_value,
+          NULL::float8 AS promise_value,
+          NULL::float8 AS debt_value,
+          NULL::int AS total_duration,
+          NULL::int AS barge_ins,
+          NULL::int AS total_tokens,
+          NULL::float8 AS cost_usd
+        FROM base
+        GROUP BY 4
+        UNION ALL
+        SELECT
+          'channel' AS kind,
+          NULL::text AS day,
+          NULL::int AS hour,
+          NULL::text AS month,
+          COALESCE(channel, 'webchat') AS channel,
+          NULL::text AS agent,
+          COUNT(*)::int AS total,
+          NULL::int AS human_answers,
+          NULL::int AS cpc,
+          NULL::int AS cpca,
+          COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+          NULL::int AS promises,
+          NULL::float8 AS agreement_value,
+          NULL::float8 AS promise_value,
+          NULL::float8 AS debt_value,
+          NULL::int AS total_duration,
+          NULL::int AS barge_ins,
+          NULL::int AS total_tokens,
+          NULL::float8 AS cost_usd
+        FROM base
+        GROUP BY 5
+        UNION ALL
+        SELECT
+          'agent' AS kind,
+          NULL::text AS day,
+          NULL::int AS hour,
+          NULL::text AS month,
+          NULL::text AS channel,
+          COALESCE(agent_name, 'Agente Padrão') AS agent,
+          COUNT(*)::int AS total,
+          NULL::int AS human_answers,
+          NULL::int AS cpc,
+          NULL::int AS cpca,
+          COUNT(*) FILTER (WHERE is_agreement_reached)::int AS agreements,
+          NULL::int AS promises,
+          NULL::float8 AS agreement_value,
+          NULL::float8 AS promise_value,
+          NULL::float8 AS debt_value,
+          NULL::int AS total_duration,
+          NULL::int AS barge_ins,
+          NULL::int AS total_tokens,
+          NULL::float8 AS cost_usd
+        FROM base
+        GROUP BY 6
+      `);
+
+    const kpiRows = rows.filter((r) => r.kind === 'kpi');
+    const dailyRows: Array<{
+      date: string;
+      total: number;
+      human_answers: number;
+      cpc: number;
+      cpca: number;
+      agreements: number;
+      promises: number;
+      agreement_value: number;
+    }> = [];
+    const hourlyRows: Array<{
+      hour: number;
+      total: number;
+      human_answers: number;
+      cpc: number;
+      cpca: number;
+      agreements: number;
+    }> = [];
+    const monthlyRows: Array<{
+      month: string;
+      total: number;
+      cpc: number;
+      agreements: number;
+      agreement_value: number;
+    }> = [];
+    const channelRows: Array<{
+      channel: string;
+      total: number;
+      agreements: number;
+    }> = [];
+    const agentRows: Array<{
+      agent: string;
+      total: number;
+      agreements: number;
+    }> = [];
+
+    for (const row of rows) {
+      if (row.kind === 'day') {
+        dailyRows.push({
+          date: row.day || '',
+          total: row.total,
+          human_answers: row.human_answers,
+          cpc: row.cpc,
+          cpca: row.cpca,
+          agreements: row.agreements,
+          promises: row.promises,
+          agreement_value: row.agreement_value,
+        });
+      } else if (row.kind === 'hour') {
+        hourlyRows.push({
+          hour: row.hour || 0,
+          total: row.total,
+          human_answers: row.human_answers,
+          cpc: row.cpc,
+          cpca: row.cpca,
+          agreements: row.agreements,
+        });
+      } else if (row.kind === 'month') {
+        monthlyRows.push({
+          month: row.month || '',
+          total: row.total,
+          cpc: row.cpc,
+          agreements: row.agreements,
+          agreement_value: row.agreement_value,
+        });
+      } else if (row.kind === 'channel') {
+        channelRows.push({
+          channel: row.channel || 'webchat',
+          total: row.total,
+          agreements: row.agreements,
+        });
+      } else if (row.kind === 'agent') {
+        agentRows.push({
+          agent: row.agent || 'Agente Padrão',
+          total: row.total,
+          agreements: row.agreements,
+        });
+      }
+    }
 
     const kpi = kpiRows[0] ?? {
       total: 0,
@@ -765,14 +905,15 @@ export class AnalyticsService {
   >(
     companyId: string,
     items: T[],
+    includeHeavy = false,
   ): Promise<
     (T & {
       messages_count: number;
       first_user_message: string | null;
       last_user_message: string | null;
       last_assistant_message: string | null;
-      full_transcript: string | null;
-      executed_tools: string[];
+      full_transcript?: string | null;
+      executed_tools?: string[];
     })[]
   > {
     const ids = items
@@ -785,32 +926,15 @@ export class AnalyticsService {
         first_user_message: null,
         last_user_message: null,
         last_assistant_message: null,
-        full_transcript: null,
-        executed_tools: [],
+        ...(includeHeavy
+          ? { full_transcript: null, executed_tools: [] as string[] }
+          : {}),
       }));
     }
 
-    const rows = await this.prisma.$queryRaw<
-      Array<{
-        id: string;
-        messages_count: number;
-        first_user_message: string | null;
-        last_user_message: string | null;
-        last_assistant_message: string | null;
-        full_transcript: string | null;
-        message_tools: string[];
-      }>
-    >(
-      Prisma.sql`
-        SELECT
-          id,
-          jsonb_array_length(messages) AS messages_count,
-          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
-            WHERE m->>'role' = 'user' ORDER BY ord LIMIT 1) AS first_user_message,
-          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
-            WHERE m->>'role' = 'user' ORDER BY ord DESC LIMIT 1) AS last_user_message,
-          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
-            WHERE m->>'role' = 'assistant' ORDER BY ord DESC LIMIT 1) AS last_assistant_message,
+    const heavySelect = includeHeavy
+      ? Prisma.sql`
+          ,
           (SELECT string_agg(
               CASE WHEN m->>'role' = 'user' THEN '[Cliente]: ' ELSE '[IA]: ' END || (m->>'content'),
               ' | ' ORDER BY ord)
@@ -845,25 +969,51 @@ export class AnalyticsService {
               SELECT m->>'tool_name' AS name
                 FROM jsonb_array_elements(messages) m
                 WHERE m->>'role' IN ('tool', 'function') AND m->>'tool_name' IS NOT NULL AND m->>'tool_name' <> ''
-            ) s WHERE name IS NOT NULL) AS message_tools
+            ) s WHERE name IS NOT NULL) AS message_tools`
+      : Prisma.empty;
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        messages_count: number;
+        first_user_message: string | null;
+        last_user_message: string | null;
+        last_assistant_message: string | null;
+        full_transcript?: string | null;
+        message_tools?: string[];
+      }>
+    >(
+      Prisma.sql`
+        SELECT
+          id,
+          jsonb_array_length(messages) AS messages_count,
+          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
+            WHERE m->>'role' = 'user' ORDER BY ord LIMIT 1) AS first_user_message,
+          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
+            WHERE m->>'role' = 'user' ORDER BY ord DESC LIMIT 1) AS last_user_message,
+          (SELECT m->>'content' FROM jsonb_array_elements(messages) WITH ORDINALITY AS t(m, ord)
+            WHERE m->>'role' = 'assistant' ORDER BY ord DESC LIMIT 1) AS last_assistant_message${heavySelect}
         FROM painel_interactions
-        WHERE company_id = ${companyId}::uuid AND id::text IN (${Prisma.join(ids)})
+        WHERE company_id = ${companyId}::uuid AND id = ANY(${ids}::uuid[])
       `,
     );
 
     const derivedById = new Map(rows.map((r) => [r.id, r]));
     return items.map((it) => {
       const derived = derivedById.get(it.id);
-      const messageTools = derived?.message_tools ?? [];
-      return {
+      const base = {
         ...it,
         messages_count: derived?.messages_count ?? 0,
         first_user_message: derived?.first_user_message ?? null,
         last_user_message: derived?.last_user_message ?? null,
         last_assistant_message: derived?.last_assistant_message ?? null,
+      };
+      if (!includeHeavy) return base;
+      return {
+        ...base,
         full_transcript: derived?.full_transcript ?? null,
         executed_tools: this.computeExecutedTools(
-          messageTools,
+          derived?.message_tools ?? [],
           it.context_variables,
           it as unknown as Record<string, unknown>,
         ),
@@ -976,12 +1126,20 @@ export class AnalyticsService {
   }
 
   /** Detalhe completo de uma interação (inclui messages e context_variables)
-   *  para o modal do relatório, sempre validado por company_id. */
+   *  para o modal do relatório, sempre validado por company_id. Campos derivados
+   *  pesados (transcript completo e ferramentas executadas) só são calculados aqui. */
   async getInteractionDetail(companyId: string, id: string) {
     if (!UUID_SHAPE_REGEX.test(id)) return null;
-    return this.prisma.painel_interactions.findFirst({
+    const item = await this.prisma.painel_interactions.findFirst({
       where: { id, company_id: companyId },
     });
+    if (!item) return null;
+    const [enriched] = await this.attachInteractionDerivedFields(
+      companyId,
+      [item],
+      true,
+    );
+    return enriched;
   }
 
   /** Mensagens completas de um lote de interações da página atual
@@ -996,7 +1154,7 @@ export class AnalyticsService {
       Prisma.sql`
         SELECT id, messages
         FROM painel_interactions
-        WHERE company_id = ${companyId}::uuid AND id::text IN (${Prisma.join(validIds)})
+        WHERE company_id = ${companyId}::uuid AND id = ANY(${validIds}::uuid[])
       `,
     );
   }
@@ -1011,179 +1169,163 @@ export class AnalyticsService {
       to?: Date;
     } = {},
   ) {
-    const where: Record<string, unknown> = { company_id: companyId };
-    if (opts.clientId) where.client_id = opts.clientId;
-    if (opts.from || opts.to) {
-      where.created_at = {
-        ...(opts.from ? { gte: opts.from } : {}),
-        ...(opts.to ? { lte: opts.to } : {}),
-      };
-    }
+    const runConditions: Prisma.Sql[] = [
+      Prisma.sql`company_id = ${companyId}::uuid`,
+    ];
+    if (opts.from) runConditions.push(Prisma.sql`started_at >= ${opts.from}`);
+    if (opts.to) runConditions.push(Prisma.sql`started_at <= ${opts.to}`);
 
-    const [interactions, agentRuns] = await Promise.all([
-      this.prisma.painel_interactions.findMany({
-        where: where as any,
-        select: {
-          channel: true,
-          duration_seconds: true,
-          barge_in_count: true,
-          total_tokens: true,
-          prompt_tokens: true,
-          completion_tokens: true,
-          estimated_cost_usd: true,
-          llm_provider: true,
-          llm_model: true,
-          created_at: true,
-        },
-      }),
-      this.prisma.agent_runs.findMany({
-        where: {
-          company_id: companyId,
-          ...(opts.from || opts.to
-            ? {
-                started_at: {
-                  ...(opts.from ? { gte: opts.from } : {}),
-                  ...(opts.to ? { lte: opts.to } : {}),
-                },
-              }
-            : {}),
-        },
-        select: {
-          provider: true,
-          model: true,
-          input_tokens: true,
-          output_tokens: true,
-          total_tokens: true,
-          cost: true,
-          latency_ms: true,
-          status: true,
-          started_at: true,
-        },
-      }),
+    const interactionConditions: Prisma.Sql[] = [
+      Prisma.sql`company_id = ${companyId}::uuid`,
+    ];
+    if (opts.clientId)
+      interactionConditions.push(
+        Prisma.sql`client_id = ${opts.clientId}::uuid`,
+      );
+    if (opts.from)
+      interactionConditions.push(Prisma.sql`created_at >= ${opts.from}`);
+    if (opts.to)
+      interactionConditions.push(Prisma.sql`created_at <= ${opts.to}`);
+
+    const [runRows, interactionRows] = await Promise.all([
+      this.prisma.$queryRaw<
+        Array<{
+          key: string | null;
+          provider: string | null;
+          total_runs: number;
+          input_tokens: number;
+          output_tokens: number;
+          total_tokens: number;
+          cost_usd: number;
+          avg_latency_ms: number;
+          p95_latency_ms: number;
+          g_model: number;
+          g_provider: number;
+        }>
+      >(
+        Prisma.sql`
+          WITH runs AS (
+            SELECT
+              COALESCE(NULLIF(provider, ''), 'desconhecido') AS provider,
+              COALESCE(NULLIF(model, ''), 'desconhecido') AS model,
+              COALESCE(input_tokens, 0)::int AS input_tokens,
+              COALESCE(output_tokens, 0)::int AS output_tokens,
+              COALESCE(
+                NULLIF(total_tokens, 0),
+                COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0),
+                0
+              )::int AS total_tokens,
+              COALESCE(cost, 0)::float8 AS cost,
+              COALESCE(latency_ms, 0)::int AS latency_ms
+            FROM agent_runs
+            WHERE ${Prisma.join(runConditions, ' AND ')}
+          )
+          SELECT
+            COALESCE(model, provider) AS key,
+            MIN(provider) AS provider,
+            COUNT(*)::int AS total_runs,
+            COALESCE(SUM(input_tokens), 0)::float8 AS input_tokens,
+            COALESCE(SUM(output_tokens), 0)::float8 AS output_tokens,
+            COALESCE(SUM(total_tokens), 0)::float8 AS total_tokens,
+            COALESCE(SUM(cost), 0)::float8 AS cost_usd,
+            COALESCE(AVG(latency_ms) FILTER (WHERE latency_ms > 0), 0)::float8 AS avg_latency_ms,
+            COALESCE(
+              PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms)
+                FILTER (WHERE latency_ms > 0),
+              0
+            )::float8 AS p95_latency_ms,
+            GROUPING(model)::int AS g_model,
+            GROUPING(provider)::int AS g_provider
+          FROM runs
+          GROUP BY GROUPING SETS ((model), (provider), ())
+        `,
+      ),
+      this.prisma.$queryRaw<
+        Array<{
+          interactions: number;
+          voice_duration_seconds: number;
+          barge_ins: number;
+          total_tokens: number;
+          input_tokens: number;
+          output_tokens: number;
+          cost_usd: number;
+        }>
+      >(
+        Prisma.sql`
+          SELECT
+            COUNT(*)::int AS interactions,
+            COALESCE(SUM(duration_seconds) FILTER (WHERE channel LIKE '%voice%'), 0)::int AS voice_duration_seconds,
+            COALESCE(SUM(barge_in_count) FILTER (WHERE channel LIKE '%voice%'), 0)::int AS barge_ins,
+            COALESCE(SUM(total_tokens), 0)::float8 AS total_tokens,
+            COALESCE(SUM(prompt_tokens), 0)::float8 AS input_tokens,
+            COALESCE(SUM(completion_tokens), 0)::float8 AS output_tokens,
+            COALESCE(SUM(estimated_cost_usd), 0)::float8 AS cost_usd
+          FROM painel_interactions
+          WHERE ${Prisma.join(interactionConditions, ' AND ')}
+        `,
+      ),
     ]);
 
-    // Agrupamento por Modelo
-    const byModel = new Map<
-      string,
-      {
-        model: string;
-        provider: string;
-        total_runs: number;
-        input_tokens: number;
-        output_tokens: number;
-        total_tokens: number;
-        cost_usd: number;
-        avg_latency_ms: number;
-      }
-    >();
+    const runTotals = runRows.find(
+      (r) => r.g_model === 1 && r.g_provider === 1,
+    );
+    const interactionTotals = interactionRows[0];
+    const hasRuns = (runTotals?.total_runs ?? 0) > 0;
 
-    // Agrupamento por Provedor
-    const byProvider = new Map<
-      string,
-      {
-        provider: string;
-        runs: number;
-        tokens: number;
-        cost_usd: number;
-      }
-    >();
+    const byModel = runRows
+      .filter((r) => r.g_model === 0)
+      .map((r) => ({
+        model: r.key || 'desconhecido',
+        provider: r.provider || 'desconhecido',
+        total_runs: r.total_runs,
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        total_tokens: r.total_tokens,
+        cost_usd: r.cost_usd,
+        avg_latency_ms: r.avg_latency_ms,
+      }))
+      .sort((a, b) => b.total_tokens - a.total_tokens);
 
-    let totalRuns = agentRuns.length || interactions.length;
-    let totalTokens = 0;
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let totalCostUsd = 0;
-    let totalVoiceDurationSec = 0;
-    let totalBargeIns = 0;
-    const latencies: number[] = [];
+    const byProvider = runRows
+      .filter((r) => r.g_provider === 0 && r.g_model === 1)
+      .map((r) => ({
+        provider: r.key || 'desconhecido',
+        runs: r.total_runs,
+        tokens: r.total_tokens,
+        cost_usd: r.cost_usd,
+      }))
+      .sort((a, b) => b.cost_usd - a.cost_usd);
 
-    // Processa runs de LLM
-    for (const run of agentRuns) {
-      const model = run.model || 'desconhecido';
-      const provider = run.provider || 'desconhecido';
-      const inTok = run.input_tokens || 0;
-      const outTok = run.output_tokens || 0;
-      const totTok = run.total_tokens || inTok + outTok;
-      const cost = run.cost ? Number(run.cost) : 0;
-      const lat = run.latency_ms || 0;
-
-      totalTokens += totTok;
-      inputTokens += inTok;
-      outputTokens += outTok;
-      totalCostUsd += cost;
-      if (lat > 0) latencies.push(lat);
-
-      // By Model
-      const mEntry = byModel.get(model) || {
-        model,
-        provider,
-        total_runs: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
-        cost_usd: 0,
-        avg_latency_ms: 0,
-      };
-      mEntry.total_runs++;
-      mEntry.input_tokens += inTok;
-      mEntry.output_tokens += outTok;
-      mEntry.total_tokens += totTok;
-      mEntry.cost_usd += cost;
-      byModel.set(model, mEntry);
-
-      // By Provider
-      const pEntry = byProvider.get(provider) || {
-        provider,
-        runs: 0,
-        tokens: 0,
-        cost_usd: 0,
-      };
-      pEntry.runs++;
-      pEntry.tokens += totTok;
-      pEntry.cost_usd += cost;
-      byProvider.set(provider, pEntry);
-    }
-
-    // Processa interações de voz
-    for (const int of interactions) {
-      if (int.channel?.includes('voice')) {
-        totalVoiceDurationSec += int.duration_seconds || 0;
-        totalBargeIns += int.barge_in_count || 0;
-      }
-      if (agentRuns.length === 0) {
-        // Fallback caso não haja agent_runs salvos
-        totalTokens += int.total_tokens || 0;
-        inputTokens += int.prompt_tokens || 0;
-        outputTokens += int.completion_tokens || 0;
-        totalCostUsd += int.estimated_cost_usd
-          ? Number(int.estimated_cost_usd)
-          : 0;
-      }
-    }
-
-    // Cálculo de P95 Latency
-    latencies.sort((a, b) => a - b);
-    const p95LatencyMs =
-      latencies.length > 0 ? latencies[Math.floor(latencies.length * 0.95)] : 0;
+    const totalTokens = hasRuns
+      ? runTotals?.total_tokens ?? 0
+      : interactionTotals?.total_tokens ?? 0;
+    const inputTokens = hasRuns
+      ? runTotals?.input_tokens ?? 0
+      : interactionTotals?.input_tokens ?? 0;
+    const outputTokens = hasRuns
+      ? runTotals?.output_tokens ?? 0
+      : interactionTotals?.output_tokens ?? 0;
+    const totalCostUsd = hasRuns
+      ? runTotals?.cost_usd ?? 0
+      : interactionTotals?.cost_usd ?? 0;
 
     return {
       totals: {
-        total_runs: totalRuns,
+        total_runs:
+          runTotals?.total_runs || interactionTotals?.interactions || 0,
         total_tokens: totalTokens,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         total_cost_usd: Number(totalCostUsd.toFixed(4)),
         total_cost_brl: Number((totalCostUsd * 5.5).toFixed(2)),
-        voice_duration_minutes: Math.round(totalVoiceDurationSec / 60),
-        total_barge_ins: totalBargeIns,
-        p95_latency_ms: p95LatencyMs,
+        voice_duration_minutes: Math.round(
+          (interactionTotals?.voice_duration_seconds ?? 0) / 60,
+        ),
+        total_barge_ins: interactionTotals?.barge_ins ?? 0,
+        p95_latency_ms: runTotals?.p95_latency_ms ?? 0,
       },
-      by_model: [...byModel.values()].sort(
-        (a, b) => b.total_tokens - a.total_tokens,
-      ),
-      by_provider: [...byProvider.values()].sort(
-        (a, b) => b.cost_usd - a.cost_usd,
-      ),
+      by_model: byModel,
+      by_provider: byProvider,
     };
   }
 }

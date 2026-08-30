@@ -17,7 +17,7 @@ export class ObservabilityController {
   getLatency(@CurrentUser() user: any, @Query('hours') hours?: string) {
     const ctx = extractTenantContext(user);
     return this.observabilityService.getLatencyMetrics(
-      Number(hours) || 24,
+      Math.min(Math.max(Number(hours) || 24, 1), 720),
       ctx.companyId,
     );
   }
@@ -26,7 +26,7 @@ export class ObservabilityController {
   getCost(@CurrentUser() user: any, @Query('hours') hours?: string) {
     const ctx = extractTenantContext(user);
     return this.observabilityService.getCostMetrics(
-      Number(hours) || 168,
+      Math.min(Math.max(Number(hours) || 168, 1), 720),
       ctx.companyId,
     );
   }
@@ -35,7 +35,7 @@ export class ObservabilityController {
   getErrors(@CurrentUser() user: any, @Query('hours') hours?: string) {
     const ctx = extractTenantContext(user);
     return this.observabilityService.getErrorsByTenant(
-      Number(hours) || 24,
+      Math.min(Math.max(Number(hours) || 24, 1), 720),
       ctx.companyId,
     );
   }

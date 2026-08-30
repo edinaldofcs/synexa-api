@@ -47,14 +47,30 @@ export class WebhooksService {
       return;
     }
 
-    for (const endpoint of endpoints) {
-      await this.deliverToEndpoint(
-        endpoint.id,
-        endpoint.url,
-        endpoint.secret_hash,
-        endpoint.retry_policy as any,
-        payload,
-      );
+    const results = await Promise.allSettled(
+      endpoints.map((endpoint) =>
+        this.deliverToEndpoint(
+          endpoint.id,
+          endpoint.url,
+          endpoint.secret_hash,
+          endpoint.retry_policy as any,
+          payload,
+        ),
+      ),
+    );
+
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'rejected') {
+        this.logger.error(
+          {
+            client_id: clientId,
+            event: payload.event,
+            endpoint_id: endpoints[index]?.id,
+            error: (result.reason as Error)?.message,
+          },
+          'Webhook delivery rejected',
+        );
+      }
     }
   }
 

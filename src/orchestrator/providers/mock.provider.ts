@@ -108,6 +108,15 @@ export class MockLlmProvider implements LLMProvider {
     };
   }
 
+  async chatWithPartsStream(
+    params: AgentChatParams,
+    onToken: (chunk: string) => void,
+  ): Promise<AgentOutput> {
+    const output = await this.chatWithParts(params);
+    onToken(output.text);
+    return output;
+  }
+
   getCapabilities(): ProviderCapabilities {
     return {
       text: true,

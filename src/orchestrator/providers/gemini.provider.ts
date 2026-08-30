@@ -272,6 +272,20 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async chatWithParts(params: AgentChatParams): Promise<AgentOutput> {
+    return this.runChatWithParts(params);
+  }
+
+  async chatWithPartsStream(
+    params: AgentChatParams,
+    onToken: (chunk: string) => void,
+  ): Promise<AgentOutput> {
+    return this.runChatWithParts(params, onToken);
+  }
+
+  private async runChatWithParts(
+    params: AgentChatParams,
+    onToken?: (chunk: string) => void,
+  ): Promise<AgentOutput> {
     const startTime = Date.now();
     const calledTools: string[] = [];
     const modelName = params.agentConfig.model || llmConfig.models.gemini;
@@ -313,7 +327,15 @@ export class GeminiProvider implements LLMProvider {
         } as any,
       });
 
-      let result = await chatSession.sendMessage(contents);
+      let result: any = onToken
+        ? await chatSession.sendMessageStream(contents)
+        : await chatSession.sendMessage(contents);
+      if (onToken) {
+        for await (const chunk of result.stream) {
+          const delta = chunk.text();
+          if (delta) onToken(delta);
+        }
+      }
       let response = await result.response;
 
       if (response.usageMetadata) {
@@ -331,30 +353,54 @@ export class GeminiProvider implements LLMProvider {
           );
           break;
         }
-        for (const call of functionCalls) {
-          const { name: toolName, args } = call;
-          this.logger.log({ toolName, args }, 'Gemini tool call');
-          calledTools.push(toolName);
-
-          const toolResult = await params.onToolCall(
-            toolName,
-            args as Record<string, unknown>,
+        const batch = [...functionCalls];
+        for (const call of batch) {
+          this.logger.log(
+            { toolName: call.name, args: call.args },
+            'Gemini tool call',
           );
-
-          result = await chatSession.sendMessage([
-            {
-              functionResponse: { name: toolName, response: toolResult as any },
-            },
-          ]);
-
-          response = await result.response;
-          if (response.usageMetadata) {
-            totalInputTokens += response.usageMetadata.promptTokenCount || 0;
-            totalOutputTokens +=
-              response.usageMetadata.candidatesTokenCount || 0;
-          }
-          functionCalls = response.functionCalls();
+          calledTools.push(call.name);
         }
+
+        const toolResults = await Promise.all(
+          batch.map((call) =>
+            params
+              .onToolCall(
+                call.name,
+                call.args as Record<string, unknown>,
+              )
+              .catch((error) => ({
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : 'Erro ao executar tool',
+              })),
+          ),
+        );
+
+        const functionResponses = batch.map((call, index) => ({
+          functionResponse: {
+            name: call.name,
+            response: toolResults[index] as any,
+          },
+        }));
+
+        result = onToken
+          ? await chatSession.sendMessageStream(functionResponses as any)
+          : await chatSession.sendMessage(functionResponses as any);
+        if (onToken && result.stream) {
+          for await (const chunk of result.stream) {
+            const delta = chunk.text();
+            if (delta) onToken(delta);
+          }
+        }
+
+        response = await result.response;
+        if (response.usageMetadata) {
+          totalInputTokens += response.usageMetadata.promptTokenCount || 0;
+          totalOutputTokens += response.usageMetadata.candidatesTokenCount || 0;
+        }
+        functionCalls = response.functionCalls();
       }
 
       const finalText = response.text();

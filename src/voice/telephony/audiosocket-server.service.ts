@@ -223,7 +223,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
     while (Date.now() < deadline) {
       const id = adapter.metadata.channelId as string | undefined;
       if (id) return id;
-      await new Promise((r) => setTimeout(r, 25));
+      await new Promise((r) => setTimeout(r, 100));
     }
     return null;
   }

@@ -6,7 +6,6 @@ import { VoiceController } from './voice.controller';
 import { VoiceAuthService } from './voice-auth.service';
 import { MockVoiceProvider } from './providers/mock-voice.provider';
 import { AudioGateService } from './services/audio-gate.service';
-import { HybridSttService } from './services/hybrid-stt.service';
 import { RtpGatewayService } from './telephony/rtp-gateway.service';
 import { AsteriskAmiService } from './telephony/asterisk-ami.service';
 import { FastAgiServerService } from './telephony/fastagi-server.service';
@@ -32,7 +31,6 @@ import { SessionService } from '../common/auth/session.service';
     SessionService,
     MockVoiceProvider,
     AudioGateService,
-    HybridSttService,
     RtpGatewayService,
     AsteriskAmiService,
     FastAgiServerService,
@@ -52,7 +50,6 @@ import { SessionService } from '../common/auth/session.service';
     VoiceAuthService,
     MockVoiceProvider,
     AudioGateService,
-    HybridSttService,
     RtpGatewayService,
     AsteriskAmiService,
     FastAgiServerService,

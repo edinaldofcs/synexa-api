@@ -45,11 +45,27 @@ const EXPENSIVE_VOICES_MAP: Record<string, number> = {
   Flare: 1632, // Nota: Flare consome 1632 tokens de audio fixos por turno vs ~241 de outras vozes
 };
 
+const DEFAULT_WS_BACKPRESSURE_BYTES = 1048576;
+const BACKPRESSURE_LOG_EVERY = 100;
+
 export class GeminiLiveVoiceProvider {
   private readonly logger = new Logger(GeminiLiveVoiceProvider.name);
   private ws: WebSocket | null = null;
   private isReady = false;
   private options: GeminiLiveConnectOptions | null = null;
+  private readonly backpressureBytes: number;
+  private droppedAudioFramesCount = 0;
+
+  constructor() {
+    this.backpressureBytes =
+      Number(process.env.VOICE_WS_BACKPRESSURE_BYTES) ||
+      DEFAULT_WS_BACKPRESSURE_BYTES;
+  }
+
+  /** Frames de áudio descartados por backpressure do WS do Gemini. */
+  public get droppedAudioFrames(): number {
+    return this.droppedAudioFramesCount;
+  }
 
   public connect(options: GeminiLiveConnectOptions): void {
     this.options = options;
@@ -206,17 +222,25 @@ export class GeminiLiveVoiceProvider {
   }
 
   public sendAudio(base64Pcm16: string, sampleRate = 16000): void {
-    if (this.ws?.readyState === WebSocket.OPEN && base64Pcm16) {
-      const payload = {
-        realtimeInput: {
-          audio: {
-            mimeType: `audio/pcm;rate=${sampleRate}`,
-            data: base64Pcm16,
-          },
-        },
-      };
-      this.ws.send(JSON.stringify(payload));
+    if (this.ws?.readyState !== WebSocket.OPEN || !base64Pcm16) return;
+    if (this.ws.bufferedAmount > this.backpressureBytes) {
+      this.droppedAudioFramesCount++;
+      if (this.droppedAudioFramesCount % BACKPRESSURE_LOG_EVERY === 1) {
+        this.logger.warn(
+          `[GeminiLive] Backpressure no WS (${this.ws.bufferedAmount}B > ${this.backpressureBytes}B): descartando frame de áudio (${this.droppedAudioFramesCount} descartes)`,
+        );
+      }
+      return;
     }
+    const payload = {
+      realtimeInput: {
+        audio: {
+          mimeType: `audio/pcm;rate=${sampleRate}`,
+          data: base64Pcm16,
+        },
+      },
+    };
+    this.ws.send(JSON.stringify(payload));
   }
 
   public sendAudioStreamEnd(): void {

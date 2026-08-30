@@ -671,7 +671,11 @@ export class ApiToolExecutorService {
 
     const method = (tool.method || 'GET').toUpperCase();
     const headers = this.asRecord(tool.headers);
-    const init: RequestInit = { method, headers: headers as HeadersInit };
+    const init: RequestInit = {
+      method,
+      headers: headers as HeadersInit,
+      signal: AbortSignal.timeout(15_000),
+    };
     const body = this.buildRequestBody(tool, args, sessionState);
     if (method !== 'GET' && method !== 'HEAD' && body !== undefined) {
       init.body = typeof body === 'string' ? body : JSON.stringify(body);
