@@ -161,6 +161,53 @@ describe('validateEnv', () => {
       );
     });
 
+    it('should throw in production when VOICE_PROVIDER is mock', () => {
+      const config = {
+        ...baseConfig,
+        ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
+        SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
+        JWT_SECRET: 'a-32-character-jwt-secret-for-tests!',
+        ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
+        VOICE_PROVIDER: 'mock',
+      };
+      expect(() => validateEnv(config)).toThrow(
+        'VOICE_PROVIDER cannot be "mock" in production environment',
+      );
+    });
+
+    it('should reject production config without explicit VOICE_PROVIDER', () => {
+      const config = {
+        ...baseConfig,
+        ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
+        SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
+        ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
+      };
+      expect(() => validateEnv(config)).toThrow(
+        'VOICE_PROVIDER cannot be "mock" in production environment',
+      );
+    });
+
+    it('should accept gemini voice provider in production', () => {
+      const config = {
+        ...baseConfig,
+        ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
+        SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
+        JWT_SECRET: 'a-32-character-jwt-secret-for-tests!',
+        ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
+        VOICE_PROVIDER: 'gemini',
+      };
+      expect(() => validateEnv(config)).not.toThrow();
+    });
+
     it('should throw in production when ENCRYPTION_KEY is missing', () => {
       const config = {
         ...baseConfig,
@@ -245,6 +292,7 @@ describe('validateEnv', () => {
         SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
         ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
+        VOICE_PROVIDER: 'gemini',
       };
       expect(() => validateEnv(config)).not.toThrow();
     });

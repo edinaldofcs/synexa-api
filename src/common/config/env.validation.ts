@@ -467,6 +467,11 @@ export function validateEnv(
         'BYPASS_API_KEY_DEV cannot be enabled in production environment',
       );
     }
+    if (validatedConfig.VOICE_PROVIDER === VoiceProvider.MOCK) {
+      throw new Error(
+        'VOICE_PROVIDER cannot be "mock" in production environment',
+      );
+    }
   }
 
   return validatedConfig;
