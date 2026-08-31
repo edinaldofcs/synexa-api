@@ -8,8 +8,13 @@ import { ClientMetadataService } from '../common/metadata/client-metadata.servic
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 import { WebSearchConfigDto } from './dto/web-search-config.dto';
+import {
+  PreviewPromptDto,
+  SimulateSequenceDto,
+} from './dto/agent-simulation.dto';
 import { AgentsRepository } from './repositories/agents.repository';
 import { buildAgentPromptFromBlocks } from './utils/agent-prompt-builder.util';
+import { evaluateConditionsWithDetails } from '../orchestrator/utils/condition-evaluator.util';
 
 @Injectable()
 export class AgentsService {
@@ -242,5 +247,104 @@ export class AgentsService {
         },
       };
     });
+  }
+
+  async previewPrompt(
+    clientId: string,
+    dto: PreviewPromptDto,
+    companyId: string,
+  ) {
+    await this.validateClientAccess(clientId, companyId);
+    const state = dto.state || {};
+
+    let agentRecord: any = dto.agent_data;
+    if (!agentRecord && dto.agent_id) {
+      agentRecord = await this.agentsRepository.findOne(dto.agent_id);
+    }
+
+    if (!agentRecord) {
+      throw new NotFoundException('Agente não informado para preview');
+    }
+
+    const resolvedPrompt = buildAgentPromptFromBlocks(agentRecord, state);
+    const charCount = resolvedPrompt.length;
+    const tokenEstimate = Math.ceil(charCount / 4);
+
+    return {
+      resolved_prompt: resolvedPrompt,
+      char_count: charCount,
+      token_estimate: tokenEstimate,
+    };
+  }
+
+  async simulateSequence(
+    clientId: string,
+    dto: SimulateSequenceDto,
+    companyId: string,
+  ) {
+    await this.validateClientAccess(clientId, companyId);
+    const state = dto.state || {};
+
+    const agents = await this.prisma.painel_agents.findMany({
+      where: { client_id: clientId, is_active: true },
+      orderBy: { execution_order: 'asc' },
+    });
+
+    const evaluations: Array<{
+      agent_id: string;
+      service_step: string;
+      execution_order: number | null;
+      matched: boolean;
+      logic: string;
+      details: any[];
+      resolved_prompt: string;
+    }> = [];
+
+    let activeAgentId: string | null = null;
+
+    for (const agent of agents) {
+      const conditions = agent.activation_conditions as any;
+      const hasConditions =
+        conditions?.conditions && conditions.conditions.length > 0;
+
+      let matched = false;
+      let details: any[] = [];
+      const logic = conditions?.logic || 'AND';
+
+      if (hasConditions) {
+        const evalRes = evaluateConditionsWithDetails(conditions, state);
+        matched = evalRes.matched;
+        details = evalRes.details;
+        if (matched && !activeAgentId) {
+          activeAgentId = agent.id;
+        }
+      }
+
+      const resolvedPrompt = buildAgentPromptFromBlocks(agent as any, state);
+
+      evaluations.push({
+        agent_id: agent.id,
+        service_step: agent.service_step || '',
+        execution_order: agent.execution_order ?? 0,
+        matched,
+        logic,
+        details,
+        resolved_prompt: resolvedPrompt,
+      });
+    }
+
+    if (!activeAgentId && agents.length > 0) {
+      const initial = agents.find((a) => a.is_initial) || agents[0];
+      activeAgentId = initial.id;
+      const foundEval = evaluations.find((e) => e.agent_id === initial.id);
+      if (foundEval && (!foundEval.details || foundEval.details.length === 0)) {
+        foundEval.matched = true;
+      }
+    }
+
+    return {
+      active_agent_id: activeAgentId,
+      evaluations,
+    };
   }
 }

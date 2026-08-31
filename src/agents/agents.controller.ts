@@ -11,6 +11,10 @@ import { AgentsService } from './agents.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 import { WebSearchConfigDto } from './dto/web-search-config.dto';
+import {
+  PreviewPromptDto,
+  SimulateSequenceDto,
+} from './dto/agent-simulation.dto';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 
 @Controller()
@@ -20,6 +24,24 @@ export class AgentsController {
   @Get('agents')
   findAll(@CurrentUser() user: { company_id: string }) {
     return this.agentsService.findAll(user.company_id);
+  }
+
+  @Post('clients/:clientId/agents/preview-prompt')
+  previewPrompt(
+    @Param('clientId') clientId: string,
+    @Body() dto: PreviewPromptDto,
+    @CurrentUser() user: { company_id: string },
+  ) {
+    return this.agentsService.previewPrompt(clientId, dto, user.company_id);
+  }
+
+  @Post('clients/:clientId/agents/simulate-sequence')
+  simulateSequence(
+    @Param('clientId') clientId: string,
+    @Body() dto: SimulateSequenceDto,
+    @CurrentUser() user: { company_id: string },
+  ) {
+    return this.agentsService.simulateSequence(clientId, dto, user.company_id);
   }
 
   @Post('clients/:clientId/agents')

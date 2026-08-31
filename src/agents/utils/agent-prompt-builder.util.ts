@@ -1,6 +1,7 @@
 import {
   PromptContentBlock,
   resolveConditionalBlocks,
+  resolveConditionalString,
 } from '../../common/utils/conditional-prompt.util';
 import { resolvePromptTemplateString } from '../../common/utils/prompt-variables.util';
 
@@ -110,7 +111,9 @@ export function buildAgentPromptFromBlocks(
 
   let prompt = agent.system_prompt || '';
   if (prompt) {
-    // Substituições padrão {{key}} e variáveis dinâmicas
+    // 1. Resolve blocos condicionais [SE ...] [SENÃO] [FIM SE]
+    prompt = resolveConditionalString(prompt, mergedState);
+    // 2. Substituições padrão {{key}} e variáveis dinâmicas
     prompt = resolvePromptTemplateString(prompt, mergedState);
   }
 
