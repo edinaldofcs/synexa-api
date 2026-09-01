@@ -34,6 +34,7 @@ import { WebRtcAdapter } from './adapters/webrtc/web-webrtc.adapter';
 import {
   resolveAudioGateConfig,
   buildVoiceSystemPrompt,
+  mergeApiReturnIntoState,
 } from './services/voice-runtime.util';
 
 const MAX_SESSION_STATE_BYTES = 32 * 1024;
@@ -629,13 +630,12 @@ export class VoiceGateway
                     Object.keys(returnedState).length > 0;
                   const hasSessionSaves = Object.keys(sessionSaves).length > 0;
                   if (hasReturnedState || hasSessionSaves) {
-                    session.state = pruneSessionState({
-                      ...session.state,
-                      ...(hasReturnedState
-                        ? { retorno_api: returnedState }
-                        : {}),
-                      ...sessionSaves,
-                    });
+                    session.state = pruneSessionState(
+                      mergeApiReturnIntoState(session.state, {
+                        returnedState,
+                        sessionSaves,
+                      }),
+                    );
                     await flushConversationState();
                     sendDebug(
                       'session',

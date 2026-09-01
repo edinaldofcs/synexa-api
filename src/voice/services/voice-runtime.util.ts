@@ -52,3 +52,32 @@ export function buildVoiceSystemPrompt(
 
   return resolvePromptTemplateString(basePrompt, options.variables);
 }
+
+export interface MergeApiReturnOptions {
+  returnedState: Record<string, unknown>;
+  sessionSaves?: Record<string, unknown>;
+  /** Mantém o bloco retorno_api.* (compat com condições legadas). */
+  keepRetornoApi?: boolean;
+}
+
+/**
+ * Paridade com o canal de texto (api-tool-executor mergeToolResults):
+ * as chaves extraídas do extract_data da API ficam TAMBÉM na raiz do
+ * estado — e não apenas dentro de retorno_api.* — porque as condições de
+ * ativação referenciam as variáveis na raiz (ex.: `valor_original exists`).
+ */
+export function mergeApiReturnIntoState(
+  state: Record<string, unknown>,
+  options: MergeApiReturnOptions,
+): Record<string, unknown> {
+  const { returnedState, sessionSaves = {}, keepRetornoApi = true } = options;
+  const hasReturnedState = Object.keys(returnedState).length > 0;
+  return {
+    ...state,
+    ...(hasReturnedState && keepRetornoApi
+      ? { retorno_api: returnedState }
+      : {}),
+    ...(hasReturnedState ? returnedState : {}),
+    ...sessionSaves,
+  };
+}
