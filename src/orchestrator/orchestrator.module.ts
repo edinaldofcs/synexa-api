@@ -45,6 +45,7 @@ import { FallbackProviderService } from './services/fallback-provider.service';
     OrchestratorService,
     OrchestrationService,
     TestChatService,
+    ApiToolExecutorService,
     ModelPricingService,
     ProviderCircuitBreakerService,
     FallbackProviderService,

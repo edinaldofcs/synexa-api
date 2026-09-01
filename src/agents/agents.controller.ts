@@ -16,10 +16,52 @@ import {
   SimulateSequenceDto,
 } from './dto/agent-simulation.dto';
 import { CurrentUser } from '../common/auth/current-user.decorator';
+import { ApiToolExecutorService } from '../orchestrator/services/api-tool-executor.service';
 
 @Controller()
 export class AgentsController {
-  constructor(private readonly agentsService: AgentsService) {}
+  constructor(
+    private readonly agentsService: AgentsService,
+    private readonly apiToolExecutor: ApiToolExecutorService,
+  ) {}
+
+  /**
+   * Catálogo RESOLVIDO de tools do agente (APIs + nativas + subagentes),
+   * no mesmo formato exibido ao LLM em runtime. Uso: painel de agentes e
+   * telas de desenvolvimento/depuração de tools.
+   */
+  @Get('clients/:clientId/agents/:agentId/tools')
+  async listAgentTools(
+    @Param('clientId') clientId: string,
+    @Param('agentId') agentId: string,
+    @CurrentUser() user: { company_id: string },
+  ) {
+    const agent = await this.agentsService.findOne(agentId, user.company_id);
+    const catalog = await this.apiToolExecutor.loadAgentTools({
+      clientId,
+      agent: {
+        id: agent.id,
+        allowed_tool_names: agent.allowed_tool_names,
+        transitions: agent.transitions,
+      },
+      agentConfig: this.apiToolExecutor.buildAgentConfigFromRecord(agent),
+    });
+    return {
+      agent_id: agent.id,
+      tools: catalog.apiTools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        kind: tool.functionName?.startsWith('subagent_')
+          ? 'subagent'
+          : tool.method === 'NATIVE'
+            ? 'native'
+            : 'api',
+        function_name: tool.functionName,
+        parameters: tool.parameters,
+      })),
+      available_tool_names: catalog.availableTools,
+    };
+  }
 
   @Get('agents')
   findAll(@CurrentUser() user: { company_id: string }) {
