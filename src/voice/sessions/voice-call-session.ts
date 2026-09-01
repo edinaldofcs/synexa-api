@@ -15,7 +15,8 @@ import {
 import {
   buildVoiceSystemPrompt,
   aiSpeaksFirstEnabled,
-  VOICE_GREETING_TURN,
+  buildGreetingTurn,
+  resolveMaxCallDurationSec,
 } from '../services/voice-runtime.util';
 
 export interface VoiceGateRuntimeConfig {
@@ -75,14 +76,24 @@ export class VoiceCallSession {
   private conversationMetadata: Record<string, unknown> = {};
   /** Motivo do encerramento (remoto ou solicitado pela IA) */
   public hangupCause: string | null = null;
-  private aiMessageBuffer: { messageId: string | null; content: string; lastPersist: number } | null = null;
-  private userMessageBuffer: { messageId: string | null; content: string; lastPersist: number } | null = null;
+  private aiMessageBuffer: {
+    messageId: string | null;
+    content: string;
+    lastPersist: number;
+  } | null = null;
+  private userMessageBuffer: {
+    messageId: string | null;
+    content: string;
+    lastPersist: number;
+  } | null = null;
   private sessionSlotReleased = false;
   /** Setup do Gemini concluído (saudação automática aguarda isto) */
   private setupCompleted = false;
   /** Transporte de telefonia iniciado (greeting aguarda isto) */
   private transportStarted = false;
   private greetingSent = false;
+  /** Watchdog do tempo limite da chamada (max_call_duration_sec) */
+  private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
@@ -463,6 +474,7 @@ export class VoiceCallSession {
       await this.telephonyAdapter.start();
       this.transportStarted = true;
       this.maybeSendGreeting();
+      this.armMaxDurationWatchdog();
     } catch (err) {
       this.releaseSessionSlot();
       throw err;
@@ -472,7 +484,8 @@ export class VoiceCallSession {
   /**
    * A IA fala primeiro: quando setup + transporte estiverem prontos, envia
    * um turno de usuário com a instrução de saudação. Respeita a capability
-   * `ai_speaks_first` do agente (default ligado).
+   * `ai_speaks_first` do agente (default ligado) e usa a mensagem inicial
+   * configurada (`greeting_message`) quando existir.
    */
   private maybeSendGreeting(): void {
     if (this.greetingSent) return;
@@ -483,7 +496,54 @@ export class VoiceCallSession {
     this.logger.log(
       `🤖 [VoiceCallSession] IA sauda o cliente primeiro (chamada ${this.id})`,
     );
-    setTimeout(() => this.liveProvider.sendText(VOICE_GREETING_TURN), 0);
+    const turn = buildGreetingTurn(agent, {
+      ...this.sessionState,
+    });
+    setTimeout(() => this.liveProvider.sendText(turn), 0);
+  }
+
+  /**
+   * Agenda o watchdog do tempo limite da chamada
+   * (`transitions.capabilities.max_call_duration_sec` do agente).
+   */
+  private armMaxDurationWatchdog(): void {
+    const limitSec = resolveMaxCallDurationSec(
+      this.config.selectedAgent as unknown,
+    );
+    if (!limitSec) return;
+    this.maxDurationTimer = setTimeout(
+      () => void this.enforceMaxCallDuration(limitSec),
+      limitSec * 1000,
+    );
+  }
+
+  /**
+   * Tempo limite atingido: solicita o hangup do canal (como
+   * `finalizar_chamada`) e encerra a sessão mesmo sem confirmação.
+   */
+  private async enforceMaxCallDuration(limitSec: number): Promise<void> {
+    this.maxDurationTimer = null;
+    if (this.isEnded) return;
+    this.logger.warn(
+      `⏱️ [VoiceCallSession] Tempo limite da chamada ${this.id} atingido (${limitSec}s). Encerrando.`,
+    );
+    this.hangupCause = 'max_call_duration';
+    try {
+      await this.config.onAiHangupRequest?.();
+    } catch (err: any) {
+      this.logger.warn(
+        `Falha ao solicitar hangup do canal (tempo limite): ${err.message}`,
+      );
+    }
+    try {
+      await this.telephonyAdapter.hangup('max_call_duration');
+    } catch (err: any) {
+      this.logger.warn(
+        `Falha no hangup direto do canal (tempo limite): ${err.message}`,
+      );
+    }
+    // Fallback: encerra a sessão de IA mesmo sem confirmação do canal
+    setTimeout(() => void this.end('max_call_duration'), 2500);
   }
 
   private releaseSessionSlot(): void {
@@ -604,6 +664,10 @@ export class VoiceCallSession {
   public async end(reason?: string): Promise<void> {
     if (this.isEnded) return;
     this.isEnded = true;
+    if (this.maxDurationTimer) {
+      clearTimeout(this.maxDurationTimer);
+      this.maxDurationTimer = null;
+    }
     if (reason) this.hangupCause = String(reason);
     this.releaseSessionSlot();
     const channelId = this.telephonyAdapter.metadata.channelId as

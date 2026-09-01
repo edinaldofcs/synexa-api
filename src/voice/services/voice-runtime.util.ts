@@ -109,3 +109,68 @@ export function aiSpeaksFirstEnabled(agent: unknown): boolean {
     (capabilities as Record<string, unknown>).ai_speaks_first === false
   );
 }
+
+/**
+ * Lê um valor de `transitions.capabilities` de forma defensiva (o campo
+ * `transitions` é JsonB livre no banco).
+ */
+function readCapability(agent: unknown, key: string): unknown {
+  const transitions = (agent as any)?.transitions;
+  const capabilities =
+    transitions && typeof transitions === 'object'
+      ? transitions.capabilities
+      : undefined;
+  if (!capabilities || typeof capabilities !== 'object') return undefined;
+  return (capabilities as Record<string, unknown>)[key];
+}
+
+/**
+ * Mensagem inicial configurada por agente
+ * (`transitions.capabilities.greeting_message`). Vazia/ausente => null
+ * (o runtime usa a instrução padrão `VOICE_GREETING_TURN`).
+ */
+export function resolveVoiceGreeting(agent: unknown): string | null {
+  const raw = readCapability(agent, 'greeting_message');
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** Teto duro do watchdog (2 horas) — protege contra valores absurdos. */
+const MAX_CALL_DURATION_HARD_CAP_SEC = 7200;
+/** Abaixo disso o valor é considerado inválido (chamadas < 10s são ruído). */
+const MAX_CALL_DURATION_MIN_SEC = 10;
+
+/**
+ * Tempo limite da chamada em segundos
+ * (`transitions.capabilities.max_call_duration_sec`). Inválido/ausente =>
+ * null (sem limite). Aceita número ou string numérica; faz clamp entre
+ * 10s e 7200s (2h).
+ */
+export function resolveMaxCallDurationSec(agent: unknown): number | null {
+  const raw = readCapability(agent, 'max_call_duration_sec');
+  const num = typeof raw === 'string' ? Number(raw) : raw;
+  if (typeof num !== 'number' || !Number.isFinite(num)) return null;
+  const secs = Math.floor(num);
+  if (secs < MAX_CALL_DURATION_MIN_SEC) return null;
+  return Math.min(secs, MAX_CALL_DURATION_HARD_CAP_SEC);
+}
+
+/**
+ * Turno de usuário enviado quando a IA fala primeiro: usa a mensagem
+ * configurada no agente (com interpolação de variáveis {{chave}}) ou a
+ * instrução padrão de saudação.
+ */
+export function buildGreetingTurn(
+  agent: unknown,
+  variables: Record<string, unknown> = {},
+): string {
+  const configured = resolveVoiceGreeting(agent);
+  if (!configured) return VOICE_GREETING_TURN;
+  if (!Object.keys(variables).length) return configured;
+  try {
+    return resolvePromptTemplateString(configured, variables);
+  } catch {
+    return configured;
+  }
+}

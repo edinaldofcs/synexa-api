@@ -36,7 +36,8 @@ import {
   buildVoiceSystemPrompt,
   mergeApiReturnIntoState,
   aiSpeaksFirstEnabled,
-  VOICE_GREETING_TURN,
+  buildGreetingTurn,
+  resolveMaxCallDurationSec,
 } from './services/voice-runtime.util';
 
 const MAX_SESSION_STATE_BYTES = 32 * 1024;
@@ -59,9 +60,7 @@ function pruneSessionState(
     ([key]) => key.startsWith('system') || key.startsWith('config'),
   );
   const recent = entries
-    .filter(
-      ([key]) => !key.startsWith('system') && !key.startsWith('config'),
-    )
+    .filter(([key]) => !key.startsWith('system') && !key.startsWith('config'))
     .slice(-MAX_SESSION_STATE_KEYS);
   return Object.fromEntries([...preserved, ...recent]);
 }
@@ -107,6 +106,8 @@ export class VoiceGateway
     // Sinaliza que a sessão de voz foi encerrada; evita criar timers/providers
     // quando um 'start' assíncrono retoma depois do close
     let voiceSessionClosed = false;
+    // Watchdog do tempo limite da chamada (max_call_duration_sec)
+    let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Conexão pre-auth sem 'start' dentro da janela é fechada (evita
     // sockets pendentes de identificação acumulando)
@@ -207,6 +208,10 @@ export class VoiceGateway
       if (telemetryTimer) {
         clearInterval(telemetryTimer);
         telemetryTimer = null;
+      }
+      if (maxDurationTimer) {
+        clearTimeout(maxDurationTimer);
+        maxDurationTimer = null;
       }
       sendTelemetry();
       if (statePersistTimer) {
@@ -979,6 +984,36 @@ export class VoiceGateway
                     'success',
                   );
                   sendToClient({ type: 'ready' });
+                  // Tempo limite da chamada (web): encerra a sessão e avisa
+                  // o front (`call_ended`) ao atingir o limite configurado.
+                  const maxDurationSec = resolveMaxCallDurationSec(agent);
+                  if (maxDurationSec) {
+                    if (maxDurationTimer) clearTimeout(maxDurationTimer);
+                    maxDurationTimer = setTimeout(() => {
+                      if (
+                        voiceSessionClosed ||
+                        generation !== session.providerGeneration
+                      ) {
+                        return;
+                      }
+                      sendDebug(
+                        'session',
+                        `⏱️ Tempo limite da chamada atingido (${maxDurationSec}s). Encerrando.`,
+                        undefined,
+                        'warn',
+                      );
+                      sendToClient({
+                        type: 'call_ended',
+                        reason: 'max_call_duration',
+                      });
+                      void closeVoiceSession();
+                      try {
+                        clientWs.close(1000, 'max_call_duration');
+                      } catch {
+                        // socket já fechado
+                      }
+                    }, maxDurationSec * 1000);
+                  }
                   if (handoffText) {
                     setTimeout(() => {
                       if (generation === session.providerGeneration) {
@@ -990,13 +1025,19 @@ export class VoiceGateway
                   } else if (agent && aiSpeaksFirstEnabled(agent)) {
                     // A IA fala primeiro: sauda o cliente imediatamente
                     // após o setup, antes de qualquer áudio do chamador.
+                    // Usa a mensagem inicial configurada no agente quando
+                    // existir (interpolando variáveis da sessão).
+                    const greetingTurn = buildGreetingTurn(
+                      agent,
+                      session.state as Record<string, unknown>,
+                    );
                     setTimeout(() => {
                       if (generation === session.providerGeneration) {
                         sendDebug(
                           'session',
                           '🤖 IA inicia a conversa (saudação automática).',
                         );
-                        provider.sendText(VOICE_GREETING_TURN);
+                        provider.sendText(greetingTurn);
                       }
                     }, 0);
                   }
@@ -1239,7 +1280,8 @@ export class VoiceGateway
       : {};
   }
 
-  private enforcePreAuthConnectionLimit(clientWs: AuthenticatedWebSocket) {    const ip = clientIpOf(clientWs);
+  private enforcePreAuthConnectionLimit(clientWs: AuthenticatedWebSocket) {
+    const ip = clientIpOf(clientWs);
     const max =
       this.configService.get<number>('VOICE_MAX_PREAUTH_PER_IP', 10) || 10;
     const key = `voice:preauth:${ip}`;
