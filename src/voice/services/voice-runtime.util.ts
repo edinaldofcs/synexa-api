@@ -157,9 +157,12 @@ export function resolveMaxCallDurationSec(agent: unknown): number | null {
 }
 
 /**
- * Turno de usuário enviado quando a IA fala primeiro: usa a mensagem
- * configurada no agente (com interpolação de variáveis {{chave}}) ou a
- * instrução padrão de saudação.
+ * Turno de usuário enviado quando a IA fala primeiro.
+ *
+ * Sem mensagem configurada: instrução padrão (persona define a saudação).
+ * Com mensagem configurada: instrução de REPRODUZIR o texto exato — sem
+ * isto, o turno de usuário é interpretado como fala do cliente e a IA
+ * "responde" à mensagem em vez de dizê-la.
  */
 export function buildGreetingTurn(
   agent: unknown,
@@ -167,10 +170,19 @@ export function buildGreetingTurn(
 ): string {
   const configured = resolveVoiceGreeting(agent);
   if (!configured) return VOICE_GREETING_TURN;
-  if (!Object.keys(variables).length) return configured;
-  try {
-    return resolvePromptTemplateString(configured, variables);
-  } catch {
-    return configured;
+  let message = configured;
+  if (Object.keys(variables).length) {
+    try {
+      message = resolvePromptTemplateString(message, variables);
+    } catch {
+      // interpolação falhou: usa o texto original
+    }
   }
+  return (
+    '[EVENTO DO SISTEMA] A chamada acabou de ser conectada e o cliente ainda não disse nada. ' +
+    'Diga EXATAMENTE a seguinte mensagem inicial ao cliente, com a sua voz, ' +
+    'sem acrescentar, remover ou alterar nada: "' +
+    message +
+    '"'
+  );
 }

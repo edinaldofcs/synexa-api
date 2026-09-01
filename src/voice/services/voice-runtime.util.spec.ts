@@ -186,24 +186,23 @@ describe('buildGreetingTurn (turno de saudacao)', () => {
     expect(buildGreetingTurn({ transitions: {} })).toBe(VOICE_GREETING_TURN);
   });
 
-  it('usa a mensagem configurada quando existir', () => {
-    expect(
-      buildGreetingTurn({
-        transitions: { capabilities: { greeting_message: 'Bem-vindo!' } },
-      }),
-    ).toBe('Bem-vindo!');
+  it('usa a mensagem configurada como instrucao de reproducao exata', () => {
+    const turn = buildGreetingTurn({
+      transitions: { capabilities: { greeting_message: 'Bem-vindo!' } },
+    });
+    expect(turn).toContain('Diga EXATAMENTE');
+    expect(turn).toContain('"Bem-vindo!"');
   });
 
   it('interpolada variaveis da sessao na mensagem configurada', () => {
-    expect(
-      buildGreetingTurn(
-        {
-          transitions: {
-            capabilities: { greeting_message: 'Ola {{nome_cliente}}!' },
-          },
+    const turn = buildGreetingTurn(
+      {
+        transitions: {
+          capabilities: { greeting_message: 'Ola {{nome_cliente}}!' },
         },
-        { nome_cliente: 'Joao' },
-      ),
-    ).toBe('Ola Joao!');
+      },
+      { nome_cliente: 'Joao' },
+    );
+    expect(turn).toContain('"Ola Joao!"');
   });
 });
