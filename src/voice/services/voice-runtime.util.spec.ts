@@ -1,4 +1,8 @@
-import { mergeApiReturnIntoState } from './voice-runtime.util';
+import {
+  mergeApiReturnIntoState,
+  aiSpeaksFirstEnabled,
+  VOICE_GREETING_TURN,
+} from './voice-runtime.util';
 
 describe('mergeApiReturnIntoState', () => {
   it('espelha chaves do extract_data na RAIZ do estado (paridade com o texto)', () => {
@@ -52,5 +56,35 @@ describe('mergeApiReturnIntoState', () => {
   it('nao corrompe o estado com returnedState vazio', () => {
     const state = mergeApiReturnIntoState({ x: 1 }, { returnedState: {} });
     expect(state).toEqual({ x: 1 });
+  });
+});
+
+describe('aiSpeaksFirstEnabled (IA fala primeiro)', () => {
+  it('habilitado por padrao (agente sem transitions/capabilities)', () => {
+    expect(aiSpeaksFirstEnabled({ service_step: 'x' })).toBe(true);
+    expect(aiSpeaksFirstEnabled(null)).toBe(true);
+    expect(aiSpeaksFirstEnabled(undefined)).toBe(true);
+  });
+
+  it('desliga explicitamente com ai_speaks_first=false', () => {
+    expect(
+      aiSpeaksFirstEnabled({
+        transitions: { capabilities: { ai_speaks_first: false } },
+      }),
+    ).toBe(false);
+  });
+
+  it('mantem ligado com qualquer outro valor (incluido true)', () => {
+    expect(
+      aiSpeaksFirstEnabled({
+        transitions: { capabilities: { ai_speaks_first: true } },
+      }),
+    ).toBe(true);
+  });
+
+  it('instrucao de greeting existe e orienta saudacao sem inventar dados', () => {
+    expect(VOICE_GREETING_TURN).toContain('EVENTO DO SISTEMA');
+    expect(VOICE_GREETING_TURN).toContain('saudação inicial');
+    expect(VOICE_GREETING_TURN).toContain('Não invente dados');
   });
 });

@@ -12,7 +12,11 @@ import {
   InboundDataMapperService,
   InboundMappingConfig,
 } from '../../common/services/inbound-data-mapper.service';
-import { buildVoiceSystemPrompt } from '../services/voice-runtime.util';
+import {
+  buildVoiceSystemPrompt,
+  aiSpeaksFirstEnabled,
+  VOICE_GREETING_TURN,
+} from '../services/voice-runtime.util';
 
 export interface VoiceGateRuntimeConfig {
   enabled?: boolean;
@@ -74,6 +78,11 @@ export class VoiceCallSession {
   private aiMessageBuffer: { messageId: string | null; content: string; lastPersist: number } | null = null;
   private userMessageBuffer: { messageId: string | null; content: string; lastPersist: number } | null = null;
   private sessionSlotReleased = false;
+  /** Setup do Gemini concluído (saudação automática aguarda isto) */
+  private setupCompleted = false;
+  /** Transporte de telefonia iniciado (greeting aguarda isto) */
+  private transportStarted = false;
+  private greetingSent = false;
 
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
@@ -286,6 +295,8 @@ export class VoiceCallSession {
         this.logger.log(
           `🎙️ [VoiceCallSession] Provedor de IA conectado para chamada ${this.id}`,
         );
+        this.setupCompleted = true;
+        this.maybeSendGreeting();
       },
       onAudio: (base64Audio) => {
         const pcm24k = Buffer.from(base64Audio, 'base64');
@@ -450,10 +461,29 @@ export class VoiceCallSession {
 
     try {
       await this.telephonyAdapter.start();
+      this.transportStarted = true;
+      this.maybeSendGreeting();
     } catch (err) {
       this.releaseSessionSlot();
       throw err;
     }
+  }
+
+  /**
+   * A IA fala primeiro: quando setup + transporte estiverem prontos, envia
+   * um turno de usuário com a instrução de saudação. Respeita a capability
+   * `ai_speaks_first` do agente (default ligado).
+   */
+  private maybeSendGreeting(): void {
+    if (this.greetingSent) return;
+    if (!this.setupCompleted || !this.transportStarted) return;
+    const agent = this.config.selectedAgent as unknown;
+    if (!aiSpeaksFirstEnabled(agent)) return;
+    this.greetingSent = true;
+    this.logger.log(
+      `🤖 [VoiceCallSession] IA sauda o cliente primeiro (chamada ${this.id})`,
+    );
+    setTimeout(() => this.liveProvider.sendText(VOICE_GREETING_TURN), 0);
   }
 
   private releaseSessionSlot(): void {

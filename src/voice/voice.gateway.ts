@@ -35,6 +35,8 @@ import {
   resolveAudioGateConfig,
   buildVoiceSystemPrompt,
   mergeApiReturnIntoState,
+  aiSpeaksFirstEnabled,
+  VOICE_GREETING_TURN,
 } from './services/voice-runtime.util';
 
 const MAX_SESSION_STATE_BYTES = 32 * 1024;
@@ -983,6 +985,18 @@ export class VoiceGateway
                         provider.sendText(
                           `[CONTEXTO DA TRANSFERÊNCIA]\nO usuário disse: ${handoffText}`,
                         );
+                      }
+                    }, 0);
+                  } else if (agent && aiSpeaksFirstEnabled(agent)) {
+                    // A IA fala primeiro: sauda o cliente imediatamente
+                    // após o setup, antes de qualquer áudio do chamador.
+                    setTimeout(() => {
+                      if (generation === session.providerGeneration) {
+                        sendDebug(
+                          'session',
+                          '🤖 IA inicia a conversa (saudação automática).',
+                        );
+                        provider.sendText(VOICE_GREETING_TURN);
                       }
                     }, 0);
                   }

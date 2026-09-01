@@ -81,3 +81,31 @@ export function mergeApiReturnIntoState(
     ...sessionSaves,
   };
 }
+
+/**
+ * Instrução enviada como turno de usuário imediatamente após o setup do
+ * Gemini Live para que a IA cumprimente o cliente ANTES de ouvir qualquer
+ * áudio (a IA fala primeiro). Texto único usado pelos canais web e
+ * telefonia; a persona do agente define o tom da saudação.
+ */
+export const VOICE_GREETING_TURN =
+  '[EVENTO DO SISTEMA] A chamada acabou de ser conectada e o cliente ainda não disse nada. ' +
+  'Faça a saudação inicial agora: cumprimente o cliente de forma breve e natural ' +
+  'conforme a sua persona e pergunte como pode ajudar. Não invente dados do cliente.';
+
+/**
+ * `transitions.capabilities.ai_speaks_first` — default LIGADO (a IA fala
+ * primeiro); desligue no AgentForm para que a IA só fale após o cliente.
+ */
+export function aiSpeaksFirstEnabled(agent: unknown): boolean {
+  const transitions = (agent as any)?.transitions;
+  const capabilities =
+    transitions && typeof transitions === 'object'
+      ? transitions.capabilities
+      : undefined;
+  return !(
+    capabilities &&
+    typeof capabilities === 'object' &&
+    (capabilities as Record<string, unknown>).ai_speaks_first === false
+  );
+}
