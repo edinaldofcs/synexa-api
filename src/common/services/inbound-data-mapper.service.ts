@@ -42,7 +42,7 @@ export class InboundDataMapperService {
 
   /**
    * Mapeia dados brutos de entrada (Discador, CRM, API, Webhook)
-   * para variÃ¡veis padronizadas da sessÃ£o com base nas regras do cliente.
+   * para variáveis padronizadas da sessão com base nas regras do cliente.
    */
   mapInboundData(
     rawData: Record<string, unknown> | null | undefined,
@@ -109,7 +109,7 @@ export class InboundDataMapperService {
         finalValue = rule.default_value;
       }
 
-      // Aplica transformaÃ§Ãµes de tipo e sanitizaÃ§Ã£o
+      // Aplica transformações de tipo e sanitização
       if (
         finalValue !== undefined &&
         finalValue !== null &&
@@ -117,13 +117,13 @@ export class InboundDataMapperService {
       ) {
         finalValue = this.applyTransformation(finalValue, rule.transform);
 
-        // Remove colchetes ou chaves que o usuÃ¡rio possa ter digitado (ex: [[cnpj_cpf]] -> cnpj_cpf)
+        // Remove colchetes ou chaves que o usuário possa ter digitado (ex: [[cnpj_cpf]] -> cnpj_cpf)
         const cleanTarget = rule.target_variable.replace(/[[\]{}]/g, '').trim();
 
         mappedState[cleanTarget] = finalValue;
         mappedState[rule.target_variable] = finalValue;
 
-        // Aliases automÃ¡ticos para garantir interpolaÃ§Ã£o nos prompts
+        // Aliases automáticos para garantir interpolação nos prompts
         if (cleanTarget === 'cnpj_cpf' || cleanTarget === 'cpf') {
           mappedState.cnpj_cpf = finalValue;
           mappedState.cpf = finalValue;
@@ -140,7 +140,7 @@ export class InboundDataMapperService {
       }
     }
 
-    // Preserva campos nÃ£o mapeados se configurado
+    // Preserva campos não mapeados se configurado
     if (preserveUnmapped) {
       for (const [key, value] of Object.entries(rawData)) {
         const cleanKey = key.replace(/[[\]{}]/g, '').trim();
@@ -160,7 +160,7 @@ export class InboundDataMapperService {
   }
 
   /**
-   * Extrai valor do payload bruto com suporte a case-insensitive, normalizaÃ§Ã£o de caracteres e aliases
+   * Extrai valor do payload bruto com suporte a case-insensitive, normalização de caracteres e aliases
    */
   private extractValue(
     obj: Record<string, unknown>,
@@ -193,7 +193,7 @@ export class InboundDataMapperService {
       if (current !== undefined) return current;
     }
 
-    // Busca flexÃ­vel: case-insensitive e ignorando separadores (- e _)
+    // Busca flexível: case-insensitive e ignorando separadores (- e _)
     const normalizedTarget = cleanKey.toLowerCase().replace(/[-_]/g, '');
     for (const [k, v] of Object.entries(obj)) {
       const normalizedK = k.toLowerCase().replace(/[-_]/g, '');
@@ -202,7 +202,7 @@ export class InboundDataMapperService {
       }
     }
 
-    // Aliases semÃ¢nticos para telefonia SIP
+    // Aliases semânticos para telefonia SIP
     if (
       ['xcpf', 'cpf', 'cnpjcpf', 'documento', 'param'].includes(
         normalizedTarget,
@@ -263,7 +263,7 @@ export class InboundDataMapperService {
   }
 
   /**
-   * Aplica sanitizaÃ§Ãµes e transformaÃ§Ãµes nos valores
+   * Aplica sanitizações e transformações nos valores
    */
   applyTransformation(
     value: unknown,
@@ -274,7 +274,7 @@ export class InboundDataMapperService {
 
     switch (transform) {
       case 'cpf_cnpj': {
-        // Remove tudo que nÃ£o for dÃ­gito
+        // Remove tudo que não for dígito
         const digits = strVal.replace(/\D/g, '');
         if (digits.length === 11) {
           // Formata CPF: 000.000.000-00
@@ -290,7 +290,7 @@ export class InboundDataMapperService {
       }
 
       case 'phone': {
-        // Remove caracteres nÃ£o numÃ©ricos
+        // Remove caracteres não numéricos
         const digits = strVal.replace(/\D/g, '');
         if (digits.length === 11) {
           // Celular BR: (XX) 9XXXX-XXXX
@@ -308,7 +308,7 @@ export class InboundDataMapperService {
           num = value;
         } else {
           let cleaned = strVal.replace(/[R$\s]/gi, '');
-          // Identifica se vÃ­rgula Ã© decimal (ex: 1.500,50 ou 250,00)
+          // Identifica se vírgula é decimal (ex: 1.500,50 ou 250,00)
           if (
             cleaned.includes(',') &&
             (!cleaned.includes('.') ||
@@ -316,7 +316,7 @@ export class InboundDataMapperService {
           ) {
             cleaned = cleaned.replace(/\./g, '').replace(',', '.');
           } else if (cleaned.includes(',') && cleaned.includes('.')) {
-            // Formato US com vÃ­rgula de milhar: 1,500.50
+            // Formato US com vírgula de milhar: 1,500.50
             cleaned = cleaned.replace(/,/g, '');
           }
           num = parseFloat(cleaned);
@@ -354,7 +354,7 @@ export class InboundDataMapperService {
         ) {
           return true;
         }
-        if (['false', '0', 'nao', 'nÃ£o', 'n', 'no', 'falso'].includes(lower)) {
+        if (['false', '0', 'nao', 'não', 'n', 'no', 'falso'].includes(lower)) {
           return false;
         }
         return Boolean(value);
