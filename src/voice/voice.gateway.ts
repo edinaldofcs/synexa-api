@@ -546,6 +546,32 @@ export class VoiceGateway
                   arguments: args,
                 });
 
+                // Encerramento da chamada solicitado pela IA (canal web):
+                // responde a tool call e encerra a sessão graciosamente.
+                if (call.name === 'finalizar_chamada') {
+                  sendDebug(
+                    'session',
+                    '📞 IA encerrou a chamada (finalizar_chamada).',
+                    undefined,
+                    'success',
+                  );
+                  sendToClient({ type: 'call_ended', reason: 'ai_requested' });
+                  responses.push({
+                    id: call.id,
+                    name: call.name,
+                    response: { ok: true, message: 'Chamada encerrada.' },
+                  });
+                  responseProvider.sendToolResponse(responses);
+                  setTimeout(() => {
+                    try {
+                      clientWs.close(1000, 'AI requested hangup');
+                    } catch {
+                      // socket já fechado
+                    }
+                  }, 300);
+                  return;
+                }
+
                 if (
                   [
                     'validate_variable_part',
@@ -773,9 +799,36 @@ export class VoiceGateway
                 parameters,
               }));
 
-              // Injeta as ferramentas nativas (validação, gravação de variáveis e cálculos financeiros)
-              const nativeToolDecls = this.nativeToolsService.getDeclarations();
+              // Injeta as ferramentas nativas respeitando as capabilities
+              // configuradas no agente (transitions.capabilities) — paridade
+              // com o canal de texto. `finalizar_chamada` é sempre declarada
+              // com agente persistido: o encerramento é controle de canal.
+              const capabilities = this.asRecordSafe(
+                (agent as any)?.transitions?.capabilities,
+              );
+              const nativeToolDecls = this.nativeToolsService
+                .getDeclarations()
+                .filter((decl) => {
+                  if (decl.name === 'validate_variable_part') {
+                    return capabilities.validate_variables !== false;
+                  }
+                  if (decl.name === 'set_session_variable') {
+                    return capabilities.set_variables !== false;
+                  }
+                  if (decl.name === 'calculate_financial') {
+                    return capabilities.financial_calculator !== false;
+                  }
+                  return true;
+                });
               voiceToolDeclarations.push(...nativeToolDecls);
+              if (agent) {
+                voiceToolDeclarations.push({
+                  name: 'finalizar_chamada',
+                  description:
+                    'Encerra a chamada/atendimento atual de forma educada. Use apenas quando a conversa estiver concluída e não houver mais nada a tratar.',
+                  parameters: { type: 'OBJECT', properties: {} },
+                });
+              }
 
               const agentName = agent
                 ? String(agent.service_step || agent.id)
@@ -1165,8 +1218,13 @@ export class VoiceGateway
    * Teto de conexoes pre-auth por IP (Redis INCR com janela de 60s): sem
    * este limite, sockets sem identificacao acumulam sessoes pendentes.
    */
-  private enforcePreAuthConnectionLimit(clientWs: AuthenticatedWebSocket) {
-    const ip = clientIpOf(clientWs);
+  private asRecordSafe(value: unknown): Record<string, any> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, any>)
+      : {};
+  }
+
+  private enforcePreAuthConnectionLimit(clientWs: AuthenticatedWebSocket) {    const ip = clientIpOf(clientWs);
     const max =
       this.configService.get<number>('VOICE_MAX_PREAUTH_PER_IP', 10) || 10;
     const key = `voice:preauth:${ip}`;
