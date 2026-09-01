@@ -108,6 +108,11 @@ export class VoiceGateway
     let voiceSessionClosed = false;
     // Watchdog do tempo limite da chamada (max_call_duration_sec)
     let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
+    // Turnos de entrada (handoff/saudação) e watchdog pertencem à PRIMEIRA
+    // conexão de provider: transições de agente não reenviam a saudação nem
+    // reiniciam o cronômetro (o limite conta o tempo total da ligação).
+    let introTurnSent = false;
+    let maxDurationArmed = false;
 
     // Conexão pre-auth sem 'start' dentro da janela é fechada (evita
     // sockets pendentes de identificação acumulando)
@@ -984,62 +989,72 @@ export class VoiceGateway
                     'success',
                   );
                   sendToClient({ type: 'ready' });
-                  // Tempo limite da chamada (web): encerra a sessão e avisa
-                  // o front (`call_ended`) ao atingir o limite configurado.
-                  const maxDurationSec = resolveMaxCallDurationSec(agent);
-                  if (maxDurationSec) {
-                    if (maxDurationTimer) clearTimeout(maxDurationTimer);
-                    maxDurationTimer = setTimeout(() => {
-                      if (
-                        voiceSessionClosed ||
-                        generation !== session.providerGeneration
-                      ) {
-                        return;
-                      }
-                      sendDebug(
-                        'session',
-                        `⏱️ Tempo limite da chamada atingido (${maxDurationSec}s). Encerrando.`,
-                        undefined,
-                        'warn',
-                      );
-                      sendToClient({
-                        type: 'call_ended',
-                        reason: 'max_call_duration',
-                      });
-                      void closeVoiceSession();
-                      try {
-                        clientWs.close(1000, 'max_call_duration');
-                      } catch {
-                        // socket já fechado
-                      }
-                    }, maxDurationSec * 1000);
-                  }
-                  if (handoffText) {
-                    setTimeout(() => {
-                      if (generation === session.providerGeneration) {
-                        provider.sendText(
-                          `[CONTEXTO DA TRANSFERÊNCIA]\nO usuário disse: ${handoffText}`,
-                        );
-                      }
-                    }, 0);
-                  } else if (agent && aiSpeaksFirstEnabled(agent)) {
-                    // A IA fala primeiro: sauda o cliente imediatamente
-                    // após o setup, antes de qualquer áudio do chamador.
-                    // Usa a mensagem inicial configurada no agente quando
-                    // existir (interpolando variáveis da sessão).
-                    const greetingTurn = buildGreetingTurn(
-                      agent,
-                      session.state as Record<string, unknown>,
-                    );
-                    setTimeout(() => {
-                      if (generation === session.providerGeneration) {
+                  // Tempo limite da chamada (web): conta o TEMPO TOTAL da
+                  // ligação — armado 1x no primeiro setup (agente inicial);
+                  // transições de agente NÃO reiniciam o cronômetro.
+                  if (!maxDurationArmed) {
+                    const maxDurationSec = resolveMaxCallDurationSec(agent);
+                    if (maxDurationSec) {
+                      maxDurationArmed = true;
+                      maxDurationTimer = setTimeout(() => {
+                        if (
+                          voiceSessionClosed ||
+                          generation !== session.providerGeneration
+                        ) {
+                          return;
+                        }
                         sendDebug(
                           'session',
-                          '🤖 IA inicia a conversa (saudação automática).',
+                          `⏱️ Tempo limite da chamada atingido (${maxDurationSec}s). Encerrando.`,
+                          undefined,
+                          'warn',
                         );
-                        provider.sendText(greetingTurn);
-                      }
-                    }, 0);
+                        sendToClient({
+                          type: 'call_ended',
+                          reason: 'max_call_duration',
+                        });
+                        void closeVoiceSession();
+                        try {
+                          clientWs.close(1000, 'max_call_duration');
+                        } catch {
+                          // socket já fechado
+                        }
+                      }, maxDurationSec * 1000);
+                    }
+                  }
+                  // Turnos de entrada (contexto de handoff / saudação)
+                  // pertencem ao PRIMEIRO agente da chamada: transições de
+                  // agente não reenviam a mensagem inicial.
+                  if (!introTurnSent) {
+                    if (handoffText) {
+                      introTurnSent = true;
+                      setTimeout(() => {
+                        if (generation === session.providerGeneration) {
+                          provider.sendText(
+                            `[CONTEXTO DA TRANSFERÊNCIA]\nO usuário disse: ${handoffText}`,
+                          );
+                        }
+                      }, 0);
+                    } else if (agent && aiSpeaksFirstEnabled(agent)) {
+                      // A IA fala primeiro: sauda o cliente imediatamente
+                      // após o setup, antes de qualquer áudio do chamador.
+                      // Usa a mensagem inicial configurada no agente quando
+                      // existir (interpolando variáveis da sessão).
+                      introTurnSent = true;
+                      const greetingTurn = buildGreetingTurn(
+                        agent,
+                        session.state as Record<string, unknown>,
+                      );
+                      setTimeout(() => {
+                        if (generation === session.providerGeneration) {
+                          sendDebug(
+                            'session',
+                            '🤖 IA inicia a conversa (saudação automática).',
+                          );
+                          provider.sendText(greetingTurn);
+                        }
+                      }, 0);
+                    }
                   }
                 },
                 onAudio: (base64Audio) => {
