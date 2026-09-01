@@ -49,14 +49,16 @@ export function buildAgentPromptFromBlocks(
   } else if (mergedState.nome_agente && !mergedState.agent_name) {
     mergedState.agent_name = mergedState.nome_agente;
   }
-  if (mergedState.company_name && !mergedState.nome_cliente) {
-    mergedState.nome_cliente = mergedState.company_name;
-  } else if (mergedState.nome_cliente && !mergedState.company_name) {
-    mergedState.company_name = mergedState.nome_cliente;
+  // nome_empresa = nome da empresa/tenant (company_name); NUNCA o nome da
+  // pessoa que está na linha
+  if (mergedState.company_name && !mergedState.nome_empresa) {
+    mergedState.nome_empresa = mergedState.company_name;
   }
   if (mergedState.company_name && !mergedState.empresa) {
     mergedState.empresa = mergedState.company_name;
   }
+  // nome_cliente = nome da PESSOA na linha (vem de caller_name, mapeamento
+  // inbound ou set_session_variable) — não tem relação com company_name
 
   if (blocks && typeof blocks === 'object') {
     const parts = STRUCTURED_SECTIONS.map(({ key, label }) => {

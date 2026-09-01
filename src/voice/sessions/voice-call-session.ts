@@ -155,7 +155,11 @@ export class VoiceCallSession {
       channel_id: this.telephonyAdapter.metadata.channelId,
       nome_agente: fallbackAgentName,
       agent_name: fallbackAgentName,
-      nome_cliente: fallbackCompanyName,
+      // nome_cliente = nome da PESSOA na linha (caller_name, ou sobrescrito
+      // pelo mapeamento inbound/CRM); NUNCA o nome da empresa/tenant
+      nome_cliente: this.telephonyAdapter.metadata.callerName || '',
+      // nome_empresa/empresa/company_name = empresa (tenant)
+      nome_empresa: fallbackCompanyName,
       company_name: fallbackCompanyName,
       empresa: fallbackCompanyName,
     };
@@ -179,7 +183,10 @@ export class VoiceCallSession {
         ...contextVariables,
         nome_agente: contextVariables.nome_agente || fallbackAgentName,
         agent_name: contextVariables.agent_name || fallbackAgentName,
-        nome_cliente: contextVariables.nome_cliente || fallbackCompanyName,
+        // nome da pessoa na linha: sem valor => vazio (não vaza o nome da
+        // empresa); o mapeamento inbound pode preencher
+        nome_cliente: contextVariables.nome_cliente || '',
+        nome_empresa: fallbackCompanyName,
         company_name: fallbackCompanyName,
         empresa: fallbackCompanyName,
       },

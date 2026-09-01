@@ -963,6 +963,9 @@ export class VoiceGateway
                   'Você é um assistente de voz inteligente e natural do Synexa. Responda com clareza e empatia.',
                 variables: {
                   nome_agente: clientDb?.agent_name || '',
+                  // nome_empresa = empresa/tenant; nome_cliente (pessoa na
+                  // linha) só existe se estiver no estado da sessão
+                  nome_empresa: clientDb?.company_name || '',
                   ...session.state,
                 },
               });
