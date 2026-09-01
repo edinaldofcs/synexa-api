@@ -799,10 +799,11 @@ export class VoiceGateway
                 parameters,
               }));
 
-              // Injeta as ferramentas nativas respeitando as capabilities
-              // configuradas no agente (transitions.capabilities) — paridade
-              // com o canal de texto. `finalizar_chamada` é sempre declarada
-              // com agente persistido: o encerramento é controle de canal.
+              // Injeta as ferramentas nativas SOMENTE quando explicitamente
+              // habilitadas no agente (transitions.capabilities.<key> === true
+              // via toggles do AgentForm) — paridade com o canal de texto e
+              // opt-in real. `finalizar_chamada` é sempre declarada com
+              // agente persistido: o encerramento é controle de canal.
               const capabilities = this.asRecordSafe(
                 (agent as any)?.transitions?.capabilities,
               );
@@ -810,13 +811,13 @@ export class VoiceGateway
                 .getDeclarations()
                 .filter((decl) => {
                   if (decl.name === 'validate_variable_part') {
-                    return capabilities.validate_variables !== false;
+                    return capabilities.validate_variables === true;
                   }
                   if (decl.name === 'set_session_variable') {
-                    return capabilities.set_variables !== false;
+                    return capabilities.set_variables === true;
                   }
                   if (decl.name === 'calculate_financial') {
-                    return capabilities.financial_calculator !== false;
+                    return capabilities.financial_calculator === true;
                   }
                   return true;
                 });
