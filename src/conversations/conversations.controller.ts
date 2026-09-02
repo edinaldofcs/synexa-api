@@ -7,7 +7,9 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ConversationsService } from './conversations.service';
 import type { HandoffRequestDto } from './dto/find-or-create.dto';
 import { CurrentUser } from '../common/auth/current-user.decorator';
@@ -189,5 +191,15 @@ export class ConversationsController {
       ctx.companyId,
       format || 'txt',
     );
+  }
+
+  @Get(':id/recording')
+  getRecording(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+    @Res() res: Response,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.streamRecording(id, ctx.companyId, res);
   }
 }

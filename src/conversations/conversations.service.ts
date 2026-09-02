@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import * as fs from 'fs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -983,6 +984,39 @@ export class ConversationsService {
       filename,
       content: text,
     };
+  }
+
+  async streamRecording(
+    conversationId: string,
+    companyId: string,
+    res: any,
+  ): Promise<void> {
+    const conv = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, company_id: companyId },
+    });
+
+    if (!conv) {
+      throw new NotFoundException('Conversa não encontrada');
+    }
+
+    const possiblePaths = [
+      `/app/uploads/recordings/${conversationId}.wav`,
+      `/var/spool/asterisk/monitor/synexa-${conversationId}.wav`,
+      `/tmp/recordings/${conversationId}.wav`,
+    ];
+
+    for (const filePath of possiblePaths) {
+      if (fs.existsSync(filePath)) {
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Accept-Ranges', 'bytes');
+        fs.createReadStream(filePath).pipe(res);
+        return;
+      }
+    }
+
+    throw new NotFoundException(
+      'Arquivo de gravação não encontrado para esta chamada',
+    );
   }
 
   private inferMimeType(partType: string) {
