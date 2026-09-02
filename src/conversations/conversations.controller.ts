@@ -158,4 +158,36 @@ export class ConversationsController {
       ctx.companyId,
     );
   }
+
+  @Post(':id/summary')
+  generateSummary(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.generateSummary(id, ctx.companyId);
+  }
+
+  @Post(':id/smart-reply')
+  generateSmartReply(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.generateSmartReply(id, ctx.companyId);
+  }
+
+  @Get(':id/export')
+  export(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+    @Query('format') format?: 'txt' | 'json',
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.exportConversation(
+      id,
+      ctx.companyId,
+      format || 'txt',
+    );
+  }
 }

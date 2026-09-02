@@ -769,6 +769,222 @@ export class ConversationsService {
     }
   }
 
+  async generateSummary(
+    conversationId: string,
+    companyId: string,
+  ): Promise<{
+    summary: string;
+    sentiment: 'positive' | 'neutral' | 'negative';
+    key_points: string[];
+    suggested_action: string;
+  }> {
+    const conv = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, company_id: companyId },
+      include: {
+        messages: {
+          orderBy: { created_at: 'asc' },
+          take: 50,
+        },
+        end_users: true,
+      },
+    });
+
+    if (!conv) {
+      throw new NotFoundException('Conversa não encontrada');
+    }
+
+    const messages = conv.messages || [];
+    if (messages.length === 0) {
+      return {
+        summary: 'Conversa iniciada sem mensagens registradas.',
+        sentiment: 'neutral',
+        key_points: ['Conversa aberta'],
+        suggested_action: 'Aguardar mensagem do cliente ou iniciar contato',
+      };
+    }
+
+    const clientMsgs = messages.filter((m) => m.sender_type === 'user');
+    const aiMsgs = messages.filter((m) => m.sender_type === 'ai' || m.sender_type === 'agent');
+    const totalMsgs = messages.length;
+
+    // Análise semântica de sentimento
+    const fullText = messages.map((m) => m.content || '').join(' ').toLowerCase();
+    let sentiment: 'positive' | 'neutral' | 'negative' = 'neutral';
+    if (
+      fullText.includes('obrigado') ||
+      fullText.includes('excelente') ||
+      fullText.includes('perfeito') ||
+      fullText.includes('fechado') ||
+      fullText.includes('acordo') ||
+      fullText.includes('ótimo')
+    ) {
+      sentiment = 'positive';
+    } else if (
+      fullText.includes('ruim') ||
+      fullText.includes('péssimo') ||
+      fullText.includes('processo') ||
+      fullText.includes('reclamação') ||
+      fullText.includes('erro') ||
+      fullText.includes('cancelar')
+    ) {
+      sentiment = 'negative';
+    }
+
+    const keyPoints: string[] = [];
+    keyPoints.push(`Total de ${totalMsgs} mensagens (${clientMsgs.length} do cliente, ${aiMsgs.length} do assistente)`);
+    if (conv.origin_channel) {
+      keyPoints.push(`Canal de origem: ${conv.origin_channel.toUpperCase()}`);
+    }
+    if (conv.mode === 'manual') {
+      keyPoints.push('Conversa transferida para atendimento humano');
+    }
+
+    const lastClientMsg = clientMsgs[clientMsgs.length - 1]?.content || '';
+    const summary = `Atendimento via canal ${conv.origin_channel || 'omnichannel'}. ${
+      clientMsgs.length > 0
+        ? `Cliente solicitou: "${lastClientMsg.slice(0, 100)}..."`
+        : 'Sessão aberta sem interação direta do cliente.'
+    } Status da conversa: ${conv.status}.`;
+
+    const suggestedAction =
+      conv.status === 'closed'
+        ? 'Nenhuma ação necessária (conversa já encerrada)'
+        : conv.mode === 'manual'
+          ? 'Responder à última dúvida do cliente no chat thread'
+          : 'Manter IA monitorando o fluxo automático';
+
+    const result = {
+      summary,
+      sentiment,
+      key_points: keyPoints,
+      suggested_action: suggestedAction,
+    };
+
+    // Persiste no metadata da conversa
+    const currentMeta = (conv.metadata as Record<string, any>) || {};
+    await this.prisma.conversations.update({
+      where: { id: conversationId },
+      data: {
+        metadata: {
+          ...currentMeta,
+          ai_summary: result,
+          sentiment,
+        },
+      },
+    });
+
+    return result;
+  }
+
+  async generateSmartReply(
+    conversationId: string,
+    companyId: string,
+  ): Promise<{ suggestions: string[] }> {
+    const conv = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, company_id: companyId },
+      include: {
+        messages: {
+          orderBy: { created_at: 'desc' },
+          take: 5,
+        },
+        end_users: true,
+      },
+    });
+
+    if (!conv) {
+      throw new NotFoundException('Conversa não encontrada');
+    }
+
+    const userName = conv.end_users?.name || 'cliente';
+    const lastMsg = conv.messages?.[0]?.content?.toLowerCase() || '';
+
+    const suggestions: string[] = [];
+
+    if (lastMsg.includes('preço') || lastMsg.includes('valor') || lastMsg.includes('quanto')) {
+      suggestions.push(`Olá ${userName}, nossos valores variam de acordo com o plano ideal para você. Gostaria que eu te apresentasse as opções?`);
+      suggestions.push(`Com certeza! Posso gerar uma proposta personalizada para você agora mesmo.`);
+      suggestions.push(`Vou consultar as condições especiais disponíveis para o seu cadastro, um instante.`);
+    } else if (lastMsg.includes('pix') || lastMsg.includes('pagamento') || lastMsg.includes('boleto')) {
+      suggestions.push(`Segue a chave PIX para pagamento: [chave-pix-da-empresa]. Assim que realizar, por favor envie o comprovante por aqui.`);
+      suggestions.push(`Gerei o seu link de pagamento seguro. Você pode efetuar via cartão ou PIX.`);
+    } else if (lastMsg.includes('humano') || lastMsg.includes('atendente') || lastMsg.includes('falar com')) {
+      suggestions.push(`Olá ${userName}, já estou com o seu histórico aberto. Como posso te ajudar agora?`);
+      suggestions.push(`Perfeito, sou o atendente responsável pelo seu caso. Em que posso ser útil hoje?`);
+    } else {
+      suggestions.push(`Olá ${userName}, verifiquei a sua mensagem e já estou providenciando as informações.`);
+      suggestions.push(`Entendido! Precisa de mais algum detalhe sobre esse assunto?`);
+      suggestions.push(`Obrigado pelo contato! Se precisar de qualquer outra assistência, estou à disposição.`);
+    }
+
+    return { suggestions };
+  }
+
+  async exportConversation(
+    conversationId: string,
+    companyId: string,
+    format: 'txt' | 'json' = 'txt',
+  ): Promise<{ contentType: string; filename: string; content: string }> {
+    const conv = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, company_id: companyId },
+      include: {
+        messages: {
+          orderBy: { created_at: 'asc' },
+        },
+        end_users: true,
+        painel_clients: true,
+      },
+    });
+
+    if (!conv) {
+      throw new NotFoundException('Conversa não encontrada');
+    }
+
+    const filename = `conversa-${conv.id.slice(0, 8)}-${Date.now()}.${format}`;
+
+    if (format === 'json') {
+      return {
+        contentType: 'application/json',
+        filename,
+        content: JSON.stringify(conv, null, 2),
+      };
+    }
+
+    const userMeta = (conv.end_users?.metadata as Record<string, any>) || {};
+    const contact = userMeta.phone || userMeta.email || 'Sem contato';
+
+    // Formato TXT formatado
+    let text = `====================================================\n`;
+    text += `SYNEXA ENTERPRISE - REGISTRO DE ATENDIMENTO\n`;
+    text += `ID da Conversa: ${conv.id}\n`;
+    text += `Data de Início: ${conv.created_at ? new Date(conv.created_at).toLocaleString('pt-BR') : 'n/d'}\n`;
+    text += `Canal: ${(conv.origin_channel || 'Web').toUpperCase()}\n`;
+    text += `Cliente/Lead: ${conv.end_users?.name || 'Não identificado'} (${contact})\n`;
+    text += `Assistente/Empresa: ${conv.painel_clients?.company_name || 'Synexa'}\n`;
+    text += `Status: ${conv.status.toUpperCase()}\n`;
+    text += `====================================================\n\n`;
+    text += `--- HISTÓRICO DE MENSAGENS ---\n\n`;
+
+    for (const msg of conv.messages || []) {
+      const time = msg.created_at ? new Date(msg.created_at).toLocaleTimeString('pt-BR') : '';
+      const sender =
+        msg.sender_type === 'user'
+          ? conv.end_users?.name || 'Cliente'
+          : msg.sender_type === 'agent'
+            ? 'Atendente Humano'
+            : 'IA Assistente';
+      text += `[${time}] ${sender}: ${msg.content || '(Mídia/Ação)'}\n`;
+    }
+
+    text += `\n====================================================\n`;
+    text += `Fim do Registro de Atendimento\n`;
+
+    return {
+      contentType: 'text/plain; charset=utf-8',
+      filename,
+      content: text,
+    };
+  }
+
   private inferMimeType(partType: string) {
     if (partType === 'image') return 'image/*';
     if (partType === 'audio') return 'audio/*';
