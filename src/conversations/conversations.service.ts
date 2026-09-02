@@ -999,24 +999,51 @@ export class ConversationsService {
       throw new NotFoundException('Conversa não encontrada');
     }
 
+    const rawMeta = (conv.metadata as Record<string, any>) || {};
+    const callId = rawMeta.call_id || rawMeta.callId;
+    const channelId = rawMeta.channel_id || rawMeta.channelId;
+
     const possiblePaths = [
       `/app/uploads/recordings/${conversationId}.wav`,
+      `/app/uploads/recordings/synexa-${conversationId}.wav`,
       `/var/spool/asterisk/monitor/synexa-${conversationId}.wav`,
       `/tmp/recordings/${conversationId}.wav`,
     ];
 
+    if (callId) {
+      possiblePaths.push(
+        `/app/uploads/recordings/${callId}.wav`,
+        `/app/uploads/recordings/synexa-${callId}.wav`,
+        `/var/spool/asterisk/monitor/synexa-${callId}.wav`,
+      );
+    }
+    if (channelId) {
+      possiblePaths.push(
+        `/app/uploads/recordings/${channelId}.wav`,
+        `/app/uploads/recordings/synexa-${channelId}.wav`,
+        `/var/spool/asterisk/monitor/synexa-${channelId}.wav`,
+      );
+    }
+
+    let foundPath: string | null = null;
     for (const filePath of possiblePaths) {
       if (fs.existsSync(filePath)) {
-        res.setHeader('Content-Type', 'audio/wav');
-        res.setHeader('Accept-Ranges', 'bytes');
-        fs.createReadStream(filePath).pipe(res);
-        return;
+        foundPath = filePath;
+        break;
       }
     }
 
-    throw new NotFoundException(
-      'Arquivo de gravação não encontrado para esta chamada',
-    );
+    if (!foundPath) {
+      throw new NotFoundException(
+        'Arquivo de gravação não encontrado para esta chamada',
+      );
+    }
+
+    const stat = fs.statSync(foundPath);
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Accept-Ranges', 'bytes');
+    fs.createReadStream(foundPath).pipe(res);
   }
 
   private inferMimeType(partType: string) {
