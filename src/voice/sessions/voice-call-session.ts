@@ -147,17 +147,32 @@ export class VoiceCallSession {
       'Maria';
     const fallbackCompanyName = clientCompanyName || 'Cliente';
 
+    // Nome da PESSOA na linha: prioridade para o caller_name filtrado que
+    // o servidor de telefonia já normalizou (ex.: descarta o display name
+    // padrão do softphone "microsip"); por último o caller_name cru.
+    const adapterCustomVars = (this.telephonyAdapter.metadata.customVariables ||
+      {}) as Record<string, unknown>;
+    const rawCallerName =
+      (adapterCustomVars.caller_name as string) ||
+      this.telephonyAdapter.metadata.callerName ||
+      '';
+    const callerNameClean = /^(microsip|unknown|anonymous|desconhecido)$/i.test(
+      rawCallerName.trim(),
+    )
+      ? ''
+      : rawCallerName.trim();
+
     const rawContextVariables: Record<string, any> = {
-      ...(this.telephonyAdapter.metadata.customVariables || {}),
+      ...adapterCustomVars,
       caller_number: this.telephonyAdapter.metadata.callerNumber,
-      caller_name: this.telephonyAdapter.metadata.callerName,
+      caller_name: callerNameClean,
       did_number: this.telephonyAdapter.metadata.didNumber,
       channel_id: this.telephonyAdapter.metadata.channelId,
       nome_agente: fallbackAgentName,
       agent_name: fallbackAgentName,
-      // nome_cliente = nome da PESSOA na linha (caller_name, ou sobrescrito
-      // pelo mapeamento inbound/CRM); NUNCA o nome da empresa/tenant
-      nome_cliente: this.telephonyAdapter.metadata.callerName || '',
+      // nome_cliente = nome da PESSOA na linha (caller_name limpo, ou
+      // sobrescrito pelo mapeamento inbound/CRM); NUNCA o nome da empresa
+      nome_cliente: callerNameClean,
       // nome_empresa/empresa/company_name = empresa (tenant)
       nome_empresa: fallbackCompanyName,
       company_name: fallbackCompanyName,
