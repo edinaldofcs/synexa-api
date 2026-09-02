@@ -305,6 +305,15 @@ export class VoiceCallSession {
       });
     }
 
+    // Dedup por nome: declarações repetidas (ex.: subagents com o mesmo
+    // nome cadastrado) fazem o Gemini rejeitar a conexão inteira (1007)
+    const seenToolNames = new Set<string>();
+    toolsDeclarations = toolsDeclarations.filter((decl) => {
+      if (!decl?.name || seenToolNames.has(decl.name)) return false;
+      seenToolNames.add(decl.name);
+      return true;
+    });
+
     // 5. Configura o Audio Gate (VAD / Supressão de Ruído)
     this.gateSession = this.audioGateService.createSession({
       enabled: this.config.gateConfig?.enabled ?? true,

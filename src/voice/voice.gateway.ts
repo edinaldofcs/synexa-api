@@ -842,6 +842,26 @@ export class VoiceGateway
                   parameters: { type: 'OBJECT', properties: {} },
                 });
               }
+              // Dedup por nome: declarações repetidas (ex.: subagents com o
+              // mesmo nome cadastrado) fazem o Gemini rejeitar a conexão
+              // inteira (1007 Duplicate function declaration)
+              const seenToolNames = new Set<string>();
+              const uniqueToolDeclarations = voiceToolDeclarations.filter(
+                (decl) => {
+                  if (!decl?.name || seenToolNames.has(decl.name)) return false;
+                  seenToolNames.add(decl.name);
+                  return true;
+                },
+              );
+              if (
+                uniqueToolDeclarations.length !== voiceToolDeclarations.length
+              ) {
+                this.logger.warn(
+                  `[VoiceGateway] ${voiceToolDeclarations.length - uniqueToolDeclarations.length} tool declarations duplicadas removidas (agente ${agent?.id})`,
+                );
+              }
+              voiceToolDeclarations.length = 0;
+              voiceToolDeclarations.push(...uniqueToolDeclarations);
 
               const agentName = agent
                 ? String(agent.service_step || agent.id)
