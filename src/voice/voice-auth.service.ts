@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SessionService } from '../common/auth/session.service';
+import { isUuid } from '../common/utils/uuid.helper';
 
 export interface VoiceAuthenticatedUser {
   id: string;
@@ -30,16 +31,34 @@ export class VoiceAuthService {
     requestedClientId?: string,
   ): Promise<string | undefined> {
     if (requestedClientId) {
-      const client = await this.prisma.painel_clients.findFirst({
-        where: { id: requestedClientId, company_id: companyId },
+      if (isUuid(requestedClientId)) {
+        const client = await this.prisma.painel_clients.findFirst({
+          where: { id: requestedClientId, company_id: companyId },
+          select: { id: true },
+        });
+
+        if (client) {
+          return client.id;
+        }
+      }
+
+      // Se o requestedClientId não é UUID ou não foi achado por ID, tenta buscar por nome na mesma empresa
+      const clientByName = await this.prisma.painel_clients.findFirst({
+        where: {
+          company_id: companyId,
+          OR: [
+            { agent_name: { equals: requestedClientId, mode: 'insensitive' } },
+            { company_name: { equals: requestedClientId, mode: 'insensitive' } },
+          ],
+        },
         select: { id: true },
       });
 
-      if (!client) {
-        throw new UnauthorizedException('Cliente de voz não autorizado');
+      if (clientByName) {
+        return clientByName.id;
       }
 
-      return client.id;
+      throw new UnauthorizedException('Cliente de voz não autorizado');
     }
 
     const defaultClient = await this.prisma.painel_clients.findFirst({

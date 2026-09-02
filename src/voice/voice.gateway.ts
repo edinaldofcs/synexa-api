@@ -23,6 +23,7 @@ import {
 import { AnalyticsService } from '../analytics/analytics.service';
 import { NativeToolsService } from '../common/services/native-tools.service';
 import { getSessionId } from '../common/auth/auth-cookie';
+import { isUuid } from '../common/utils/uuid.helper';
 import type { AuthenticatedWebSocket } from '../common/ws/cookie-ws.adapter';
 import {
   VoiceClientSession,
@@ -289,12 +290,21 @@ export class VoiceGateway
                   : undefined;
 
             if (requestedAgentId && session.clientId) {
-              selectedAgent = await this.prisma.painel_agents.findFirst({
-                where: {
-                  id: requestedAgentId,
-                  client_id: session.clientId,
-                },
-              });
+              if (isUuid(requestedAgentId)) {
+                selectedAgent = await this.prisma.painel_agents.findFirst({
+                  where: {
+                    id: requestedAgentId,
+                    client_id: session.clientId,
+                  },
+                });
+              } else {
+                selectedAgent = await this.prisma.painel_agents.findFirst({
+                  where: {
+                    client_id: session.clientId,
+                    service_step: { equals: requestedAgentId, mode: 'insensitive' },
+                  },
+                });
+              }
 
               if (!selectedAgent && !msg.systemPrompt && !msg.prompt) {
                 sendToClient({
