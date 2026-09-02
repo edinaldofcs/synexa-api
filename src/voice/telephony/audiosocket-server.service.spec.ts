@@ -1,8 +1,6 @@
 import { AudioSocketServerService } from './audiosocket-server.service';
 
-function makeService(
-  config: Record<string, unknown>,
-): any {
+function makeService(config: Record<string, unknown>): any {
   const configService = {
     get: jest.fn(
       (key: string, defaultValue?: any) => config[key] ?? defaultValue,

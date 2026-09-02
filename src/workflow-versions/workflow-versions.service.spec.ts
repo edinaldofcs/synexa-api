@@ -4,10 +4,26 @@ import { WorkflowVersionsService } from './workflow-versions.service';
 describe('WorkflowVersionsService', () => {
   const mockPrisma = {
     painel_clients: { findUnique: jest.fn(), update: jest.fn() },
-    painel_agents: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
-    painel_subagents: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
-    painel_apis: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
-    painel_tracks: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
+    painel_agents: {
+      findMany: jest.fn(),
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
+    painel_subagents: {
+      findMany: jest.fn(),
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
+    painel_apis: {
+      findMany: jest.fn(),
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
+    painel_tracks: {
+      findMany: jest.fn(),
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
     workflow_versions: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
@@ -279,7 +295,9 @@ describe('WorkflowVersionsService', () => {
       await service.update(
         clientId,
         'v-pub',
-        { snapshot: { agents: [], apis: [], subagents: [], tracks: [] } } as any,
+        {
+          snapshot: { agents: [], apis: [], subagents: [], tracks: [] },
+        } as any,
         companyId,
       );
 
@@ -308,7 +326,9 @@ describe('WorkflowVersionsService', () => {
       await service.update(
         clientId,
         'v-draft',
-        { snapshot: { agents: [], apis: [], subagents: [], tracks: [] } } as any,
+        {
+          snapshot: { agents: [], apis: [], subagents: [], tracks: [] },
+        } as any,
         companyId,
       );
 

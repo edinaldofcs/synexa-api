@@ -37,10 +37,7 @@ describe('OperatorPresenceService - SCAN de presença e TTL do last_seen', () =>
     const { client, service } = build();
     client.scan
       .mockResolvedValueOnce(['5', ['operator:presence:company-1:op-1']])
-      .mockResolvedValueOnce([
-        '0',
-        ['operator:presence:company-1:op-2'],
-      ]);
+      .mockResolvedValueOnce(['0', ['operator:presence:company-1:op-2']]);
 
     const available = await service.listAvailable('company-1');
 

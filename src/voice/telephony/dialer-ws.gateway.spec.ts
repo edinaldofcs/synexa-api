@@ -28,15 +28,14 @@ function makeGateway(
 
 describe('DialerWsIngress security', () => {
   it('recusa subir sem TELEPHONY_WS_TOKEN_PEPPER em production', () => {
-    expect(
-      () =>
-        makeGateway(
-          {
-            ENVIRONMENT: 'production',
-            TELEPHONY_WS_TOKEN_PEPPER: '',
-          },
-          jest.fn(),
-        ),
+    expect(() =>
+      makeGateway(
+        {
+          ENVIRONMENT: 'production',
+          TELEPHONY_WS_TOKEN_PEPPER: '',
+        },
+        jest.fn(),
+      ),
     ).toThrow(/TELEPHONY_WS_TOKEN_PEPPER/);
   });
 

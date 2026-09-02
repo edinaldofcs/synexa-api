@@ -118,7 +118,9 @@ export class AdminService {
 
       // 5. Voz, telefonia, interações, workflow e mídia
       await tx.painel_interactions.deleteMany({ where: { company_id: id } });
-      await tx.voice_session_telemetry.deleteMany({ where: { company_id: id } });
+      await tx.voice_session_telemetry.deleteMany({
+        where: { company_id: id },
+      });
       await tx.telephony_endpoints.deleteMany({ where: { company_id: id } });
       await tx.workflow_versions.deleteMany({ where: { company_id: id } });
       await tx.media_assets.deleteMany({ where: { company_id: id } });
@@ -224,7 +226,9 @@ export class AdminService {
         where: {
           company_id: endUser.company_id,
           OR: [
-            ...(identifiers.length ? [{ client_identifier: { in: identifiers } }] : []),
+            ...(identifiers.length
+              ? [{ client_identifier: { in: identifiers } }]
+              : []),
             ...(endUser.name ? [{ client_name: endUser.name }] : []),
           ],
         },
@@ -239,7 +243,9 @@ export class AdminService {
       });
 
       // 7. Identidades de canal e o registro do titular
-      await tx.channel_identities.deleteMany({ where: { end_user_id: endUserId } });
+      await tx.channel_identities.deleteMany({
+        where: { end_user_id: endUserId },
+      });
       await tx.end_users.delete({ where: { id: endUserId } });
 
       return {
@@ -262,7 +268,12 @@ export class AdminService {
       ...counts,
     });
 
-    return { erased: true, end_user_id: endUserId, erased_at: erasedAt, ...counts };
+    return {
+      erased: true,
+      end_user_id: endUserId,
+      erased_at: erasedAt,
+      ...counts,
+    };
   }
 
   // ── Users (platform_admin global; company_admin restrito à própria empresa) ──

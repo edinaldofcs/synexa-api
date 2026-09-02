@@ -99,11 +99,15 @@ export async function runOpenAiCompatibleChatStream(
         options.onToken(chunk.deltaContent);
       }
       for (const fragment of chunk.toolCallFragments) {
-        const acc =
-          toolCallsAcc.get(fragment.index) || { id: '', name: '', arguments: '' };
+        const acc = toolCallsAcc.get(fragment.index) || {
+          id: '',
+          name: '',
+          arguments: '',
+        };
         if (fragment.id) acc.id = fragment.id;
         if (fragment.name) acc.name += fragment.name;
-        if (fragment.argumentsFragment) acc.arguments += fragment.argumentsFragment;
+        if (fragment.argumentsFragment)
+          acc.arguments += fragment.argumentsFragment;
         toolCallsAcc.set(fragment.index, acc);
       }
     }

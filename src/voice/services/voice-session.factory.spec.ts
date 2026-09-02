@@ -44,8 +44,8 @@ describe('VoiceSessionFactory - semaforo global de sessoes', () => {
   it('create() recusa com erro claro antes de criar o provider Gemini', async () => {
     const factory = buildFactory(0);
 
-    await expect(
-      factory.create({ id: 'ch-1' } as any, null),
-    ).rejects.toThrow('VOICE_MAX_SESSIONS');
+    await expect(factory.create({ id: 'ch-1' } as any, null)).rejects.toThrow(
+      'VOICE_MAX_SESSIONS',
+    );
   });
 });

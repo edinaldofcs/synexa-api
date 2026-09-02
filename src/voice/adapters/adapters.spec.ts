@@ -95,7 +95,9 @@ describe('Telephony Adapters & Variable Injection', () => {
 
       expect(adapter.metadata.customVariables?.CPF_CLIENTE).toBe('12345678900');
       expect(adapter.metadata.customVariables?.VAR_MALICIOSA).toBe('x');
-      expect(adapter.metadata.customVariables?.TOTALMENTE_DESCONHECIDA).toBeUndefined();
+      expect(
+        adapter.metadata.customVariables?.TOTALMENTE_DESCONHECIDA,
+      ).toBeUndefined();
     });
 
     it('ignora SYNEXA_CLIENT_ID e SYNEXA_SECRET em ingresso nao confiavel', () => {
@@ -112,9 +114,13 @@ describe('Telephony Adapters & Variable Injection', () => {
       expect(
         untrusted.metadata.customVariables?.SYNEXA_CLIENT_ID,
       ).toBeUndefined();
-      expect(untrusted.metadata.customVariables?.SYNEXA_AGENT_STEP).toBeUndefined();
+      expect(
+        untrusted.metadata.customVariables?.SYNEXA_AGENT_STEP,
+      ).toBeUndefined();
       expect(untrusted.metadata.customVariables?.SYNEXA_SECRET).toBeUndefined();
-      expect(untrusted.metadata.customVariables?.CPF_CLIENTE).toBe('12345678900');
+      expect(untrusted.metadata.customVariables?.CPF_CLIENTE).toBe(
+        '12345678900',
+      );
       expect(untrusted.metadata.customVariables?.SYNEXA_SALDO).toBe('10.00');
 
       const trusted = new AsteriskFastAgiAdapter(mockSocket, rawAgiEnv, {

@@ -233,8 +233,7 @@ describe('ApiKeyGuard', () => {
 
     it('should reject when the stored secret is encrypted but the key does not match', async () => {
       prismaService.channel_connections.findUnique.mockResolvedValue({
-        inbound_secret_hash:
-          'enc:' + encrypt('sk_other', 'z'.repeat(32)),
+        inbound_secret_hash: 'enc:' + encrypt('sk_other', 'z'.repeat(32)),
       });
 
       const body = { client_id: 'client-1' };

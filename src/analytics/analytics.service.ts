@@ -403,9 +403,10 @@ export class AnalyticsService {
     const cacheKey = `bi:dashboard:${companyId}:${opts.clientId ?? 'all'}:${
       opts.from?.toISOString() ?? 'none'
     }:${opts.to?.toISOString() ?? 'none'}`;
-    const cached = await this.redisService.get<
-      Awaited<ReturnType<AnalyticsService['buildBiDashboard']>>
-    >(cacheKey);
+    const cached =
+      await this.redisService.get<
+        Awaited<ReturnType<AnalyticsService['buildBiDashboard']>>
+      >(cacheKey);
     if (cached) return cached;
 
     const result = await this.buildBiDashboard(companyId, opts);
@@ -1297,17 +1298,17 @@ export class AnalyticsService {
       .sort((a, b) => b.cost_usd - a.cost_usd);
 
     const totalTokens = hasRuns
-      ? runTotals?.total_tokens ?? 0
-      : interactionTotals?.total_tokens ?? 0;
+      ? (runTotals?.total_tokens ?? 0)
+      : (interactionTotals?.total_tokens ?? 0);
     const inputTokens = hasRuns
-      ? runTotals?.input_tokens ?? 0
-      : interactionTotals?.input_tokens ?? 0;
+      ? (runTotals?.input_tokens ?? 0)
+      : (interactionTotals?.input_tokens ?? 0);
     const outputTokens = hasRuns
-      ? runTotals?.output_tokens ?? 0
-      : interactionTotals?.output_tokens ?? 0;
+      ? (runTotals?.output_tokens ?? 0)
+      : (interactionTotals?.output_tokens ?? 0);
     const totalCostUsd = hasRuns
-      ? runTotals?.cost_usd ?? 0
-      : interactionTotals?.cost_usd ?? 0;
+      ? (runTotals?.cost_usd ?? 0)
+      : (interactionTotals?.cost_usd ?? 0);
 
     return {
       totals: {

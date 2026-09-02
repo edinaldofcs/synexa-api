@@ -299,9 +299,8 @@ describe('TestChatService', () => {
 
         const startedAt = Date.now();
         const pending = service.send(buildDto());
-        const assertion = expect(pending).rejects.toBeInstanceOf(
-          ConflictException,
-        );
+        const assertion =
+          expect(pending).rejects.toBeInstanceOf(ConflictException);
         await jest.advanceTimersByTimeAsync(600);
         await assertion;
 

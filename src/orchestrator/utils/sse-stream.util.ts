@@ -42,8 +42,7 @@ export async function* readOpenAiSseChunks(
         const choice = parsed?.choices?.[0];
         const delta = choice?.delta || {};
         yield {
-          deltaContent:
-            typeof delta.content === 'string' ? delta.content : '',
+          deltaContent: typeof delta.content === 'string' ? delta.content : '',
           toolCallFragments: Array.isArray(delta.tool_calls)
             ? delta.tool_calls.map((tc: any) => ({
                 index: Number(tc.index || 0),

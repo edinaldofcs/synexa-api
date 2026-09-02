@@ -29,14 +29,20 @@ describe('AnalyticsController', () => {
       const after = Date.now();
 
       const args = service.getBusinessAnalytics.mock.calls[0][1];
-      expect(args.from.getTime()).toBeGreaterThanOrEqual(before - 30 * 86400000);
+      expect(args.from.getTime()).toBeGreaterThanOrEqual(
+        before - 30 * 86400000,
+      );
       expect(args.from.getTime()).toBeLessThanOrEqual(after - 30 * 86400000);
       expect(args.to.getTime()).toBeGreaterThanOrEqual(before);
       expect(args.to.getTime()).toBeLessThanOrEqual(after);
     });
 
     it('should clamp to to from + 90 days', async () => {
-      await controller.business(user, '2026-01-01T00:00:00Z', '2026-08-30T00:00:00Z');
+      await controller.business(
+        user,
+        '2026-01-01T00:00:00Z',
+        '2026-08-30T00:00:00Z',
+      );
 
       const args = service.getBusinessAnalytics.mock.calls[0][1];
       expect(args.from.toISOString()).toBe('2026-01-01T00:00:00.000Z');
@@ -45,19 +51,34 @@ describe('AnalyticsController', () => {
 
     it('should reject from >= to with 400', async () => {
       await expect(
-        controller.business(user, '2026-08-30T00:00:00Z', '2026-08-01T00:00:00Z'),
+        controller.business(
+          user,
+          '2026-08-30T00:00:00Z',
+          '2026-08-01T00:00:00Z',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('should reject invalid dates with 400', async () => {
-      await expect(
-        controller.business(user, 'not-a-date'),
-      ).rejects.toThrow(BadRequestException);
+      await expect(controller.business(user, 'not-a-date')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('should apply the window on bi-dashboard and consumption-costs', async () => {
-      await controller.biDashboard(user, undefined, undefined, '2026-08-01T00:00:00Z', '2026-08-10T00:00:00Z');
-      await controller.consumptionCosts(user, undefined, '2026-08-01T00:00:00Z', '2026-08-10T00:00:00Z');
+      await controller.biDashboard(
+        user,
+        undefined,
+        undefined,
+        '2026-08-01T00:00:00Z',
+        '2026-08-10T00:00:00Z',
+      );
+      await controller.consumptionCosts(
+        user,
+        undefined,
+        '2026-08-01T00:00:00Z',
+        '2026-08-10T00:00:00Z',
+      );
 
       const biArgs = service.getBiDashboard.mock.calls[0][1];
       const costArgs = service.getCostsAndConsumption.mock.calls[0][1];

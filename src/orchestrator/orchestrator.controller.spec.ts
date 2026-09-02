@@ -23,7 +23,11 @@ function mockRes(): Response & { json: jest.Mock; status: jest.Mock } {
 
 describe('OrchestratorController - SSE stream cap (S05)', () => {
   let controller: OrchestratorController;
-  let testChatService: { send: jest.Mock; clear: jest.Mock; listModels: jest.Mock };
+  let testChatService: {
+    send: jest.Mock;
+    clear: jest.Mock;
+    listModels: jest.Mock;
+  };
   let redisClient: { incr: jest.Mock; decr: jest.Mock; expire: jest.Mock };
 
   beforeEach(() => {

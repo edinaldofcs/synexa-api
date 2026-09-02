@@ -5,9 +5,7 @@ jest.mock('../common/utils/ssrf-guard', () => ({
 }));
 
 describe('WebhooksService - processRetry claim atômico', () => {
-  const build = (
-    overrides: Partial<Record<string, unknown>> = {},
-  ) => {
+  const build = (overrides: Partial<Record<string, unknown>> = {}) => {
     const prisma = {
       webhook_deliveries: {
         findUnique: jest.fn(),
@@ -39,7 +37,10 @@ describe('WebhooksService - processRetry claim atômico', () => {
     status: 'pending',
     next_retry_at: null,
     payload: { event: 'message.completed', conversation_id: 'conv-1' },
-    webhook_endpoints: { url: 'https://cliente.example.com/hook', secret_hash: 'secret' },
+    webhook_endpoints: {
+      url: 'https://cliente.example.com/hook',
+      secret_hash: 'secret',
+    },
   };
 
   beforeEach(() => {

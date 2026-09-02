@@ -12,7 +12,11 @@ export interface HealthCheckResult {
   details?:
     | string
     | {
-        database: { status: 'up' | 'down'; latency_ms?: number; error?: string };
+        database: {
+          status: 'up' | 'down';
+          latency_ms?: number;
+          error?: string;
+        };
         redis: { status: 'up' | 'down'; latency_ms?: number; error?: string };
       };
 }

@@ -96,12 +96,7 @@ export class PrismaService
       $allModels: {
         async $allOperations({ model, operation, args, query }) {
           const store = tenantLocalStorage.getStore();
-          applyTenantInjection(
-            model,
-            operation,
-            args,
-            store?.companyId,
-          );
+          applyTenantInjection(model, operation, args, store?.companyId);
           return query(args);
         },
       },

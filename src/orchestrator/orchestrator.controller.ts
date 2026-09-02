@@ -16,10 +16,7 @@ import { CurrentUser } from '../common/auth/current-user.decorator';
 import { RedisService } from '../common/redis/redis.service';
 import { CompatibilityService } from './compatibility.service';
 import { OrchestratorService } from './orchestrator.service';
-import {
-  TestChatService,
-  type TestChatUserContext,
-} from './test-chat.service';
+import { TestChatService, type TestChatUserContext } from './test-chat.service';
 import { ClearTestChatDto, TestChatDto } from './dto/test-chat.dto';
 import {
   ChatRequestDto,
@@ -123,7 +120,11 @@ export class OrchestratorController {
     const slot = await this.tryAcquireStreamSlot(userCtx);
     if (!slot.allowed) {
       this.logger.warn(
-        { userId: userCtx?.id, active: slot.active, max: this.maxConcurrentStreams() },
+        {
+          userId: userCtx?.id,
+          active: slot.active,
+          max: this.maxConcurrentStreams(),
+        },
         'TestChatStream: cap de streams concorrentes atingido',
       );
       return res
@@ -131,7 +132,10 @@ export class OrchestratorController {
         .json({ error: 'Too many concurrent streams' });
     }
 
-    this.logger.log({ provider: dto.provider, model: dto.model }, 'TestChatStream');
+    this.logger.log(
+      { provider: dto.provider, model: dto.model },
+      'TestChatStream',
+    );
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');

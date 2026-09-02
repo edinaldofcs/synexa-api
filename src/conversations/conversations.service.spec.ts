@@ -151,10 +151,13 @@ describe('ConversationsService - throttle do checkAndRedistributeAbandoned', () 
 
     await service.listByClient({ companyId: 'company-1' });
 
-    expect(redis.acquireLock).toHaveBeenCalledWith('handoff:scan:company-1', 60);
-    expect(
-      distributor.checkAndRedistributeAbandoned,
-    ).toHaveBeenCalledWith('company-1');
+    expect(redis.acquireLock).toHaveBeenCalledWith(
+      'handoff:scan:company-1',
+      60,
+    );
+    expect(distributor.checkAndRedistributeAbandoned).toHaveBeenCalledWith(
+      'company-1',
+    );
   });
 
   it('não executa a varredura quando o lock de throttle está ocupado', async () => {

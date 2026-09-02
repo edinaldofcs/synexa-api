@@ -291,9 +291,7 @@ export class GroqProvider implements LLMProvider {
       model: params.agentConfig.model || llmConfig.models.groq,
       params: { ...params, systemPrompt: params.systemPrompt + SYSTEM_SUFFIX },
       toolsDefinition:
-        params.tools.length > 0
-          ? buildOpenAIToolDefinition(params.tools)
-          : [],
+        params.tools.length > 0 ? buildOpenAIToolDefinition(params.tools) : [],
       onToken,
     });
   }

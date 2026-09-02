@@ -139,7 +139,9 @@ describe('AgentsService - Simulation & Preview', () => {
       expect(resCobranca.active_agent_id).toBe('agent-cobranca');
       expect(resCobranca.evaluations).toHaveLength(2);
       expect(resCobranca.evaluations[1].matched).toBe(true);
-      expect(resCobranca.evaluations[1].resolved_prompt).toContain('R$ 2.000,00');
+      expect(resCobranca.evaluations[1].resolved_prompt).toContain(
+        'R$ 2.000,00',
+      );
 
       // 2. Cenário sem inadimplência -> Agente inicial Triagem
       const resTriagem = await service.simulateSequence(

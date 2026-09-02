@@ -39,21 +39,22 @@ describe('OpenRouterProvider.chatWithPartsStream', () => {
   });
 
   it('emite tokens via onToken e retorna o texto completo', async () => {
-    const fetchMock = jest.fn().mockResolvedValue(
-      sseResponse([
-        chunkJson({ content: 'Olá, ' }),
-        chunkJson({ content: 'mundo!' }),
-        chunkJson({}, 'stop'),
-        'data: [DONE]\n\n',
-      ]),
-    );
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue(
+        sseResponse([
+          chunkJson({ content: 'Olá, ' }),
+          chunkJson({ content: 'mundo!' }),
+          chunkJson({}, 'stop'),
+          'data: [DONE]\n\n',
+        ]),
+      );
     (global as any).fetch = fetchMock;
 
     const tokens: string[] = [];
     const provider = new OpenRouterProvider('test-key');
-    const output = await provider.chatWithPartsStream!(
-      baseParams(),
-      (token) => tokens.push(token),
+    const output = await provider.chatWithPartsStream!(baseParams(), (token) =>
+      tokens.push(token),
     );
 
     expect(tokens.join('')).toBe('Olá, mundo!');
@@ -102,17 +103,15 @@ describe('OpenRouterProvider.chatWithPartsStream', () => {
   });
 
   it('acumula usage dos chunks de stream', async () => {
-    const fetchMock = jest
-      .fn()
-      .mockResolvedValueOnce(
-        sseResponse([
-          chunkJson({ content: 'abc' }),
-          `data: ${JSON.stringify({
-            choices: [{ delta: {}, finish_reason: 'stop' }],
-            usage: { prompt_tokens: 10, completion_tokens: 5 },
-          })}\n\n`,
-        ]),
-      );
+    const fetchMock = jest.fn().mockResolvedValueOnce(
+      sseResponse([
+        chunkJson({ content: 'abc' }),
+        `data: ${JSON.stringify({
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        })}\n\n`,
+      ]),
+    );
     (global as any).fetch = fetchMock;
 
     const provider = new OpenRouterProvider('test-key');

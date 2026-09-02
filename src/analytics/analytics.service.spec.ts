@@ -105,9 +105,29 @@ describe('AnalyticsService', () => {
           promises: 0,
           agreement_value: 450,
         },
-        { ...biRowBase, kind: 'month', month: '2026-08', total: 1, cpc: 1, agreements: 1, agreement_value: 450 },
-        { ...biRowBase, kind: 'channel', channel: 'webchat', total: 1, agreements: 1 },
-        { ...biRowBase, kind: 'agent', agent: 'Negociador', total: 1, agreements: 1 },
+        {
+          ...biRowBase,
+          kind: 'month',
+          month: '2026-08',
+          total: 1,
+          cpc: 1,
+          agreements: 1,
+          agreement_value: 450,
+        },
+        {
+          ...biRowBase,
+          kind: 'channel',
+          channel: 'webchat',
+          total: 1,
+          agreements: 1,
+        },
+        {
+          ...biRowBase,
+          kind: 'agent',
+          agent: 'Negociador',
+          total: 1,
+          agreements: 1,
+        },
       ]);
 
       const result = await service.getBiDashboard('company-1', {
@@ -138,9 +158,7 @@ describe('AnalyticsService', () => {
     });
 
     it('should return zeroed rates when there are no interactions', async () => {
-      mockPrisma.$queryRaw.mockResolvedValue([
-        { ...biRowBase, kind: 'kpi' },
-      ]);
+      mockPrisma.$queryRaw.mockResolvedValue([{ ...biRowBase, kind: 'kpi' }]);
 
       const result = await service.getBiDashboard('company-1');
 

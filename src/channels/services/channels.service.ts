@@ -255,14 +255,19 @@ export class ChannelsService {
       return created.id;
     } catch (err: any) {
       // Corrida: outra requisição criou a identity/end_user concorrentemente
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        const existingIdentity = await this.prisma.channel_identities.findFirst({
-          where: {
-            client_id: dto.client_id,
-            channel_type: dto.origin_channel,
-            external_user_id: dto.external_user_id,
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const existingIdentity = await this.prisma.channel_identities.findFirst(
+          {
+            where: {
+              client_id: dto.client_id,
+              channel_type: dto.origin_channel,
+              external_user_id: dto.external_user_id,
+            },
           },
-        });
+        );
         if (existingIdentity) return existingIdentity.end_user_id;
       }
       throw err;

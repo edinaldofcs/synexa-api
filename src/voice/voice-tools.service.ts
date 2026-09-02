@@ -409,9 +409,7 @@ export class VoiceToolsService {
   private async findAllowedSubagents(clientId: string, agentId: string) {
     const cacheKey = `voice:tools:subagents:${clientId}:${agentId}`;
     try {
-      const cached = await this.redis.get<Array<Record<string, any>>>(
-        cacheKey,
-      );
+      const cached = await this.redis.get<Array<Record<string, any>>>(cacheKey);
       if (cached) return cached;
     } catch {
       // Cache indisponível: segue com consulta ao banco

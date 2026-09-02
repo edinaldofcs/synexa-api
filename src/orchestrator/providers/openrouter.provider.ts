@@ -283,9 +283,7 @@ export class OpenRouterProvider implements LLMProvider {
       model: params.agentConfig.model || llmConfig.models.openrouter,
       params: { ...params, systemPrompt: params.systemPrompt + SYSTEM_SUFFIX },
       toolsDefinition:
-        params.tools.length > 0
-          ? buildOpenAIToolDefinition(params.tools)
-          : [],
+        params.tools.length > 0 ? buildOpenAIToolDefinition(params.tools) : [],
       extraHeaders: {
         'HTTP-Referer': 'https://github.com/antigravity',
         'X-Title': 'Synexa Orchestrator',

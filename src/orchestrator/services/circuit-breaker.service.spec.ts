@@ -109,7 +109,11 @@ describe('ProviderCircuitBreakerService', () => {
   });
 
   it('transição lazy OPEN→HALF_OPEN é persistida no Redis', async () => {
-    await service.recordFailure('groq', new Error('429 Rate limit'), 'client-1');
+    await service.recordFailure(
+      'groq',
+      new Error('429 Rate limit'),
+      'client-1',
+    );
     const key = (service as any).getCircuitKey('groq', 'client-1');
     const info = (service as any).inMemoryState.get(key);
     info.nextAttemptTime = Date.now() - 1;
@@ -123,7 +127,11 @@ describe('ProviderCircuitBreakerService', () => {
   });
 
   it('HALF_OPEN concede probe única via SETNX e rejeita os demais', async () => {
-    await service.recordFailure('groq', new Error('429 Rate limit'), 'client-1');
+    await service.recordFailure(
+      'groq',
+      new Error('429 Rate limit'),
+      'client-1',
+    );
     const key = (service as any).getCircuitKey('groq', 'client-1');
     (service as any).inMemoryState.get(key).nextAttemptTime = Date.now() - 1;
 
@@ -139,7 +147,11 @@ describe('ProviderCircuitBreakerService', () => {
   });
 
   it('recordSuccess em HALF_OPEN persiste, libera probe e fecha o circuito', async () => {
-    await service.recordFailure('groq', new Error('429 Rate limit'), 'client-1');
+    await service.recordFailure(
+      'groq',
+      new Error('429 Rate limit'),
+      'client-1',
+    );
     const key = (service as any).getCircuitKey('groq', 'client-1');
     (service as any).inMemoryState.get(key).nextAttemptTime = Date.now() - 1;
 

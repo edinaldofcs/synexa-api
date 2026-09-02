@@ -6,7 +6,9 @@ import { TextAiExecutionService } from '../queue/text-ai-execution.service';
 
 describe('ChannelsService - corridas de escrita', () => {
   const buildService = (prisma: any) => {
-    const webhooksService = { deliver: jest.fn() } as unknown as WebhooksService;
+    const webhooksService = {
+      deliver: jest.fn(),
+    } as unknown as WebhooksService;
     const textAi = {
       dispatchIngestion: jest
         .fn()
@@ -16,7 +18,10 @@ describe('ChannelsService - corridas de escrita', () => {
       prisma as never,
       webhooksService,
       textAi,
-      { channelType: 'whatsapp', normalize: jest.fn().mockReturnValue({}) } as never,
+      {
+        channelType: 'whatsapp',
+        normalize: jest.fn().mockReturnValue({}),
+      } as never,
       { channelType: 'api', normalize: jest.fn().mockReturnValue({}) } as never,
     );
     return service;

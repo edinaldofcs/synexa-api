@@ -84,7 +84,7 @@ describe('InteractionsService', () => {
     expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
     const sql = mockPrisma.$queryRaw.mock.calls[0][0];
     expect(sql.sql).toContain('COALESCE(messages');
-    expect(sql.sql).toContain("|| ?::jsonb");
+    expect(sql.sql).toContain('|| ?::jsonb');
     expect(sql.sql).toContain('RETURNING *');
     // valor da mensagem vai parametrizado (sem interpolação de string)
     expect(sql.values.some((v: any) => String(v).includes('Olá'))).toBe(true);

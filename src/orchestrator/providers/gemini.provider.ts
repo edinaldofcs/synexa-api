@@ -365,10 +365,7 @@ export class GeminiProvider implements LLMProvider {
         const toolResults = await Promise.all(
           batch.map((call) =>
             params
-              .onToolCall(
-                call.name,
-                call.args as Record<string, unknown>,
-              )
+              .onToolCall(call.name, call.args as Record<string, unknown>)
               .catch((error) => ({
                 error:
                   error instanceof Error

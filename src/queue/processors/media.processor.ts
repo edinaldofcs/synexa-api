@@ -17,7 +17,8 @@ export class MediaProcessor {
   private readonly logger = new Logger(MediaProcessor.name);
   private readonly supabase: SupabaseClient | null;
   private readonly isDevelopment = process.env.ENVIRONMENT === 'development';
-  private readonly maxMediaBytes = Number(process.env.MAX_MEDIA_BYTES) || 26_214_400;
+  private readonly maxMediaBytes =
+    Number(process.env.MAX_MEDIA_BYTES) || 26_214_400;
 
   constructor(
     private readonly prisma: PrismaService,

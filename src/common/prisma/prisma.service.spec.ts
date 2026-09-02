@@ -9,10 +9,7 @@ describe('applyTenantInjection', () => {
   it('covers every model that has company_id in schema.prisma (except companies)', () => {
     const fs = require('fs');
     const path = require('path');
-    const schemaPath = path.resolve(
-      __dirname,
-      '../../../prisma/schema.prisma',
-    );
+    const schemaPath = path.resolve(__dirname, '../../../prisma/schema.prisma');
     const schema = fs.readFileSync(schemaPath, 'utf8');
 
     const modelsWithCompanyId: string[] = [];
@@ -67,7 +64,12 @@ describe('applyTenantInjection', () => {
 
   it('injects company_id into each item of createMany', () => {
     const args: any = { data: [{ a: 1 }, { b: 2 }] };
-    applyTenantInjection('credential_audit_logs', 'createMany', args, COMPANY_ID);
+    applyTenantInjection(
+      'credential_audit_logs',
+      'createMany',
+      args,
+      COMPANY_ID,
+    );
     expect(args.data).toEqual([
       { a: 1, company_id: COMPANY_ID },
       { b: 2, company_id: COMPANY_ID },

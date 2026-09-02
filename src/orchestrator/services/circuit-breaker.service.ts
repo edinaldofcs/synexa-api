@@ -90,7 +90,10 @@ export class ProviderCircuitBreakerService {
     // HALF_OPEN: probe única via SETNX — somente 1 request passa; os demais
     // são rejeitados até a probe concluir (sucesso/falha) ou expirar
     try {
-      return await this.redisService.acquireLock(this.getProbeKey(key), this.probeTtlSeconds);
+      return await this.redisService.acquireLock(
+        this.getProbeKey(key),
+        this.probeTtlSeconds,
+      );
     } catch {
       return true;
     }

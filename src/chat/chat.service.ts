@@ -134,7 +134,9 @@ export class ChatService {
         headers,
         body,
       });
-      this.logger.log(`Webhook forwarded with payload: ${JSON.stringify(sanitize(payload))}`);
+      this.logger.log(
+        `Webhook forwarded with payload: ${JSON.stringify(sanitize(payload))}`,
+      );
     } catch (error) {
       this.logger.error('Error triggering webhook:', error);
     }

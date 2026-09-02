@@ -79,9 +79,9 @@ describe('WebSearchService', () => {
 
   it('retorna flag error (sem dado fabricado) quando todos os provedores falham', async () => {
     createMock.mockRejectedValue(new Error('OpenRouter down'));
-    (global.fetch as jest.Mock) = jest.fn().mockRejectedValue(
-      new Error('network unreachable'),
-    );
+    (global.fetch as jest.Mock) = jest
+      .fn()
+      .mockRejectedValue(new Error('network unreachable'));
 
     const result = await service.ask('preco do dolar agora');
 

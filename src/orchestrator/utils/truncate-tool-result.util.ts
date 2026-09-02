@@ -12,9 +12,7 @@ function preserveShortStringKeys(
   }
   const kept: Record<string, string> = {};
   let used = 0;
-  for (const [key, entry] of Object.entries(
-    value as Record<string, unknown>,
-  )) {
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (typeof entry !== 'string') continue;
     if (Buffer.byteLength(entry, 'utf8') > SHORT_VALUE_MAX_BYTES) continue;
     const entrySize = Buffer.byteLength(
@@ -43,8 +41,7 @@ export function truncateToolResult(
   if (totalBytes <= maxBytes) return serialized;
 
   const preview = serialized.slice(0, PREVIEW_BYTES);
-  const dropped =
-    totalBytes - Buffer.byteLength(preview, 'utf8');
+  const dropped = totalBytes - Buffer.byteLength(preview, 'utf8');
   const payload: Record<string, unknown> = {
     __truncated: true,
     preview,

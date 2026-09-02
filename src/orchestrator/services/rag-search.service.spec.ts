@@ -10,7 +10,11 @@ jest.mock('openai', () => {
     embeddings = { create: embeddingsCreate };
     constructor(_config?: any) {}
   }
-  return { __esModule: true, default: OpenAI, __embeddingsCreate: embeddingsCreate };
+  return {
+    __esModule: true,
+    default: OpenAI,
+    __embeddingsCreate: embeddingsCreate,
+  };
 });
 
 import OpenAI from 'openai';

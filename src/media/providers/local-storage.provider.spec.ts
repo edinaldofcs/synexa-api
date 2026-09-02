@@ -73,9 +73,7 @@ describe('LocalStorageProvider - signed URL HMAC', () => {
     );
 
     const { dir, file, exp, sig } = extractParams(signedUrl);
-    const tampered = sig.replace(/[0-9a-f]/i, (c) =>
-      c === '0' ? '1' : '0',
-    );
+    const tampered = sig.replace(/[0-9a-f]/i, (c) => (c === '0' ? '1' : '0'));
     expect(provider.verifySignedParams(dir, file, exp, tampered)).toBe(false);
   });
 
@@ -89,8 +87,6 @@ describe('LocalStorageProvider - signed URL HMAC', () => {
 
     const { dir, file, exp, sig } = extractParams(signedUrl);
     const expiredExp = String(Number(exp) - 1000 * 60 * 10);
-    expect(provider.verifySignedParams(dir, file, expiredExp, sig)).toBe(
-      false,
-    );
+    expect(provider.verifySignedParams(dir, file, expiredExp, sig)).toBe(false);
   });
 });

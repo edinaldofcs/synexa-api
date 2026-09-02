@@ -14,9 +14,7 @@ import { TelephonyEndpointResolverService } from '../services/telephony-endpoint
 import { VoiceSessionFactory } from '../services/voice-session.factory';
 import { AsteriskAmiService } from './asterisk-ami.service';
 
-export function parseVoiceIngressAllowlist(
-  raw: string | undefined,
-): string[] {
+export function parseVoiceIngressAllowlist(raw: string | undefined): string[] {
   return (raw || '')
     .split(',')
     .map((value) => value.trim())
@@ -155,10 +153,7 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
   public start(): void {
     if (this.server) return;
 
-    if (
-      this.environment === 'production' &&
-      !this.ingressAllowlist.length
-    ) {
+    if (this.environment === 'production' && !this.ingressAllowlist.length) {
       throw new Error(
         '[FastAGI] VOICE_INGRESS_ALLOWLIST obrigatoria em ENVIRONMENT=production (fail-closed)',
       );

@@ -299,7 +299,9 @@ export class TextAiExecutionService {
       if (Date.now() + LOCK_WAIT_INTERVAL_MS > deadline) {
         return false;
       }
-      await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_INTERVAL_MS));
+      await new Promise((resolve) =>
+        setTimeout(resolve, LOCK_WAIT_INTERVAL_MS),
+      );
     }
   }
 

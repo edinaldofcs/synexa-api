@@ -24,7 +24,9 @@ export class RolesGuard implements CanActivate {
 
     // Fail-closed: role ausente no usuário autenticado nunca recebe privilégio por omissão
     if (!user.role) {
-      throw new ForbiddenException('Acesso negado: papel do usuário indefinido');
+      throw new ForbiddenException(
+        'Acesso negado: papel do usuário indefinido',
+      );
     }
 
     const userRole = user.role;

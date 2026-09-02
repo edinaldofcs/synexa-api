@@ -36,11 +36,7 @@ export class HandoffDistributorService {
     }
 
     try {
-      return await this.distributeLocked(
-        conversationId,
-        companyId,
-        clientId,
-      );
+      return await this.distributeLocked(conversationId, companyId, clientId);
     } finally {
       await this.redis.releaseLock(lockKey);
     }

@@ -279,12 +279,11 @@ export class LlmToolLoopService {
             params.onToken!(chunk.deltaContent);
           }
           for (const fragment of chunk.toolCallFragments) {
-            const acc =
-              streamedCalls.get(fragment.index) || {
-                id: '',
-                name: '',
-                arguments: '',
-              };
+            const acc = streamedCalls.get(fragment.index) || {
+              id: '',
+              name: '',
+              arguments: '',
+            };
             if (fragment.id) acc.id = fragment.id;
             if (fragment.name) acc.name += fragment.name;
             if (fragment.argumentsFragment)

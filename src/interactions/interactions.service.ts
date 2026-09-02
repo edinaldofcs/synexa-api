@@ -127,9 +127,7 @@ export class InteractionsService {
       if (!exists) return null;
 
       const latency =
-        bargeInLatencyMs !== undefined
-          ? Math.trunc(bargeInLatencyMs)
-          : null;
+        bargeInLatencyMs !== undefined ? Math.trunc(bargeInLatencyMs) : null;
 
       // Incremento e média calculados atomicamente no banco
       const rows = await this.prisma.$queryRaw<any[]>(Prisma.sql`

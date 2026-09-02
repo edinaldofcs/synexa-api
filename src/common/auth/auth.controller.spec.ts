@@ -56,11 +56,7 @@ describe('AuthController - callbackUrl (host header injection)', () => {
     const configService = {
       get: (key: string, def?: any) => (key in config ? config[key] : def),
     };
-    return new AuthController(
-      {} as any,
-      {} as any,
-      configService as any,
-    );
+    return new AuthController({} as any, {} as any, configService as any);
   };
 
   const mockRequest = (host: string): Request =>
@@ -73,25 +69,25 @@ describe('AuthController - callbackUrl (host header injection)', () => {
     const controller = build({
       AUTH_CALLBACK_URL: 'https://painel.exemplo.com/api/auth/callback',
     });
-    expect((controller as any).callbackUrl(mockRequest('evil.example.com'))).toBe(
-      'https://painel.exemplo.com/api/auth/callback',
-    );
+    expect(
+      (controller as any).callbackUrl(mockRequest('evil.example.com')),
+    ).toBe('https://painel.exemplo.com/api/auth/callback');
   });
 
   it('deriva de CORS_ORIGIN quando AUTH_CALLBACK_URL ausente', () => {
     const controller = build({ CORS_ORIGIN: 'https://app.exemplo.com' });
-    expect((controller as any).callbackUrl(mockRequest('evil.example.com'))).toBe(
-      'https://app.exemplo.com/api/auth/callback',
-    );
+    expect(
+      (controller as any).callbackUrl(mockRequest('evil.example.com')),
+    ).toBe('https://app.exemplo.com/api/auth/callback');
   });
 
   it('usa a primeira origem de CORS_ORIGIN multi-valor', () => {
     const controller = build({
       CORS_ORIGIN: 'https://app.exemplo.com, https://outro.exemplo.com',
     });
-    expect((controller as any).callbackUrl(mockRequest('evil.example.com'))).toBe(
-      'https://app.exemplo.com/api/auth/callback',
-    );
+    expect(
+      (controller as any).callbackUrl(mockRequest('evil.example.com')),
+    ).toBe('https://app.exemplo.com/api/auth/callback');
   });
 
   it('só usa o header Host em development (fallback legado)', () => {
@@ -109,7 +105,8 @@ describe('AuthController - callbackUrl (host header injection)', () => {
       ENVIRONMENT: 'production',
       CORS_ORIGIN: '',
     });
-    expect(() => (controller as any).callbackUrl(mockRequest('evil.example.com')))
-      .toThrow(/AUTH_CALLBACK_URL/);
+    expect(() =>
+      (controller as any).callbackUrl(mockRequest('evil.example.com')),
+    ).toThrow(/AUTH_CALLBACK_URL/);
   });
 });

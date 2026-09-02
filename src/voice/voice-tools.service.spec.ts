@@ -28,11 +28,7 @@ const buildPrisma = (apiRecord: Record<string, unknown>) => {
   return {
     prisma,
     redis,
-    service: new VoiceToolsService(
-      prisma as any,
-      {} as any,
-      redis as any,
-    ),
+    service: new VoiceToolsService(prisma as any, {} as any, redis as any),
   };
 };
 
@@ -134,18 +130,16 @@ describe('VoiceToolsService - encadeamento (tenant scope & cycle guard)', () => 
         findFirst: jest.fn().mockResolvedValue({ allowed_tool_names: [] }),
       },
       painel_apis: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue([
-            {
-              id: apiId,
-              name: 'Passo 1',
-              method: 'GET',
-              url: 'https://api.example.com/step1',
-              extract_data: null,
-            },
-            nextRecord,
-          ]),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: apiId,
+            name: 'Passo 1',
+            method: 'GET',
+            url: 'https://api.example.com/step1',
+            extract_data: null,
+          },
+          nextRecord,
+        ]),
         findFirst: jest.fn().mockResolvedValue(nextRecord),
       },
       painel_subagents: {

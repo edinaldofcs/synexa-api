@@ -13,8 +13,8 @@ describe('AuthService - hardening de login (S13/S27/S37)', () => {
     checkRateLimit: jest.fn(),
   };
   const configService = {
-    get: jest.fn(
-      (key: string) => (key === 'ENVIRONMENT' ? 'development' : undefined),
+    get: jest.fn((key: string) =>
+      key === 'ENVIRONMENT' ? 'development' : undefined,
     ),
   };
   const prisma = {

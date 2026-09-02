@@ -5,9 +5,7 @@ import {
   voiceIngressSecretMatches,
 } from './fastagi-server.service';
 
-function makeService(
-  config: Record<string, unknown>,
-): FastAgiServerService {
+function makeService(config: Record<string, unknown>): FastAgiServerService {
   const configService = {
     get: jest.fn(
       (key: string, defaultValue?: any) => config[key] ?? defaultValue,

@@ -107,16 +107,42 @@ describe('AdminService - deleteCompany', () => {
 describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
   const buildTx = () => {
     const tx: Record<string, any> = {
-      conversations: { findMany: jest.fn().mockResolvedValue([{ id: 'conv-1' }, { id: 'conv-2' }]), deleteMany: jest.fn().mockResolvedValue({ count: 2 }) },
-      channel_identities: { findMany: jest.fn().mockResolvedValue([{ external_user_id: '5511999@s.whatsapp.net', normalized_phone: '+5511999999999' }]), deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      conversations: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'conv-1' }, { id: 'conv-2' }]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+      channel_identities: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            external_user_id: '5511999@s.whatsapp.net',
+            normalized_phone: '+5511999999999',
+          },
+        ]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       tool_calls: { deleteMany: jest.fn().mockResolvedValue({ count: 3 }) },
       agent_runs: { deleteMany: jest.fn().mockResolvedValue({ count: 5 }) },
       media_assets: { deleteMany: jest.fn().mockResolvedValue({ count: 2 }) },
-      voice_session_telemetry: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      voice_session_telemetry: {
+        updateMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
       messages: { deleteMany: jest.fn().mockResolvedValue({ count: 40 }) },
-      business_events: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      painel_interactions: { updateMany: jest.fn().mockResolvedValue({ count: 4 }) },
-      end_users: { findUnique: jest.fn().mockResolvedValue({ id: 'eu-1', name: 'Joao da Silva', company_id: 'company-1' }), delete: jest.fn().mockResolvedValue({ id: 'eu-1' }) },
+      business_events: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      painel_interactions: {
+        updateMany: jest.fn().mockResolvedValue({ count: 4 }),
+      },
+      end_users: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'eu-1',
+          name: 'Joao da Silva',
+          company_id: 'company-1',
+        }),
+        delete: jest.fn().mockResolvedValue({ id: 'eu-1' }),
+      },
       $transaction: jest.fn(),
     };
     tx.$transaction.mockImplementation(async (fn: any) => fn(tx));
@@ -141,7 +167,9 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
       where: { conversation_id: { in: ['conv-1', 'conv-2'] } },
     });
     expect(tx.voice_session_telemetry.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ caller_number: null }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ caller_number: null }),
+      }),
     );
     expect(tx.painel_interactions.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -155,12 +183,19 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
     const tx = buildTx();
     const service = buildService(tx);
 
-    await service.eraseEndUserData({ id: 'admin-1', role: 'platform_admin' }, 'eu-1');
+    await service.eraseEndUserData(
+      { id: 'admin-1', role: 'platform_admin' },
+      'eu-1',
+    );
 
     const where = tx.painel_interactions.updateMany.mock.calls[0][0].where;
     expect(where.OR).toEqual(
       expect.arrayContaining([
-        { client_identifier: { in: ['5511999@s.whatsapp.net', '+5511999999999'] } },
+        {
+          client_identifier: {
+            in: ['5511999@s.whatsapp.net', '+5511999999999'],
+          },
+        },
         { client_name: 'Joao da Silva' },
       ]),
     );
@@ -196,7 +231,10 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
     const service = buildService(tx);
 
     await expect(
-      service.eraseEndUserData({ id: 'admin-1', role: 'platform_admin' }, 'eu-x'),
+      service.eraseEndUserData(
+        { id: 'admin-1', role: 'platform_admin' },
+        'eu-x',
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(tx.$transaction).not.toHaveBeenCalled();
   });

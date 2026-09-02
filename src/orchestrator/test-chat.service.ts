@@ -372,7 +372,7 @@ export class TestChatService {
       const result = await this.llmToolLoop.run({
         provider,
         model,
-apiKey,
+        apiKey,
         onToken,
         message,
         files,
@@ -407,7 +407,11 @@ apiKey,
 
     const lockKey = `lock:test-chat:${conversationId}`;
     let acquired = await this.redisService.acquireLock(lockKey, 15);
-    for (let attempt = 0; !acquired && attempt < LOCK_RETRY_ATTEMPTS; attempt++) {
+    for (
+      let attempt = 0;
+      !acquired && attempt < LOCK_RETRY_ATTEMPTS;
+      attempt++
+    ) {
       // Tentativas rápidas (300ms) no lugar da espera fixa de 1,5s
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
       acquired = await this.redisService.acquireLock(lockKey, 15);
@@ -463,7 +467,7 @@ apiKey,
         result = await this.llmToolLoop.run({
           provider,
           model,
-apiKey,
+          apiKey,
           onToken,
           message,
           files,
@@ -1136,7 +1140,7 @@ apiKey,
       const result = await this.llmToolLoop.run({
         provider,
         model,
-apiKey,
+        apiKey,
         onToken,
         message,
         systemPrompt: this.buildContextualSystemPrompt(

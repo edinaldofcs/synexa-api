@@ -220,9 +220,7 @@ describe('TextAiExecutionService', () => {
 
   it('isQueueEnabled cacheia a decisão por client no Redis (TTL 30s)', async () => {
     const cache: Record<string, unknown> = {};
-    redis.get.mockImplementation(
-      async (key: string) => cache[key] ?? null,
-    );
+    redis.get.mockImplementation(async (key: string) => cache[key] ?? null);
     redis.set.mockImplementation(async (key: string, value: unknown) => {
       cache[key] = value;
     });
@@ -231,11 +229,7 @@ describe('TextAiExecutionService', () => {
     await service.isQueueEnabled('client-1');
 
     expect(prisma.painel_clients.findUnique).toHaveBeenCalledTimes(1);
-    expect(redis.set).toHaveBeenCalledWith(
-      'queue_enabled:client-1',
-      true,
-      30,
-    );
+    expect(redis.set).toHaveBeenCalledWith('queue_enabled:client-1', true, 30);
   });
 
   it('conflito de lock no ingestion: aguarda com polling antes de falhar', async () => {

@@ -60,7 +60,7 @@ describe('CredentialsController - secret exposure', () => {
         expect.objectContaining({ id: 'conn-1', has_secret: true }),
       );
       expect(result[1]).toHaveProperty('has_secret', false);
- expect(JSON.stringify(result)).not.toContain('sk_raw_secret');
+      expect(JSON.stringify(result)).not.toContain('sk_raw_secret');
     });
   });
 
@@ -104,7 +104,7 @@ describe('CredentialsController - secret exposure', () => {
       await expect(
         controller.rotateKey(user, 'other-conn', request),
       ).rejects.toMatchObject({ status: 404 });
- expect(prisma.channel_connections.update).not.toHaveBeenCalled();
+      expect(prisma.channel_connections.update).not.toHaveBeenCalled();
     });
   });
 
@@ -120,7 +120,11 @@ describe('CredentialsController - secret exposure', () => {
         inbound_secret_hash: 'enc:xyz',
       });
 
-      const result = await controller.createApiConnection(user, 'client-1', request);
+      const result = await controller.createApiConnection(
+        user,
+        'client-1',
+        request,
+      );
 
       expect(result).toEqual({
         id: 'conn-new',

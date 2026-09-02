@@ -42,7 +42,10 @@ export interface ProcessMessageResult {
 import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
 import { FallbackProviderService } from './services/fallback-provider.service';
-import { retryWithBackoff, isRetryableError } from './utils/retry-with-backoff.util';
+import {
+  retryWithBackoff,
+  isRetryableError,
+} from './utils/retry-with-backoff.util';
 import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 
@@ -373,7 +376,9 @@ export class OrchestrationService {
               systemPrompt: agentConfig.system_prompt + mediaInstruction,
               userMessage: [
                 text,
-                ...inputParts.filter((p) => p.type === 'text').map((p) => p.text),
+                ...inputParts
+                  .filter((p) => p.type === 'text')
+                  .map((p) => p.text),
               ]
                 .filter(Boolean)
                 .join('\n'),
