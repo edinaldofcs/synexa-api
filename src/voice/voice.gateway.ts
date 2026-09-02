@@ -296,7 +296,7 @@ export class VoiceGateway
                 },
               });
 
-              if (!selectedAgent) {
+              if (!selectedAgent && !msg.systemPrompt && !msg.prompt) {
                 sendToClient({
                   type: 'error',
                   code: 'VOICE_AGENT_NOT_FOUND',
@@ -306,7 +306,7 @@ export class VoiceGateway
                 return;
               }
 
-              if (selectedAgent.interaction_mode === 'text') {
+              if (selectedAgent && selectedAgent.interaction_mode === 'text') {
                 sendToClient({
                   type: 'error',
                   code: 'VOICE_AGENT_TEXT_ONLY',
