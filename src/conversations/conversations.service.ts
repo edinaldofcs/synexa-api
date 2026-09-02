@@ -1000,8 +1000,13 @@ export class ConversationsService {
     }
 
     const rawMeta = (conv.metadata as Record<string, any>) || {};
+    const contextVars = (rawMeta.context_variables as Record<string, any>) || {};
     const callId = rawMeta.call_id || rawMeta.callId;
-    const channelId = rawMeta.channel_id || rawMeta.channelId;
+    const channelId =
+      rawMeta.channel_id ||
+      rawMeta.channelId ||
+      contextVars.channel_id ||
+      contextVars.channelId;
 
     const possiblePaths = [
       `/app/uploads/recordings/${conversationId}.wav`,
@@ -1030,6 +1035,29 @@ export class ConversationsService {
       if (fs.existsSync(filePath)) {
         foundPath = filePath;
         break;
+      }
+    }
+
+    // Busca de fallback nos diretórios se o arquivo contiver o UUID
+    if (!foundPath) {
+      const searchDirs = ['/app/uploads/recordings', '/var/spool/asterisk/monitor'];
+      const targets = [conversationId, callId, channelId].filter(Boolean);
+
+      for (const dir of searchDirs) {
+        if (fs.existsSync(dir)) {
+          try {
+            const files = fs.readdirSync(dir);
+            for (const file of files) {
+              if (targets.some((target) => file.includes(target as string))) {
+                foundPath = `${dir}/${file}`;
+                break;
+              }
+            }
+          } catch {
+            // Ignora erro de leitura do dir
+          }
+        }
+        if (foundPath) break;
       }
     }
 
