@@ -42,6 +42,37 @@ const PAINEL_MESSAGES_LIMIT = 50;
 const LOCK_RETRY_ATTEMPTS = 2;
 const LOCK_RETRY_DELAY_MS = 300;
 
+const SYSTEM_INFRA_KEYS = new Set([
+  'activation_rules',
+  'inbound_variable_mapping',
+  'llm_providers',
+  'llm_providers_updated_at',
+  'variable_schema',
+  'tools',
+  'allowed_tools',
+  'allowed_tool_names',
+  'agents',
+  'agent_runs',
+  'test_chat_context',
+  'test_chat_context_variables',
+  'rules',
+  'enabled',
+  'preserve_unmapped',
+  'session_id',
+  'channel',
+  'source',
+  'direction',
+  'headers',
+  'auth',
+  'mensagem_usuario',
+  'user_message',
+  'last_message',
+  'message',
+  'text',
+  'texto',
+  'user_transcript',
+]);
+
 /**
  * S02: contexto do usuario autenticado extraido do token (@CurrentUser).
  * Quando presente, o acesso a clients de outros tenants e bloqueado.
@@ -202,20 +233,13 @@ export class TestChatService {
       companyId = client.company_id;
 
       const metadata = (client.metadata as any) || {};
-      const inboundConfig =
-        metadata.inbound_variable_mapping as InboundMappingConfig;
-      const mapper = new InboundDataMapperService();
-      const mappedInbound = mapper.mapInboundData(
-        metadata,
-        inboundConfig,
-        originChannel || 'webchat',
-      );
 
       contextVariables = {
-        ...this.sanitizeContextVariables(metadata),
-        ...mappedInbound,
+        nome_agente: client.agent_name || '',
+        agent_name: client.agent_name || '',
+        nome_empresa: (client as any).company_name || 'Synexa',
+        empresa: (client as any).company_name || 'Synexa',
       };
-      contextVariables.nome_agente = client.agent_name || '';
       Object.assign(contextVariables, this.withMessageAliases(message));
       if (metadata.variable_schema) {
         contextVariables._variable_schema = metadata.variable_schema;
@@ -264,7 +288,7 @@ export class TestChatService {
         );
         contextVariables = {
           ...contextVariables,
-          ...persistedContext,
+          ...this.filterCleanBusinessVariables(persistedContext),
         };
         Object.assign(contextVariables, this.withMessageAliases(message));
 
@@ -931,6 +955,39 @@ export class TestChatService {
     return safeMetadata;
   }
 
+  private filterCleanBusinessVariables(
+    vars: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!vars || typeof vars !== 'object') return {};
+
+    const clean: Record<string, unknown> = {};
+
+    for (const [rawKey, val] of Object.entries(vars)) {
+      if (!rawKey || typeof rawKey !== 'string') continue;
+      const key = rawKey.trim();
+
+      // Ignora chaves internas com _
+      if (key.startsWith('_')) continue;
+
+      // Ignora chaves de infraestrutura e transitórias
+      if (SYSTEM_INFRA_KEYS.has(key.toLowerCase())) continue;
+
+      // A chave DEVE ser um identificador alfanumérico válido (sem json, colchetes, etc.)
+      if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(key)) continue;
+
+      // O valor DEVE ser escalar primitivo válido (não aceita objeto, array, null, undefined)
+      if (val === null || val === undefined) continue;
+      if (typeof val === 'object') continue;
+
+      const strVal = String(val).trim();
+      if (strVal === '' || strVal === 'null' || strVal === 'undefined') continue;
+
+      clean[key] = val;
+    }
+
+    return clean;
+  }
+
   /**
    * P31: leitura única da conversa por turno (com end_users para o bloco de
    * CRM/analytics). O resultado é cacheado em `conversationRecord` no send().
@@ -970,9 +1027,11 @@ export class TestChatService {
         )?.metadata,
       );
 
+    const cleanVars = this.filterCleanBusinessVariables(contextVariables);
+
     const nextMetadata = {
       ...metadata,
-      [TEST_CHAT_CONTEXT_KEY]: contextVariables,
+      [TEST_CHAT_CONTEXT_KEY]: cleanVars,
     } as Prisma.InputJsonObject;
 
     await this.prisma.conversations.update({
@@ -1222,10 +1281,6 @@ export class TestChatService {
       crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou confirme os seguintes campos durante o atendimento (eles são persistidos automaticamente no CRM pela plataforma):\n${fieldList}\nSempre que o cliente fornecer um desses dados, confirme-o claramente na conversa e, se houver uma API disponível para registrá-lo, utilize-a.`;
     }
 
-    const entries = Object.entries(contextVariables).filter(
-      ([key, value]) => value !== undefined && !key.startsWith('_'),
-    );
-
     const basePrompt = (systemPrompt || '') + crmInstruction;
     const conditionalResolved = resolveConditionalString(
       basePrompt,
@@ -1236,9 +1291,34 @@ export class TestChatService {
       contextVariables || {},
     );
 
-    if (!entries.length) return replacedPrompt;
+    // Filtra APENAS variáveis de negócio legítimas para a seção de memória
+    const cleanBusinessVars =
+      this.filterCleanBusinessVariables(contextVariables);
+    const businessEntries = Object.entries(cleanBusinessVars);
 
-    const contextBlock = entries
+    // Se não houver nenhuma variável de negócio válida, omite o bloco inteiro
+    if (!businessEntries.length) return replacedPrompt;
+
+    // Normaliza aliases redundantes (ex: se tem nome_cliente, não repete cliente_nome e nome_contato)
+    const seenLabels = new Set<string>();
+    const deduplicatedEntries: Array<[string, unknown]> = [];
+
+    for (const [k, v] of businessEntries) {
+      const normalizedKey =
+        k === 'cliente_nome' || k === 'nome_contato' || k === 'caller_name'
+          ? 'nome_cliente'
+          : k === 'company_name' || k === 'empresa'
+            ? 'nome_empresa'
+            : k;
+
+      if (seenLabels.has(normalizedKey)) continue;
+      seenLabels.add(normalizedKey);
+      deduplicatedEntries.push([k, v]);
+    }
+
+    if (!deduplicatedEntries.length) return replacedPrompt;
+
+    const contextBlock = deduplicatedEntries
       .map(([key, value]) => `- {{${key}}}: ${this.formatContextValue(value)}`)
       .join('\n');
 
