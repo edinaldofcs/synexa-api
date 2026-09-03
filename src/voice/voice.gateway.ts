@@ -876,6 +876,25 @@ export class VoiceGateway
               const agentName = agent
                 ? String(agent.service_step || agent.id)
                 : null;
+              const rawPrompt = agent?.prompt || '';
+
+              // Resolve variáveis {{chave}} do prompt com o estado da sessão
+              // (incluindo retornos de APIs) + dados do cliente — pipeline
+              // compartilhado com a telefonia
+              const systemPrompt = buildVoiceSystemPrompt({
+                agent,
+                fallbackPrompt:
+                  msg.systemPrompt ||
+                  msg.prompt ||
+                  'Você é um assistente de voz inteligente e natural do Synexa. Responda com clareza e empatia.',
+                variables: {
+                  nome_agente: clientDb?.agent_name || '',
+                  // nome_empresa = empresa/tenant; nome_cliente (pessoa na
+                  // linha) só existe se estiver no estado da sessão
+                  nome_empresa: clientDb?.company_name || '',
+                  ...session.state,
+                },
+              });
 
               // Informa ao painel qual agente está ativo e com quais
               // ferramentas ele entrou na ligação
@@ -883,8 +902,11 @@ export class VoiceGateway
                 type: 'agent_info',
                 agentId: session.agentId || null,
                 agentName,
+                serviceStep: agent?.service_step || agentName,
                 model: session.model,
                 voiceName: session.voiceName,
+                systemPrompt,
+                rawPrompt,
                 tools: voiceToolDeclarations.map((tool) => ({
                   name: tool.name,
                   description: tool.description,
@@ -981,24 +1003,6 @@ export class VoiceGateway
                 session.liveProvider.close();
               }
               session.liveProvider = provider;
-
-              // Resolve variáveis {{chave}} do prompt com o estado da sessão
-              // (incluindo retornos de APIs) + dados do cliente — pipeline
-              // compartilhado com a telefonia
-              const systemPrompt = buildVoiceSystemPrompt({
-                agent,
-                fallbackPrompt:
-                  msg.systemPrompt ||
-                  msg.prompt ||
-                  'Você é um assistente de voz inteligente e natural do Synexa. Responda com clareza e empatia.',
-                variables: {
-                  nome_agente: clientDb?.agent_name || '',
-                  // nome_empresa = empresa/tenant; nome_cliente (pessoa na
-                  // linha) só existe se estiver no estado da sessão
-                  nome_empresa: clientDb?.company_name || '',
-                  ...session.state,
-                },
-              });
 
               provider.connect({
                 apiKey,
@@ -1234,6 +1238,9 @@ export class VoiceGateway
                 type: 'agent_switched',
                 agentId: targetAgent.id,
                 agentName: targetAgent.service_step || targetAgent.id,
+                serviceStep: targetAgent.service_step || targetAgent.id,
+                model: session.model,
+                voiceName: session.voiceName,
               });
             };
 

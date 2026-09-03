@@ -1291,45 +1291,7 @@ export class TestChatService {
       contextVariables || {},
     );
 
-    // Filtra APENAS variáveis de negócio legítimas para a seção de memória
-    const cleanBusinessVars =
-      this.filterCleanBusinessVariables(contextVariables);
-    const businessEntries = Object.entries(cleanBusinessVars);
-
-    // Se não houver nenhuma variável de negócio válida, omite o bloco inteiro
-    if (!businessEntries.length) return replacedPrompt;
-
-    // Normaliza aliases redundantes (ex: se tem nome_cliente, não repete cliente_nome e nome_contato)
-    const seenLabels = new Set<string>();
-    const deduplicatedEntries: Array<[string, unknown]> = [];
-
-    for (const [k, v] of businessEntries) {
-      const normalizedKey =
-        k === 'cliente_nome' || k === 'nome_contato' || k === 'caller_name'
-          ? 'nome_cliente'
-          : k === 'company_name' || k === 'empresa'
-            ? 'nome_empresa'
-            : k;
-
-      if (seenLabels.has(normalizedKey)) continue;
-      seenLabels.add(normalizedKey);
-      deduplicatedEntries.push([k, v]);
-    }
-
-    if (!deduplicatedEntries.length) return replacedPrompt;
-
-    const contextBlock = deduplicatedEntries
-      .map(([key, value]) => `- {{${key}}}: ${this.formatContextValue(value)}`)
-      .join('\n');
-
-    return [
-      replacedPrompt,
-      'Contexto persistido desta conversa:',
-      contextBlock,
-      'Use esses valores como memoria de trabalho quando forem relevantes para a resposta.',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
+    return replacedPrompt;
   }
 
   private isMaskedOrPlaceholder(k?: string | null) {
