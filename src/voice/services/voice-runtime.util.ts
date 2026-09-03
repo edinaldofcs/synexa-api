@@ -186,3 +186,39 @@ export function buildGreetingTurn(
     '"'
   );
 }
+
+/**
+ * Turno de entrada enviado quando ocorre uma transferência/troca de agente.
+ * Garante que o novo agente ENTRE FALANDO IMEDIATAMENTE e não fique esperando o cliente.
+ */
+export function buildSwitchTurn(
+  agent: unknown,
+  handoffText?: string,
+  variables: Record<string, unknown> = {},
+): string {
+  const configuredGreeting = resolveVoiceGreeting(agent);
+  if (configuredGreeting) {
+    let message = configuredGreeting;
+    if (Object.keys(variables).length) {
+      try {
+        message = resolvePromptTemplateString(message, variables);
+      } catch {
+        // interpolação falhou: usa o texto original
+      }
+    }
+    return (
+      `[EVENTO DO SISTEMA: TRANSFERÊNCIA DE ATENDIMENTO]\n` +
+      `Você acabou de assumir esta ligação agora. ` +
+      `${handoffText ? `O cliente disse por último: "${handoffText}". ` : ''}` +
+      `FALE IMEDIATAMENTE dizendo a seguinte mensagem inicial ao cliente, sem acrescentar ou remover nada: "${message}"`
+    );
+  }
+
+  const stepName = (agent as any)?.service_step || 'novo especialista';
+  return (
+    `[EVENTO DO SISTEMA: TRANSFERÊNCIA DE ATENDIMENTO]\n` +
+    `Você acabou de assumir a ligação neste momento na etapa "${stepName}". ` +
+    `${handoffText ? `O cliente disse por último: "${handoffText}". Responda de forma ágil e dê continuidade. ` : ''}` +
+    `INICIE SUA FALA IMEDIATAMENTE se apresentando ou dando andamento ao atendimento, sem aguardar o cliente falar primeiro.`
+  );
+}

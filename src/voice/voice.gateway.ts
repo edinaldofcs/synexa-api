@@ -38,8 +38,10 @@ import {
   mergeApiReturnIntoState,
   aiSpeaksFirstEnabled,
   buildGreetingTurn,
+  buildSwitchTurn,
   resolveMaxCallDurationSec,
 } from './services/voice-runtime.util';
+import { buildRawAgentPrompt } from '../agents/utils/agent-prompt-builder.util';
 
 const MAX_SESSION_STATE_BYTES = 32 * 1024;
 const MAX_SESSION_STATE_KEYS = 40;
@@ -497,6 +499,7 @@ export class VoiceGateway
             let connectAgent: (
               agent: any,
               handoffText?: string,
+              isSwitch?: boolean,
             ) => Promise<void>;
             let switchAgent: (
               agent: any,
@@ -787,7 +790,11 @@ export class VoiceGateway
               return saves;
             };
 
-            connectAgent = async (agent: any, handoffText?: string) => {
+            connectAgent = async (
+              agent: any,
+              handoffText?: string,
+              isSwitch = false,
+            ) => {
               const generation = session.nextGeneration();
               const [voiceTools, voiceSubagents] =
                 agent && session.clientId
@@ -876,7 +883,7 @@ export class VoiceGateway
               const agentName = agent
                 ? String(agent.service_step || agent.id)
                 : null;
-              const rawPrompt = agent?.prompt || '';
+              const rawPrompt = buildRawAgentPrompt(agent);
 
               // Resolve variáveis {{chave}} do prompt com o estado da sessão
               // (incluindo retornos de APIs) + dados do cliente — pipeline
@@ -1059,10 +1066,25 @@ export class VoiceGateway
                       }, maxDurationSec * 1000);
                     }
                   }
-                  // Turnos de entrada (contexto de handoff / saudação)
-                  // pertencem ao PRIMEIRO agente da chamada: transições de
-                  // agente não reenviam a mensagem inicial.
-                  if (!introTurnSent) {
+                  if (isSwitch) {
+                    // Na troca de agente: o novo agente ENTRA FALANDO IMEDIATAMENTE sem aguardar o cliente!
+                    setTimeout(() => {
+                      if (generation === session.providerGeneration) {
+                        const switchTurn = buildSwitchTurn(
+                          agent,
+                          handoffText,
+                          session.state as Record<string, unknown>,
+                        );
+                        sendDebug(
+                          'session',
+                          `🤖 Agente "${agentName}" assume a palavra imediatamente na transferência.`,
+                          undefined,
+                          'success',
+                        );
+                        provider.sendText(switchTurn);
+                      }
+                    }, 50);
+                  } else if (!introTurnSent) {
                     if (handoffText) {
                       introTurnSent = true;
                       setTimeout(() => {
@@ -1227,13 +1249,24 @@ export class VoiceGateway
                   },
                 });
               }
-              await connectAgent(targetAgent, handoffText);
+              await connectAgent(targetAgent, handoffText, true);
               sendDebug(
                 'session',
                 `🔄 Condição de Ativação Atendida: Troca de agente para "${targetAgent.service_step || targetAgent.id}"`,
                 { conditions: targetAgent.activation_conditions },
                 'success',
               );
+              const targetRawPrompt = buildRawAgentPrompt(targetAgent);
+              const targetSystemPrompt = buildVoiceSystemPrompt({
+                agent: targetAgent,
+                fallbackPrompt:
+                  'Você é um assistente de voz inteligente e natural do Synexa.',
+                variables: {
+                  nome_agente: clientDb?.agent_name || '',
+                  nome_empresa: clientDb?.company_name || '',
+                  ...session.state,
+                },
+              });
               sendToClient({
                 type: 'agent_switched',
                 agentId: targetAgent.id,
@@ -1241,6 +1274,8 @@ export class VoiceGateway
                 serviceStep: targetAgent.service_step || targetAgent.id,
                 model: session.model,
                 voiceName: session.voiceName,
+                rawPrompt: targetRawPrompt,
+                systemPrompt: targetSystemPrompt,
               });
             };
 

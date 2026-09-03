@@ -123,3 +123,35 @@ export function buildAgentPromptFromBlocks(
 
   return prompt;
 }
+
+export function buildRawAgentPrompt(agent: {
+  system_prompt?: string | null;
+  persona_blocks?: PersonaBlocks | Record<string, any> | null;
+  prompt?: string | null;
+}): string {
+  if (!agent) return '';
+  const blocks = agent.persona_blocks as PersonaBlocks | null | undefined;
+  if (blocks && typeof blocks === 'object') {
+    const parts = STRUCTURED_SECTIONS.map(({ key, label }) => {
+      const content = blocks[key];
+      const value =
+        typeof content === 'string'
+          ? content.trim()
+          : Array.isArray(content)
+            ? content
+                .map((c) =>
+                  typeof c === 'string' ? c : (c as any)?.text || '',
+                )
+                .join('\n')
+                .trim()
+            : '';
+      return value ? `## ${label}\n${value}` : '';
+    }).filter((p) => p.length > 0);
+
+    if (parts.length > 0) {
+      return parts.join('\n\n');
+    }
+  }
+
+  return agent.system_prompt || agent.prompt || '';
+}
