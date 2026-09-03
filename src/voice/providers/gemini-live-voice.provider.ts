@@ -69,8 +69,7 @@ export class GeminiLiveVoiceProvider {
 
   public connect(options: GeminiLiveConnectOptions): void {
     this.options = options;
-    const model =
-      options.model === DEFAULT_LIVE_MODEL ? options.model : DEFAULT_LIVE_MODEL;
+    const model = options.model || DEFAULT_LIVE_MODEL;
     const voice = options.voiceName || 'Kore';
     const handshakeTimeout = options.handshakeTimeoutMs ?? 15000;
 

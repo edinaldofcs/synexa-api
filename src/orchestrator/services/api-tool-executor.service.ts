@@ -694,9 +694,23 @@ export class ApiToolExecutorService {
 
     const response = await fetch(url, init);
     const contentType = response.headers.get('content-type') || '';
-    const raw = contentType.includes('application/json')
-      ? await response.json()
-      : await response.text();
+    // Respostas 204/corpo vazio não têm JSON válido: ler como texto e só
+    // então tentar parse evita exceção em No Content / corpo vazio.
+    let raw: unknown = null;
+    if (response.status !== 204) {
+      const text = await response.text();
+      if (text) {
+        if (contentType.includes('application/json')) {
+          try {
+            raw = JSON.parse(text);
+          } catch {
+            raw = text;
+          }
+        } else {
+          raw = text;
+        }
+      }
+    }
 
     const extracted = this.applyExtractData(raw, tool.extract_data);
 
@@ -1542,7 +1556,10 @@ export class ApiToolExecutorService {
               .join('.');
 
             if (remainingPath) {
-              current = current
+              // Retorna imediatamente o array mapeado: continuar o loop
+              // tentaria acessar [key] sobre a lista e sobrescreveria o
+              // resultado com undefined/null.
+              return current
                 .map((item: any) => this.getByPath(item, remainingPath))
                 .filter((v: any) => v !== null && v !== undefined);
             }

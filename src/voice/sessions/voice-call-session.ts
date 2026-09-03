@@ -367,99 +367,143 @@ export class VoiceCallSession {
         void this.flushTranscriptBuffers();
       },
       onToolCall: async (functionCalls) => {
-        if (!clientId || !selectedAgent?.id) return;
-        const responses = await Promise.all(
-          functionCalls.map(async (call) => {
-            if (call.name === 'finalizar_chamada') {
-              this.logger.log(
-                `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}`,
-              );
-              this.hangupCause = 'ai_requested';
+        // O protocolo BidiGenerateContent do Gemini Live paralisa a síntese
+        // de fala até receber toolResponse para CADA call recebida. Qualquer
+        // exceção ou return antecipado que omita o sendToolResponse provoca
+        // deadlock — por isso todo caminho abaixo termina respondendo.
+        const errorResponseFor = (call: any, err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          return {
+            id: call.id,
+            name: call.name,
+            response: { ok: false, error: message },
+          };
+        };
+
+        if (!clientId || !selectedAgent?.id) {
+          this.logger.warn(
+            `⚠️ [VoiceCallSession] Tool calls sem clientId/agente (chamada ${this.id})`,
+          );
+          this.liveProvider.sendToolResponse(
+            functionCalls.map((call) =>
+              errorResponseFor(call, 'Client or agent unavailable'),
+            ),
+          );
+          return;
+        }
+
+        let responses: Array<{ id: string; name: string; response: any }>;
+        try {
+          responses = await Promise.all(
+            functionCalls.map(async (call) => {
               try {
-                await this.config.onAiHangupRequest?.();
+                if (call.name === 'finalizar_chamada') {
+                  this.logger.log(
+                    `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}`,
+                  );
+                  this.hangupCause = 'ai_requested';
+                  try {
+                    await this.config.onAiHangupRequest?.();
+                  } catch (err: any) {
+                    this.logger.warn(
+                      `Falha ao solicitar hangup do canal: ${err.message}`,
+                    );
+                  }
+                  // Fallback: encerra a sessão de IA mesmo sem confirmação do canal
+                  setTimeout(() => void this.end('ai_requested'), 2500);
+                  return {
+                    id: call.id,
+                    name: call.name,
+                    response: { ok: true },
+                  };
+                }
+
+                if (call.name === 'set_call_variable') {
+                  const varName = call.args?.name;
+                  const varVal = call.args?.value;
+                  if (varName && varVal && this.telephonyAdapter.setVariable) {
+                    await this.telephonyAdapter.setVariable(
+                      String(varName),
+                      String(varVal),
+                    );
+                    return {
+                      id: call.id,
+                      name: call.name,
+                      response: { ok: true, saved: { [varName]: varVal } },
+                    };
+                  }
+                  return {
+                    id: call.id,
+                    name: call.name,
+                    response: {
+                      ok: false,
+                      error: 'Telephony does not support setVariable',
+                    },
+                  };
+                }
+
+                if (!this.voiceToolsService) {
+                  return {
+                    id: call.id,
+                    name: call.name,
+                    response: { ok: false, error: 'Tools service unavailable' },
+                  };
+                }
+
+                const isSubagent = call.name.startsWith('subagent_');
+                const response = isSubagent
+                  ? await this.voiceToolsService.executeSubagent(
+                      clientId,
+                      selectedAgent.id,
+                      call.name,
+                      call.args || {},
+                    )
+                  : await this.voiceToolsService.execute(
+                      clientId,
+                      selectedAgent.id,
+                      call.name,
+                      call.args || {},
+                      this.sessionState,
+                    );
+
+                if (
+                  response &&
+                  typeof response === 'object' &&
+                  (response as Record<string, unknown>).ok !== false
+                ) {
+                  const apiResponse = response as Record<string, any>;
+                  const returnedState =
+                    apiResponse?.data && typeof apiResponse.data === 'object'
+                      ? apiResponse.data
+                      : Object.fromEntries(
+                          Object.entries(apiResponse).filter(
+                            ([key]) =>
+                              !['ok', 'status', 'message', 'error'].includes(
+                                key,
+                              ),
+                          ),
+                        );
+                  this.sessionState = {
+                    ...this.sessionState,
+                    ...returnedState,
+                  };
+                }
+
+                return { id: call.id, name: call.name, response };
               } catch (err: any) {
                 this.logger.warn(
-                  `Falha ao solicitar hangup do canal: ${err.message}`,
+                  `🛠️ [VoiceCallSession] Tool ${call.name} falhou: ${err.message}`,
                 );
+                return errorResponseFor(call, err);
               }
-              // Fallback: encerra a sessão de IA mesmo sem confirmação do canal
-              setTimeout(() => void this.end('ai_requested'), 2500);
-              return {
-                id: call.id,
-                name: call.name,
-                response: { ok: true },
-              };
-            }
-
-            if (call.name === 'set_call_variable') {
-              const varName = call.args?.name;
-              const varVal = call.args?.value;
-              if (varName && varVal && this.telephonyAdapter.setVariable) {
-                await this.telephonyAdapter.setVariable(
-                  String(varName),
-                  String(varVal),
-                );
-                return {
-                  id: call.id,
-                  name: call.name,
-                  response: { ok: true, saved: { [varName]: varVal } },
-                };
-              }
-              return {
-                id: call.id,
-                name: call.name,
-                response: {
-                  ok: false,
-                  error: 'Telephony does not support setVariable',
-                },
-              };
-            }
-
-            if (!this.voiceToolsService) {
-              return {
-                id: call.id,
-                name: call.name,
-                response: { ok: false, error: 'Tools service unavailable' },
-              };
-            }
-
-            const isSubagent = call.name.startsWith('subagent_');
-            const response = isSubagent
-              ? await this.voiceToolsService.executeSubagent(
-                  clientId,
-                  selectedAgent.id,
-                  call.name,
-                  call.args || {},
-                )
-              : await this.voiceToolsService.execute(
-                  clientId,
-                  selectedAgent.id,
-                  call.name,
-                  call.args || {},
-                  this.sessionState,
-                );
-
-            if (
-              response &&
-              typeof response === 'object' &&
-              (response as Record<string, unknown>).ok !== false
-            ) {
-              const apiResponse = response as Record<string, any>;
-              const returnedState =
-                apiResponse?.data && typeof apiResponse.data === 'object'
-                  ? apiResponse.data
-                  : Object.fromEntries(
-                      Object.entries(apiResponse).filter(
-                        ([key]) =>
-                          !['ok', 'status', 'message', 'error'].includes(key),
-                      ),
-                    );
-              this.sessionState = { ...this.sessionState, ...returnedState };
-            }
-
-            return { id: call.id, name: call.name, response };
-          }),
-        );
+            }),
+          );
+        } catch (err: any) {
+          this.logger.error(
+            `❌ [VoiceCallSession] Falha ao processar tool calls: ${err.message}`,
+          );
+          responses = functionCalls.map((call) => errorResponseFor(call, err));
+        }
         this.liveProvider.sendToolResponse(responses);
       },
       onUsageMetadata: (meta) => {
@@ -695,6 +739,9 @@ export class VoiceCallSession {
   public async end(reason?: string): Promise<void> {
     if (this.isEnded) return;
     this.isEnded = true;
+    // Descarrega os buffers de transcript antes de encerrar para não perder
+    // as últimas frases quando o cliente desliga no meio de um turno.
+    await this.flushTranscriptBuffers();
     if (this.maxDurationTimer) {
       clearTimeout(this.maxDurationTimer);
       this.maxDurationTimer = null;

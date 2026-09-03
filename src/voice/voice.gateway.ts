@@ -533,11 +533,26 @@ export class VoiceGateway
               generation: number,
               responseProvider: GeminiLiveVoiceProvider,
             ) => {
-              if (
-                generation !== session.providerGeneration ||
-                !session.clientId ||
-                !session.agentId
-              ) {
+              if (generation !== session.providerGeneration) {
+                return;
+              }
+              if (!session.clientId || !session.agentId) {
+                // Sem contexto não há como processar, mas o Gemini Live exige
+                // toolResponse para cada call — omitir provoca deadlock.
+                try {
+                  responseProvider.sendToolResponse(
+                    functionCalls.map((call: any) => ({
+                      id: call.id,
+                      name: call.name,
+                      response: {
+                        ok: false,
+                        error: 'Client or agent unavailable',
+                      },
+                    })),
+                  );
+                } catch {
+                  // provider indisponível
+                }
                 return;
               }
 
@@ -611,11 +626,19 @@ export class VoiceGateway
                     'calculate_discount_installment',
                   ].includes(call.name)
                 ) {
-                  const nativeRes = this.nativeToolsService.execute(
-                    call.name,
-                    args,
-                    session.state,
-                  );
+                  let nativeRes: any;
+                  try {
+                    nativeRes = this.nativeToolsService.execute(
+                      call.name,
+                      args,
+                      session.state,
+                    );
+                  } catch (err: any) {
+                    this.logger.error(
+                      `❌ [VoiceGateway] Tool nativa ${call.name} falhou: ${err.message}`,
+                    );
+                    nativeRes = { ok: false, error: err.message };
+                  }
                   if (
                     [
                       'set_session_variable',
@@ -624,7 +647,7 @@ export class VoiceGateway
                     ].includes(call.name) &&
                     nativeRes.ok
                   ) {
-                    await flushConversationState();
+                    await flushConversationState().catch(() => undefined);
                     sendDebug(
                       'session',
                       `💾 Variável salva na sessão pelo assistente.`,
@@ -640,20 +663,30 @@ export class VoiceGateway
                 }
 
                 const isSubagent = call.name.startsWith('subagent_');
-                const response = isSubagent
-                  ? await this.voiceToolsService.executeSubagent(
-                      session.clientId,
-                      session.agentId,
-                      call.name,
-                      args,
-                    )
-                  : await this.voiceToolsService.execute(
-                      session.clientId,
-                      session.agentId,
-                      call.name,
-                      args,
-                      session.state,
-                    );
+                let response: any;
+                try {
+                  response = isSubagent
+                    ? await this.voiceToolsService.executeSubagent(
+                        session.clientId,
+                        session.agentId,
+                        call.name,
+                        args,
+                      )
+                    : await this.voiceToolsService.execute(
+                        session.clientId,
+                        session.agentId,
+                        call.name,
+                        args,
+                        session.state,
+                      );
+                } catch (err: any) {
+                  // O Gemini Live exige toolResponse para cada call: uma
+                  // exceção aqui não pode impedir a resposta (deadlock).
+                  this.logger.error(
+                    `❌ [VoiceGateway] Tool ${call.name} falhou: ${err.message}`,
+                  );
+                  response = { ok: false, error: err.message };
+                }
 
                 // Transição pós-API: avalia condições de ativação sobre o
                 // estado enriquecido com o retorno da API/subagente
@@ -690,7 +723,7 @@ export class VoiceGateway
                         sessionSaves,
                       }),
                     );
-                    await flushConversationState();
+                    await flushConversationState().catch(() => undefined);
                     sendDebug(
                       'session',
                       `📊 Variáveis do estado: ${summarizeState(session.state)}`,
@@ -699,7 +732,9 @@ export class VoiceGateway
                     );
                     // Na voz a troca é SEMPRE imediata após a validação da API
                     // (o activation_mode se aplica apenas ao texto)
-                    const conditionAgent = await findActivationAgent(false);
+                    const conditionAgent = await findActivationAgent(
+                      false,
+                    ).catch(() => null);
                     if (conditionAgent) {
                       requestedAgent = conditionAgent;
                       switchReason =
@@ -723,7 +758,13 @@ export class VoiceGateway
                 responses.push({ id: call.id, name: call.name, response });
               }
 
-              responseProvider.sendToolResponse(responses);
+              try {
+                responseProvider.sendToolResponse(responses);
+              } catch (err: any) {
+                this.logger.error(
+                  `Falha ao enviar toolResponse ao provider: ${err.message}`,
+                );
+              }
 
               // Analytics: avaliação dos marcadores de negócio pós-tool
               if (session.clientId && session.companyId) {

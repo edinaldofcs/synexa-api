@@ -699,6 +699,20 @@ export class TestChatService {
               model: immediateResult.model,
             });
 
+            // Handoff imediato retorna antes do bloco normal de CRM:
+            // grava Analytics/CRM aqui para não perder o registro do turno.
+            const immediateCrmRecord = await this.recordAnalyticsAndCrm({
+              clientId,
+              companyId,
+              conversationId,
+              originChannel,
+              contextVariables: immediateResult.contextVariables,
+              state,
+              toolCalls: immediateResult.result.toolCalls || [],
+              client,
+              conversationRecord,
+            });
+
             return {
               ...immediateResult.result,
               agentName: activation.agent.service_step || activation.agent.id,
@@ -716,6 +730,7 @@ export class TestChatService {
                   messagesUsed: history.length,
                 },
                 contextVariables: immediateResult.contextVariables,
+                crmRecord: immediateCrmRecord,
                 availableTools: immediateResult.availableTools,
                 toolCalls: immediateResult.result.toolCalls || [],
                 usage: immediateResult.result.usage,
@@ -738,67 +753,20 @@ export class TestChatService {
 
       let crmRecord: Record<string, unknown> | undefined;
       if (conversationId) {
-        try {
-          // P31: reaproveita client/conversation/state lidos no início do turno
-          // (nenhuma re-leitura de painel_clients, conversations ou
-          // conversation_state aqui).
-          const freshConv = conversationRecord;
-
-          const clientMeta =
-            (client?.metadata as Record<string, unknown>) || {};
-          const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
-
-          const combinedState = {
-            ...contextVariables,
-            ...state,
-          };
-
-          // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
-          if (clientId && companyId) {
-            await this.analyticsService.evaluateAndRecord({
-              clientId,
-              companyId,
-              conversationId,
-              endUserId: freshConv?.end_user_id || null,
-              originChannel: originChannel,
-              toolNames: (result.toolCalls || [])
-                .map((call: any) => call?.name)
-                .filter(
-                  (name: unknown): name is string => typeof name === 'string',
-                ),
-              state: combinedState,
-            });
-          }
-
-          crmRecord = this.crmDataTransformer.transform({
-            sessionState: combinedState,
-            endUser: freshConv?.end_users,
-            conversation: freshConv,
-            config: crmOutputConfig,
-          });
-
-          if (freshConv) {
-            const existingMeta =
-              (freshConv.metadata as Record<string, unknown>) || {};
-            await this.prisma.conversations.update({
-              where: { id: conversationId },
-              data: {
-                metadata: {
-                  ...existingMeta,
-                  // Reconstitui o contexto persistido neste turno
-                  // (saveConversationContext) sem reler o documento.
-                  [TEST_CHAT_CONTEXT_KEY]: contextVariables,
-                  crm_record: crmRecord,
-                } as any,
-              },
-            });
-          }
-        } catch (crmErr) {
-          this.logger.warn(
-            { error: (crmErr as Error).message },
-            'Falha ao transformar crmRecord no test-chat',
-          );
-        }
+        // P31: reaproveita client/conversation/state lidos no início do turno
+        // (nenhuma re-leitura de painel_clients, conversations ou
+        // conversation_state aqui).
+        crmRecord = await this.recordAnalyticsAndCrm({
+          clientId,
+          companyId,
+          conversationId,
+          originChannel,
+          contextVariables,
+          state,
+          toolCalls: result.toolCalls || [],
+          client,
+          conversationRecord,
+        });
       }
 
       const finalResponse = {
@@ -1706,5 +1674,97 @@ export class TestChatService {
         `Falha ao sincronizar painel_interactions no test-chat: ${err}`,
       );
     }
+  }
+
+  /**
+   * Grava Analytics (marcadores de negócio), o crmRecord transformado e o
+   * contexto/CRM no metadata da conversa. Extraída do fluxo principal para
+   * também ser invocada no handoff imediato, que retorna antes do bloco
+   * normal de CRM. Retorna o crmRecord (quando produzido).
+   */
+  private async recordAnalyticsAndCrm(params: {
+    clientId?: string;
+    companyId?: string;
+    conversationId?: string;
+    originChannel?: string;
+    contextVariables: Record<string, unknown>;
+    state: Record<string, unknown>;
+    toolCalls: Array<{ name?: string }>;
+    client?: Awaited<ReturnType<TestChatService['loadPainelClient']>>;
+    conversationRecord?: Awaited<
+      ReturnType<TestChatService['loadConversationRecord']>
+    >;
+  }): Promise<Record<string, unknown> | undefined> {
+    const {
+      clientId,
+      companyId,
+      conversationId,
+      originChannel,
+      contextVariables,
+      state,
+      toolCalls,
+      client,
+      conversationRecord,
+    } = params;
+    let crmRecord: Record<string, unknown> | undefined;
+    if (!conversationId) return crmRecord;
+    try {
+      const freshConv = conversationRecord;
+
+      const clientMeta = (client?.metadata as Record<string, unknown>) || {};
+      const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
+
+      const combinedState = {
+        ...contextVariables,
+        ...state,
+      };
+
+      // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
+      if (clientId && companyId) {
+        await this.analyticsService.evaluateAndRecord({
+          clientId,
+          companyId,
+          conversationId,
+          endUserId: freshConv?.end_user_id || null,
+          originChannel: originChannel,
+          toolNames: toolCalls
+            .map((call) => call?.name)
+            .filter(
+              (name: unknown): name is string => typeof name === 'string',
+            ),
+          state: combinedState,
+        });
+      }
+
+      crmRecord = this.crmDataTransformer.transform({
+        sessionState: combinedState,
+        endUser: freshConv?.end_users,
+        conversation: freshConv,
+        config: crmOutputConfig,
+      });
+
+      if (freshConv) {
+        const existingMeta =
+          (freshConv.metadata as Record<string, unknown>) || {};
+        await this.prisma.conversations.update({
+          where: { id: conversationId },
+          data: {
+            metadata: {
+              ...existingMeta,
+              // Reconstitui o contexto persistido neste turno
+              // (saveConversationContext) sem reler o documento.
+              [TEST_CHAT_CONTEXT_KEY]: contextVariables,
+              crm_record: crmRecord,
+            } as any,
+          },
+        });
+      }
+    } catch (crmErr) {
+      this.logger.warn(
+        { error: (crmErr as Error).message },
+        'Falha ao transformar crmRecord no test-chat',
+      );
+    }
+    return crmRecord;
   }
 }

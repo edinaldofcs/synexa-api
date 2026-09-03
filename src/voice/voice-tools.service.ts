@@ -372,7 +372,7 @@ export class VoiceToolsService {
         : args.context_data
           ? JSON.stringify(args.context_data)
           : 'Nenhum dado adicional fornecido.';
-    const model = subagent.model || 'gemini-2.5-flash-lite';
+    const model = subagent.model || 'gemini-2.0-flash-lite';
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
@@ -700,7 +700,13 @@ export class VoiceToolsService {
   }
 
   private toSubagentFunctionName(name: string) {
-    return `subagent_${name.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+    const clean = name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return `subagent_${clean || 'tool'}`;
   }
 
   private asRecord(value: unknown): Record<string, any> {

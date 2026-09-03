@@ -40,6 +40,7 @@ describe('ApiToolExecutorService - chaining tenant scope & cycle guard', () => {
       status,
       headers: { get: () => 'application/json' },
       json: async () => body,
+      text: async () => JSON.stringify(body),
     });
   };
 

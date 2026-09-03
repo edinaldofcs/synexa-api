@@ -464,12 +464,19 @@ export class LlmToolLoopService {
           max_tokens: 4096,
         };
         if (streaming) retryPayload.stream = true;
+        const retryHeaders: Record<string, string> = {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        };
+        if (
+          baseUrl.includes('google') ||
+          baseUrl.includes('generativelanguage')
+        ) {
+          retryHeaders['x-goog-api-key'] = apiKey;
+        }
         const retryRes = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
+          headers: retryHeaders,
           body: JSON.stringify(retryPayload),
           signal: AbortSignal.timeout(15_000),
         });
