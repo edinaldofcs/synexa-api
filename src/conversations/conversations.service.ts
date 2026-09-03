@@ -805,11 +805,16 @@ export class ConversationsService {
     }
 
     const clientMsgs = messages.filter((m) => m.sender_type === 'user');
-    const aiMsgs = messages.filter((m) => m.sender_type === 'ai' || m.sender_type === 'agent');
+    const aiMsgs = messages.filter(
+      (m) => m.sender_type === 'ai' || m.sender_type === 'agent',
+    );
     const totalMsgs = messages.length;
 
     // Análise semântica de sentimento
-    const fullText = messages.map((m) => m.content || '').join(' ').toLowerCase();
+    const fullText = messages
+      .map((m) => m.content || '')
+      .join(' ')
+      .toLowerCase();
     let sentiment: 'positive' | 'neutral' | 'negative' = 'neutral';
     if (
       fullText.includes('obrigado') ||
@@ -832,7 +837,9 @@ export class ConversationsService {
     }
 
     const keyPoints: string[] = [];
-    keyPoints.push(`Total de ${totalMsgs} mensagens (${clientMsgs.length} do cliente, ${aiMsgs.length} do assistente)`);
+    keyPoints.push(
+      `Total de ${totalMsgs} mensagens (${clientMsgs.length} do cliente, ${aiMsgs.length} do assistente)`,
+    );
     if (conv.origin_channel) {
       keyPoints.push(`Canal de origem: ${conv.origin_channel.toUpperCase()}`);
     }
@@ -901,20 +908,52 @@ export class ConversationsService {
 
     const suggestions: string[] = [];
 
-    if (lastMsg.includes('preço') || lastMsg.includes('valor') || lastMsg.includes('quanto')) {
-      suggestions.push(`Olá ${userName}, nossos valores variam de acordo com o plano ideal para você. Gostaria que eu te apresentasse as opções?`);
-      suggestions.push(`Com certeza! Posso gerar uma proposta personalizada para você agora mesmo.`);
-      suggestions.push(`Vou consultar as condições especiais disponíveis para o seu cadastro, um instante.`);
-    } else if (lastMsg.includes('pix') || lastMsg.includes('pagamento') || lastMsg.includes('boleto')) {
-      suggestions.push(`Segue a chave PIX para pagamento: [chave-pix-da-empresa]. Assim que realizar, por favor envie o comprovante por aqui.`);
-      suggestions.push(`Gerei o seu link de pagamento seguro. Você pode efetuar via cartão ou PIX.`);
-    } else if (lastMsg.includes('humano') || lastMsg.includes('atendente') || lastMsg.includes('falar com')) {
-      suggestions.push(`Olá ${userName}, já estou com o seu histórico aberto. Como posso te ajudar agora?`);
-      suggestions.push(`Perfeito, sou o atendente responsável pelo seu caso. Em que posso ser útil hoje?`);
+    if (
+      lastMsg.includes('preço') ||
+      lastMsg.includes('valor') ||
+      lastMsg.includes('quanto')
+    ) {
+      suggestions.push(
+        `Olá ${userName}, nossos valores variam de acordo com o plano ideal para você. Gostaria que eu te apresentasse as opções?`,
+      );
+      suggestions.push(
+        `Com certeza! Posso gerar uma proposta personalizada para você agora mesmo.`,
+      );
+      suggestions.push(
+        `Vou consultar as condições especiais disponíveis para o seu cadastro, um instante.`,
+      );
+    } else if (
+      lastMsg.includes('pix') ||
+      lastMsg.includes('pagamento') ||
+      lastMsg.includes('boleto')
+    ) {
+      suggestions.push(
+        `Segue a chave PIX para pagamento: [chave-pix-da-empresa]. Assim que realizar, por favor envie o comprovante por aqui.`,
+      );
+      suggestions.push(
+        `Gerei o seu link de pagamento seguro. Você pode efetuar via cartão ou PIX.`,
+      );
+    } else if (
+      lastMsg.includes('humano') ||
+      lastMsg.includes('atendente') ||
+      lastMsg.includes('falar com')
+    ) {
+      suggestions.push(
+        `Olá ${userName}, já estou com o seu histórico aberto. Como posso te ajudar agora?`,
+      );
+      suggestions.push(
+        `Perfeito, sou o atendente responsável pelo seu caso. Em que posso ser útil hoje?`,
+      );
     } else {
-      suggestions.push(`Olá ${userName}, verifiquei a sua mensagem e já estou providenciando as informações.`);
-      suggestions.push(`Entendido! Precisa de mais algum detalhe sobre esse assunto?`);
-      suggestions.push(`Obrigado pelo contato! Se precisar de qualquer outra assistência, estou à disposição.`);
+      suggestions.push(
+        `Olá ${userName}, verifiquei a sua mensagem e já estou providenciando as informações.`,
+      );
+      suggestions.push(
+        `Entendido! Precisa de mais algum detalhe sobre esse assunto?`,
+      );
+      suggestions.push(
+        `Obrigado pelo contato! Se precisar de qualquer outra assistência, estou à disposição.`,
+      );
     }
 
     return { suggestions };
@@ -966,7 +1005,9 @@ export class ConversationsService {
     text += `--- HISTÓRICO DE MENSAGENS ---\n\n`;
 
     for (const msg of conv.messages || []) {
-      const time = msg.created_at ? new Date(msg.created_at).toLocaleTimeString('pt-BR') : '';
+      const time = msg.created_at
+        ? new Date(msg.created_at).toLocaleTimeString('pt-BR')
+        : '';
       const sender =
         msg.sender_type === 'user'
           ? conv.end_users?.name || 'Cliente'
@@ -1000,7 +1041,8 @@ export class ConversationsService {
     }
 
     const rawMeta = (conv.metadata as Record<string, any>) || {};
-    const contextVars = (rawMeta.context_variables as Record<string, any>) || {};
+    const contextVars =
+      (rawMeta.context_variables as Record<string, any>) || {};
     const callId = rawMeta.call_id || rawMeta.callId;
     const channelId =
       rawMeta.channel_id ||
@@ -1040,7 +1082,10 @@ export class ConversationsService {
 
     // Busca de fallback nos diretórios se o arquivo contiver o UUID
     if (!foundPath) {
-      const searchDirs = ['/app/uploads/recordings', '/var/spool/asterisk/monitor'];
+      const searchDirs = [
+        '/app/uploads/recordings',
+        '/var/spool/asterisk/monitor',
+      ];
       const targets = [conversationId, callId, channelId].filter(Boolean);
 
       for (const dir of searchDirs) {

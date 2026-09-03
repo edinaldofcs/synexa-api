@@ -1,6 +1,11 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 import { TablesService } from './tables.service';
+import { RolesGuard } from '../common/auth/roles.guard';
+import { Roles } from '../common/auth/roles.decorator';
+import { ROLES } from '../common/auth/roles.constants';
 
+@UseGuards(RolesGuard)
+@Roles(ROLES.PLATFORM_ADMIN, ROLES.COMPANY_ADMIN)
 @Controller('tables') // /api/tables
 export class TablesController {
   constructor(private readonly tablesService: TablesService) {}

@@ -10,6 +10,7 @@ import {
   type AgentConfig,
 } from '../types/capabilities.types';
 import { resolveChainedApiId } from '../../common/utils/api-chaining.util';
+import { validateWebhookUrl } from '../../common/utils/ssrf-guard';
 import {
   HANDOFF_TOOL_NAME,
   LEGACY_TOOL_NAMES,
@@ -668,6 +669,8 @@ export class ApiToolExecutorService {
       }
       url = url.replace(`{${param}}`, encodeURIComponent(String(value)));
     }
+
+    await validateWebhookUrl(url, process.env.ENVIRONMENT === 'development');
 
     const method = (tool.method || 'GET').toUpperCase();
     const headers = this.asRecord(tool.headers);

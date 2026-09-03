@@ -303,7 +303,10 @@ export class VoiceGateway
                 selectedAgent = await this.prisma.painel_agents.findFirst({
                   where: {
                     client_id: session.clientId,
-                    service_step: { equals: requestedAgentId, mode: 'insensitive' },
+                    service_step: {
+                      equals: requestedAgentId,
+                      mode: 'insensitive',
+                    },
                   },
                 });
               }

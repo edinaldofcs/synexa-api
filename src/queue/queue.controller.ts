@@ -25,7 +25,7 @@ import { ROLES } from '../common/auth/roles.constants';
 import { sanitize } from '../common/utils/sanitize-log.util';
 
 @UseGuards(RolesGuard)
-@Roles(ROLES.PLATFORM_ADMIN, ROLES.COMPANY_ADMIN)
+@Roles(ROLES.PLATFORM_ADMIN)
 @Controller('admin/queue')
 export class QueueController {
   private readonly logger = new Logger(QueueController.name);

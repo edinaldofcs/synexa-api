@@ -980,7 +980,8 @@ export class TestChatService {
       if (typeof val === 'object') continue;
 
       const strVal = String(val).trim();
-      if (strVal === '' || strVal === 'null' || strVal === 'undefined') continue;
+      if (strVal === '' || strVal === 'null' || strVal === 'undefined')
+        continue;
 
       clean[key] = val;
     }

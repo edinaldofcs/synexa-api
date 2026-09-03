@@ -67,4 +67,28 @@ describe('MediaProcessor - guarda de tamanho (MAX_MEDIA_BYTES)', () => {
       processor.process({ data: { media_asset_id: 'asset-2' } } as never),
     ).rejects.toThrow(/no storage path or source URL/i);
   });
+
+  it('rejeita download de source_url privada ou localhost (SSRF protection)', async () => {
+    const { processor } = build({
+      id: 'asset-ssrf',
+      company_id: 'company-1',
+      client_id: 'client-1',
+      mime_type: 'image/png',
+      file_size: 100,
+      storage_bucket: null,
+      storage_path: null,
+      source_url: 'http://127.0.0.1:3000/internal',
+    });
+    (processor as any).isDevelopment = false;
+
+    await expect(
+      (processor as any).loadAssetBytes({
+        storage_bucket: null,
+        storage_path: null,
+        source_url: 'http://127.0.0.1:3000/internal',
+      }),
+    ).rejects.toThrow(/Access to private\/internal IP is not allowed/);
+
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
 });

@@ -11,6 +11,7 @@ import { JOB_PROCESS_MEDIA, QUEUE_MEDIA } from '../queue.constants';
 import type { MediaJobData } from '../queue.service';
 import { StorageProvider } from '../../media/providers/storage-provider.interface';
 import { llmConfig } from '../../orchestrator/providers/llm-config';
+import { validateWebhookUrl } from '../../common/utils/ssrf-guard';
 
 @Processor(QUEUE_MEDIA)
 export class MediaProcessor {
@@ -463,6 +464,7 @@ export class MediaProcessor {
     }
 
     if (asset.source_url) {
+      await validateWebhookUrl(asset.source_url, this.isDevelopment);
       const response = await fetch(asset.source_url);
       if (!response.ok)
         throw new BadRequestException(`Source URL returned ${response.status}`);

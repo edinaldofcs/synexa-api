@@ -4,6 +4,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUrl,
   Max,
   Min,
 } from 'class-validator';
@@ -26,7 +27,14 @@ export class CreateMediaAssetDto {
   storage_path?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUrl(
+    {
+      require_tld: false,
+      require_protocol: true,
+      protocols: ['http', 'https'],
+    },
+    { message: 'source_url deve ser uma URL válida http ou https' },
+  )
   source_url?: string;
 
   @IsOptional()

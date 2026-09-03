@@ -3,10 +3,15 @@ import { ApiToolExecutorService } from './api-tool-executor.service';
 jest.mock('../../common/utils/api-chaining.util', () => ({
   resolveChainedApiId: jest.fn(),
 }));
+jest.mock('../../common/utils/ssrf-guard', () => ({
+  validateWebhookUrl: jest.fn().mockResolvedValue(undefined),
+}));
 
 import { resolveChainedApiId } from '../../common/utils/api-chaining.util';
+import { validateWebhookUrl } from '../../common/utils/ssrf-guard';
 
 const mockedResolveChainedApiId = resolveChainedApiId as jest.Mock;
+const mockedValidateWebhookUrl = validateWebhookUrl as jest.Mock;
 
 describe('ApiToolExecutorService - chaining tenant scope & cycle guard', () => {
   const prisma = {
@@ -135,6 +140,31 @@ describe('ApiToolExecutorService - chaining tenant scope & cycle guard', () => {
       }),
     );
     expect(result.chained_result).toBeDefined();
+  });
+
+  it('rejeita execução quando validateWebhookUrl detecta SSRF', async () => {
+    mockedValidateWebhookUrl.mockRejectedValueOnce(
+      new Error('Access to private/internal IP is not allowed'),
+    );
+
+    await expect(
+      (service as any).executeApiTool(
+        {
+          id: 'api-ssrf',
+          name: 'Privada',
+          functionName: 'privada',
+          method: 'GET',
+          url: 'http://169.254.169.254/latest/meta-data',
+          client_id: 'client-1',
+          extract_data: null,
+        },
+        {},
+        {},
+        new Set(['api-ssrf']),
+      ),
+    ).rejects.toThrow(/Access to private\/internal IP is not allowed/);
+
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 

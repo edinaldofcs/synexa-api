@@ -14,4 +14,3 @@ export function validateUUID(id: string, fieldName = 'id'): string {
   }
   return id;
 }
-

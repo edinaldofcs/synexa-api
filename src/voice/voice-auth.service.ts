@@ -48,7 +48,9 @@ export class VoiceAuthService {
           company_id: companyId,
           OR: [
             { agent_name: { equals: requestedClientId, mode: 'insensitive' } },
-            { company_name: { equals: requestedClientId, mode: 'insensitive' } },
+            {
+              company_name: { equals: requestedClientId, mode: 'insensitive' },
+            },
           ],
         },
         select: { id: true },

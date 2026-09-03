@@ -4,6 +4,7 @@ import { RedisService } from '../common/redis/redis.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { resolveChainedApiId } from '../common/utils/api-chaining.util';
 import { LEGACY_TOOL_NAMES } from '../orchestrator/constants/tools.constants';
+import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 
 const TOOLS_CACHE_TTL_SECONDS = 30;
 
@@ -161,9 +162,21 @@ export class VoiceToolsService {
       url = url.replace(`{${parameter}}`, encodeURIComponent(String(value)));
     }
 
-    if (url.startsWith('/')) {
-      const port = process.env.PORT || 3000;
-      url = `http://127.0.0.1:${port}${url}`;
+    if (!/^https?:\/\//i.test(url)) {
+      return {
+        ok: false,
+        error:
+          'URL da ferramenta inválida. Deve iniciar com http:// ou https://',
+      };
+    }
+
+    try {
+      await validateWebhookUrl(url, process.env.ENVIRONMENT === 'development');
+    } catch (err: any) {
+      return {
+        ok: false,
+        error: `URL bloqueada por segurança (SSRF): ${err.message}`,
+      };
     }
 
     const method = (tool.method || 'GET').toUpperCase();
@@ -361,10 +374,13 @@ export class VoiceToolsService {
           : 'Nenhum dado adicional fornecido.';
     const model = subagent.model || 'gemini-2.5-flash-lite';
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: subagent.system_prompt }] },
           contents: [

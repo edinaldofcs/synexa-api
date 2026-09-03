@@ -1,8 +1,13 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { TablesService } from './tables.service';
 import { Tenant } from '../common/auth/tenant.decorator';
+import { RolesGuard } from '../common/auth/roles.guard';
+import { Roles } from '../common/auth/roles.decorator';
+import { ROLES } from '../common/auth/roles.constants';
 
+@UseGuards(RolesGuard)
+@Roles(ROLES.PLATFORM_ADMIN, ROLES.COMPANY_ADMIN)
 @Controller('export') // /api/export
 export class ExportController {
   constructor(private readonly tablesService: TablesService) {}

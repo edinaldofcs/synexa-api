@@ -3,10 +3,15 @@ import { VoiceToolsService } from './voice-tools.service';
 jest.mock('../common/utils/api-chaining.util', () => ({
   resolveChainedApiId: jest.fn(),
 }));
+jest.mock('../common/utils/ssrf-guard', () => ({
+  validateWebhookUrl: jest.fn().mockResolvedValue(undefined),
+}));
 
 import { resolveChainedApiId } from '../common/utils/api-chaining.util';
+import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 
 const mockedResolveChainedApiId = resolveChainedApiId as jest.Mock;
+const mockedValidateWebhookUrl = validateWebhookUrl as jest.Mock;
 
 const buildPrisma = (apiRecord: Record<string, unknown>) => {
   const prisma = {
@@ -418,5 +423,81 @@ describe('VoiceToolsService - cache Redis por (clientId, agentId)', () => {
 
     expect(tools).toEqual([cachedTool]);
     expect(prisma.painel_agents.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejeita ferramentas com URLs relativas ou esquema inválido', async () => {
+    const id = '33333333-3333-3333-3333-333333333333';
+    const { service } = buildPrisma({
+      id,
+      name: 'Relativa',
+      method: 'GET',
+      url: '/internal/endpoint',
+      extract_data: null,
+    });
+
+    const result = await service.execute(
+      'client-1',
+      agentId,
+      `relativa_${id.replace(/-/g, '_')}`,
+      {},
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('URL da ferramenta inválida');
+  });
+
+  it('rejeita ferramentas quando validateWebhookUrl bloqueia por SSRF', async () => {
+    mockedValidateWebhookUrl.mockRejectedValueOnce(
+      new Error('Access to private/internal IP is not allowed'),
+    );
+    const id = '44444444-4444-4444-4444-444444444444';
+    const { service } = buildPrisma({
+      id,
+      name: 'Bloqueada',
+      method: 'GET',
+      url: 'http://169.254.169.254/latest/meta-data',
+      extract_data: null,
+    });
+
+    const result = await service.execute(
+      'client-1',
+      agentId,
+      `bloqueada_${id.replace(/-/g, '_')}`,
+      {},
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('URL bloqueada por segurança (SSRF)');
+  });
+
+  it('delega subagente enviando x-goog-api-key no header (sem chave na URL)', async () => {
+    const { service, prisma } = buildPrisma({});
+    prisma.painel_agents.findFirst.mockResolvedValue({
+      transitions: { allowed_subagents: ['especialista'] },
+    });
+    prisma.painel_subagents.findMany.mockResolvedValue([
+      {
+        id: '55555555-5555-5555-5555-555555555555',
+        name: 'especialista',
+        model: 'gemini-2.5-flash-lite',
+        system_prompt: 'Você é um assistente.',
+        temperature: 0.5,
+      },
+    ]);
+    (service as any).providerKeyResolver = {
+      resolveApiKey: jest.fn().mockResolvedValue('secret-gemini-key'),
+    };
+    const requests = captureFetch({ ok: true, body: { candidates: [] } });
+
+    await service.executeSubagent(
+      'client-1',
+      agentId,
+      'subagent_especialista',
+      { task: 'Resumir fatura' },
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).not.toContain('key=');
+    expect((requests[0].init.headers as any)['x-goog-api-key']).toBe(
+      'secret-gemini-key',
+    );
   });
 });
