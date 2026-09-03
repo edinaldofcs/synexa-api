@@ -39,7 +39,27 @@ export interface GeminiLiveConnectOptions {
 
 const GOOGLE_LIVE_API_URL =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
-const DEFAULT_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
+export const DEFAULT_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
+
+/**
+ * Somente modelos Live (bidiGenerateContent) são aceitos na Live API —
+ * ex.: *-live-* e *native-audio*. O campo `model` do agente carrega o
+ * modelo de TEXTO (chat) e nunca deve ser repassado ao Live.
+ */
+export function isLiveCapableModel(model?: string | null): boolean {
+  if (!model) return false;
+  const normalized = model.toLowerCase();
+  return (
+    normalized.includes('live') ||
+    normalized.includes('native-audio') ||
+    normalized.includes('native_audio')
+  );
+}
+
+export function resolveLiveModel(requested?: string | null): string {
+  if (isLiveCapableModel(requested)) return requested as string;
+  return DEFAULT_LIVE_MODEL;
+}
 
 const EXPENSIVE_VOICES_MAP: Record<string, number> = {
   Flare: 1632, // Nota: Flare consome 1632 tokens de audio fixos por turno vs ~241 de outras vozes
@@ -69,7 +89,12 @@ export class GeminiLiveVoiceProvider {
 
   public connect(options: GeminiLiveConnectOptions): void {
     this.options = options;
-    const model = options.model || DEFAULT_LIVE_MODEL;
+    const model = resolveLiveModel(options.model);
+    if (options.model && model !== options.model) {
+      this.logger.warn(
+        `⚠️ [GeminiLive] Modelo "${options.model}" nao suporta bidiGenerateContent (Live); usando "${model}".`,
+      );
+    }
     const voice = options.voiceName || 'Kore';
     const handshakeTimeout = options.handshakeTimeoutMs ?? 15000;
 

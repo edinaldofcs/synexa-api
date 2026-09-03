@@ -1,4 +1,8 @@
-import { GeminiLiveVoiceProvider } from './gemini-live-voice.provider';
+import {
+  DEFAULT_LIVE_MODEL,
+  GeminiLiveVoiceProvider,
+  resolveLiveModel,
+} from './gemini-live-voice.provider';
 import WebSocketMock from 'ws';
 
 jest.mock('ws', () => {
@@ -32,6 +36,26 @@ const buildConnectedProvider = () => {
   const ws = (WebSocketMock as any).instances.slice(-1)[0] as MockWsInstance;
   return { provider, ws };
 };
+
+describe('resolveLiveModel', () => {
+  it('mantém o modelo configurado quando ele suporta Live (bidiGenerateContent)', () => {
+    expect(resolveLiveModel('gemini-2.0-flash-live-001')).toBe(
+      'gemini-2.0-flash-live-001',
+    );
+    expect(
+      resolveLiveModel('gemini-2.5-flash-preview-native-audio-dialog'),
+    ).toBe('gemini-2.5-flash-preview-native-audio-dialog');
+    expect(resolveLiveModel(DEFAULT_LIVE_MODEL)).toBe(DEFAULT_LIVE_MODEL);
+  });
+
+  it('cai para o modelo default quando o configurado é de texto/chat', () => {
+    expect(resolveLiveModel('openai/gpt-oss-120b')).toBe(DEFAULT_LIVE_MODEL);
+    expect(resolveLiveModel('gemini-2.5-flash')).toBe(DEFAULT_LIVE_MODEL);
+    expect(resolveLiveModel('gemini-2.0-flash-exp')).toBe(DEFAULT_LIVE_MODEL);
+    expect(resolveLiveModel(undefined)).toBe(DEFAULT_LIVE_MODEL);
+    expect(resolveLiveModel(null)).toBe(DEFAULT_LIVE_MODEL);
+  });
+});
 
 describe('GeminiLiveVoiceProvider - backpressure (ws.bufferedAmount)', () => {
   afterEach(() => {

@@ -1,6 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { ITelephonyAdapter } from '../adapters/telephony-adapter.interface';
-import { GeminiLiveVoiceProvider } from '../providers/gemini-live-voice.provider';
+import {
+  GeminiLiveVoiceProvider,
+  resolveLiveModel,
+} from '../providers/gemini-live-voice.provider';
 import {
   AudioGateService,
   AudioGateSession,
@@ -326,7 +329,7 @@ export class VoiceCallSession {
     // 6. Conecta a IA (Gemini Live Provider)
     await this.liveProvider.connect({
       apiKey: this.config.apiKey || process.env.GEMINI_API_KEY || '',
-      model: this.config.model || 'gemini-2.0-flash-exp',
+      model: resolveLiveModel(this.config.model),
       voiceName: this.config.voiceName || 'Aoede',
       systemPrompt,
       contextCompressionEnabled: this.config.contextCompressionEnabled ?? true,

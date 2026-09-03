@@ -10,7 +10,10 @@ import { WebSocket, WebSocketServer as WsServer } from 'ws';
 import { VoiceService } from './voice.service';
 import { VoiceAuthService } from './voice-auth.service';
 import { MockVoiceProvider } from './providers/mock-voice.provider';
-import { GeminiLiveVoiceProvider } from './providers/gemini-live-voice.provider';
+import {
+  GeminiLiveVoiceProvider,
+  resolveLiveModel,
+} from './providers/gemini-live-voice.provider';
 import { AudioGateService } from './services/audio-gate.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -372,10 +375,11 @@ export class VoiceGateway
             // do agente durante a abertura)
             const clientDb = await clientDbPromise;
 
-            session.model =
+            session.model = resolveLiveModel(
               selectedAgent?.model ||
-              msg.model ||
-              this.voiceService.getDefaultModel();
+                msg.model ||
+                this.voiceService.getDefaultModel(),
+            );
             session.voiceName =
               selectedAgent?.voice_name ||
               msg.voice ||
@@ -1263,8 +1267,9 @@ export class VoiceGateway
                 session.mockSession = null;
               }
               session.agentId = targetAgent.id;
-              session.model =
-                targetAgent.model || this.voiceService.getDefaultModel();
+              session.model = resolveLiveModel(
+                targetAgent.model || this.voiceService.getDefaultModel(),
+              );
               session.voiceName =
                 targetAgent.voice_name || this.voiceService.getDefaultVoice();
               session.state = pruneSessionState({
