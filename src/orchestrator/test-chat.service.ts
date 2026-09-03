@@ -15,6 +15,7 @@ import {
 } from './utils/condition-evaluator.util';
 import type { AgentConfig } from './types/capabilities.types';
 import { resolvePromptTemplateString } from '../common/utils/prompt-variables.util';
+import { resolveConditionalString } from '../common/utils/conditional-prompt.util';
 import {
   InboundDataMapperService,
   InboundMappingConfig,
@@ -1224,12 +1225,15 @@ export class TestChatService {
     const entries = Object.entries(contextVariables).filter(
       ([key, value]) => value !== undefined && !key.startsWith('_'),
     );
-    if (!entries.length && !crmInstruction) return systemPrompt;
 
     const basePrompt = (systemPrompt || '') + crmInstruction;
-    const replacedPrompt = resolvePromptTemplateString(
+    const conditionalResolved = resolveConditionalString(
       basePrompt,
-      contextVariables,
+      contextVariables || {},
+    );
+    const replacedPrompt = resolvePromptTemplateString(
+      conditionalResolved,
+      contextVariables || {},
     );
 
     if (!entries.length) return replacedPrompt;

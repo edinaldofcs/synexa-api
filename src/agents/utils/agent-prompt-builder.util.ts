@@ -65,7 +65,7 @@ export function buildAgentPromptFromBlocks(
       const content = blocks[key];
       const value =
         typeof content === 'string'
-          ? content.trim()
+          ? resolveConditionalString(content.trim(), mergedState)
           : Array.isArray(content)
             ? resolveConditionalBlocks(content, mergedState).trim()
             : '';
@@ -104,7 +104,9 @@ export function buildAgentPromptFromBlocks(
         }
       }
 
-      // Substituições padrão {{key}} e dinâmicas
+      // 1. Resolve blocos condicionais [SE ...] [SENÃO] [FIM SE]
+      prompt = resolveConditionalString(prompt, mergedState);
+      // 2. Substituições padrão {{key}} e dinâmicas
       prompt = resolvePromptTemplateString(prompt, mergedState);
 
       return prompt;
