@@ -58,6 +58,14 @@ export interface TestChatDebug {
   provider?: string;
   model?: string;
   agentId?: string;
+  effectiveSystemPrompt?: string;
+  rawSystemPrompt?: string;
+  latencyMs?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
   memory: {
     source: 'redis' | 'database' | 'none';
     messagesUsed: number;
@@ -369,6 +377,11 @@ export class TestChatService {
     }
 
     if (!conversationId || !clientId || !companyId) {
+      const effectiveSystemPrompt = this.buildContextualSystemPrompt(
+        systemPrompt,
+        contextVariables,
+      );
+      const startMs = Date.now();
       const result = await this.llmToolLoop.run({
         provider,
         model,
@@ -376,13 +389,11 @@ export class TestChatService {
         onToken,
         message,
         files,
-        systemPrompt: this.buildContextualSystemPrompt(
-          systemPrompt,
-          contextVariables,
-        ),
+        systemPrompt: effectiveSystemPrompt,
         history: [],
         tools: apiTools,
       });
+      const latencyMs = Date.now() - startMs;
       contextVariables = this.apiToolExecutor.mergeToolResults(
         contextVariables,
         result.toolCalls || [],
@@ -397,10 +408,14 @@ export class TestChatService {
           provider,
           model,
           agentId: resolvedAgentId || agentId,
+          effectiveSystemPrompt,
+          rawSystemPrompt: systemPrompt,
           memory: { source: 'none', messagesUsed: 0 },
           contextVariables,
           availableTools,
           toolCalls: result.toolCalls || [],
+          usage: result.usage,
+          latencyMs,
         },
       };
     }
@@ -463,6 +478,11 @@ export class TestChatService {
           total_tokens?: number;
         };
       };
+      const effectiveSystemPrompt = this.buildContextualSystemPrompt(
+        systemPrompt,
+        contextVariables,
+      );
+      const startMs = Date.now();
       try {
         result = await this.llmToolLoop.run({
           provider,
@@ -471,10 +491,7 @@ export class TestChatService {
           onToken,
           message,
           files,
-          systemPrompt: this.buildContextualSystemPrompt(
-            systemPrompt,
-            contextVariables,
-          ),
+          systemPrompt: effectiveSystemPrompt,
           history,
           tools: apiTools,
           context: this.buildLoopContext(
@@ -490,6 +507,7 @@ export class TestChatService {
         await this.failTestAgentRun(agentRun.id, error, agentRun.started_at);
         throw error;
       }
+      const latencyMs = Date.now() - startMs;
 
       const audioTranscript = result.transcription;
 
@@ -666,6 +684,8 @@ export class TestChatService {
                 provider,
                 model,
                 agentId: activation.agent.id,
+                effectiveSystemPrompt,
+                rawSystemPrompt: systemPrompt,
                 memory: {
                   source: memory.source,
                   messagesUsed: history.length,
@@ -673,6 +693,8 @@ export class TestChatService {
                 contextVariables: immediateResult.contextVariables,
                 availableTools: immediateResult.availableTools,
                 toolCalls: immediateResult.result.toolCalls || [],
+                usage: immediateResult.result.usage,
+                latencyMs,
               },
             };
           }
@@ -764,6 +786,8 @@ export class TestChatService {
           provider,
           model,
           agentId: resolvedAgentId || agentId,
+          effectiveSystemPrompt,
+          rawSystemPrompt: systemPrompt,
           memory: {
             source: memory.source,
             messagesUsed: history.length,
@@ -771,6 +795,8 @@ export class TestChatService {
           contextVariables,
           availableTools,
           toolCalls: result.toolCalls || [],
+          usage: result.usage,
+          latencyMs,
           crmRecord,
         },
       };
