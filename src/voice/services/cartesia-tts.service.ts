@@ -34,7 +34,7 @@ export class CartesiaTtsService {
     const apiKey = options.apiKey;
     const voiceId = options.voiceId || DEFAULT_CARTESIA_VOICE;
     const modelId = options.modelId || DEFAULT_CARTESIA_MODEL;
-    const sampleRate = options.sampleRate || 16000;
+    const sampleRate = options.sampleRate || 24000;
     const language = options.language || 'pt';
 
     const url = `wss://api.cartesia.ai/tts/websocket?api_key=${encodeURIComponent(

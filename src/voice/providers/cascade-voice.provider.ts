@@ -54,12 +54,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       );
     }
 
-    // Inicializa a sessão WebSocket com a Cartesia
+    // Inicializa a sessão WebSocket com a Cartesia em 24kHz (padrão de saída do Synexa)
     this.cartesiaSession = this.cartesiaTtsService.createSession({
       apiKey: cartesiaKey,
       voiceId,
       modelId: 'sonic-3.6',
-      sampleRate: 16000,
+      sampleRate: 24000,
       language: 'pt',
     });
 
