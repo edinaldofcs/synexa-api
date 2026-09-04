@@ -199,9 +199,15 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     }
 
     let model = this.options?.model || DEFAULT_LLM_MODEL;
-    // Modelos com 'live' ou 'native-audio' são exclusivos do WebSocket BidiGenerateContent
-    // e rejeitam streamGenerateContent (HTTP 400). Faz fallback para o modelo LLM de texto padrão.
-    if (!model || model.includes('live') || model.includes('native-audio')) {
+    // O endpoint da Google Generative Language API só aceita modelos da família gemini- de texto.
+    // Modelos de texto externos (ex: openai/gpt-oss-120b, llama-*) ou da Live API (live-preview)
+    // são automaticamente mapeados para o modelo de voz ultrarrápido oficial: gemini-2.5-flash-lite.
+    const isGeminiTextModel =
+      model.toLowerCase().startsWith('gemini-') &&
+      !model.includes('live') &&
+      !model.includes('native-audio');
+
+    if (!isGeminiTextModel) {
       model = DEFAULT_LLM_MODEL;
     }
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${geminiKey}`;

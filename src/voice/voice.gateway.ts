@@ -394,7 +394,10 @@ export class VoiceGateway
 
             if (voiceEngine === 'hybrid') {
               session.model =
-                rawModel && !rawModel.includes('live') && !rawModel.includes('native-audio')
+                rawModel &&
+                rawModel.toLowerCase().startsWith('gemini-') &&
+                !rawModel.includes('live') &&
+                !rawModel.includes('native-audio')
                   ? rawModel
                   : 'gemini-2.5-flash-lite';
               session.voiceName =
@@ -1097,7 +1100,12 @@ export class VoiceGateway
                 if (!session.voiceName || session.voiceName.length < 20) {
                   session.voiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
                 }
-                if (!session.model || session.model.includes('live') || session.model.includes('native-audio')) {
+                if (
+                  !session.model ||
+                  !session.model.toLowerCase().startsWith('gemini-') ||
+                  session.model.includes('live') ||
+                  session.model.includes('native-audio')
+                ) {
                   session.model = 'gemini-2.5-flash-lite';
                 }
                 provider = new CascadeVoiceProvider(
@@ -1333,7 +1341,10 @@ export class VoiceGateway
               session.agentId = targetAgent.id;
               if (session.voiceEngine === 'hybrid') {
                 session.model =
-                  targetAgent.model && !targetAgent.model.includes('live') && !targetAgent.model.includes('native-audio')
+                  targetAgent.model &&
+                  targetAgent.model.toLowerCase().startsWith('gemini-') &&
+                  !targetAgent.model.includes('live') &&
+                  !targetAgent.model.includes('native-audio')
                     ? targetAgent.model
                     : 'gemini-2.5-flash-lite';
                 session.voiceName =

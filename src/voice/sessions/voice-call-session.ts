@@ -338,6 +338,7 @@ export class VoiceCallSession {
       model:
         this.config.voiceEngine === 'hybrid'
           ? this.config.model &&
+            this.config.model.toLowerCase().startsWith('gemini-') &&
             !this.config.model.includes('live') &&
             !this.config.model.includes('native-audio')
             ? this.config.model
