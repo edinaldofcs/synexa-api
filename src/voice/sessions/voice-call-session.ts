@@ -335,7 +335,14 @@ export class VoiceCallSession {
       apiKey: this.config.apiKey || process.env.GEMINI_API_KEY || '',
       cartesiaApiKey: this.config.cartesiaApiKey,
       groqApiKey: this.config.groqApiKey,
-      model: resolveLiveModel(this.config.model),
+      model:
+        this.config.voiceEngine === 'hybrid'
+          ? this.config.model &&
+            !this.config.model.includes('live') &&
+            !this.config.model.includes('native-audio')
+            ? this.config.model
+            : 'gemini-2.5-flash-lite'
+          : resolveLiveModel(this.config.model),
       voiceName: this.config.voiceName,
       systemPrompt,
       contextCompressionEnabled: this.config.contextCompressionEnabled ?? true,

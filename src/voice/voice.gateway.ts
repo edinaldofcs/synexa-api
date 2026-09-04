@@ -383,16 +383,33 @@ export class VoiceGateway
             // do agente durante a abertura)
             const clientDb = await clientDbPromise;
 
-            session.model = resolveLiveModel(
+            const clientMeta = (clientDb?.metadata as Record<string, unknown>) || {};
+            const voiceEngine = ((msg.engine || clientMeta.voice_engine || 'hybrid') as string) === 'live_api' ? 'live_api' : 'hybrid';
+            session.voiceEngine = voiceEngine;
+
+            const rawModel =
               selectedAgent?.model ||
-                msg.model ||
-                this.voiceService.getDefaultModel(),
-            );
-            session.voiceName =
-              selectedAgent?.voice_name ||
-              msg.voice ||
-              clientDb?.voice_name ||
-              this.voiceService.getDefaultVoice();
+              msg.model ||
+              this.voiceService.getDefaultModel();
+
+            if (voiceEngine === 'hybrid') {
+              session.model =
+                rawModel && !rawModel.includes('live') && !rawModel.includes('native-audio')
+                  ? rawModel
+                  : 'gemini-2.5-flash-lite';
+              session.voiceName =
+                (selectedAgent?.voice_name && selectedAgent.voice_name.length > 20 ? selectedAgent.voice_name : null) ||
+                (clientDb?.voice_name && clientDb.voice_name.length > 20 ? clientDb.voice_name : null) ||
+                (msg.voice && msg.voice.length > 20 ? msg.voice : null) ||
+                'cb2694c3-715f-4da9-99f3-1c974fff2928';
+            } else {
+              session.model = resolveLiveModel(rawModel);
+              session.voiceName =
+                selectedAgent?.voice_name ||
+                msg.voice ||
+                clientDb?.voice_name ||
+                this.voiceService.getDefaultVoice();
+            }
 
             // Cria a conversa omnichannel no banco
             const conversation = await this.prisma.conversations.create({
@@ -1080,11 +1097,15 @@ export class VoiceGateway
                 if (!session.voiceName || session.voiceName.length < 20) {
                   session.voiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
                 }
+                if (!session.model || session.model.includes('live') || session.model.includes('native-audio')) {
+                  session.model = 'gemini-2.5-flash-lite';
+                }
                 provider = new CascadeVoiceProvider(
                   this.cartesiaTtsService,
                   this.groqWhisperSttService,
                 );
               } else {
+                session.model = resolveLiveModel(session.model);
                 provider = new GeminiLiveVoiceProvider();
               }
 
@@ -1310,11 +1331,22 @@ export class VoiceGateway
                 session.mockSession = null;
               }
               session.agentId = targetAgent.id;
-              session.model = resolveLiveModel(
-                targetAgent.model || this.voiceService.getDefaultModel(),
-              );
-              session.voiceName =
-                targetAgent.voice_name || this.voiceService.getDefaultVoice();
+              if (session.voiceEngine === 'hybrid') {
+                session.model =
+                  targetAgent.model && !targetAgent.model.includes('live') && !targetAgent.model.includes('native-audio')
+                    ? targetAgent.model
+                    : 'gemini-2.5-flash-lite';
+                session.voiceName =
+                  targetAgent.voice_name && targetAgent.voice_name.length > 20
+                    ? targetAgent.voice_name
+                    : 'cb2694c3-715f-4da9-99f3-1c974fff2928';
+              } else {
+                session.model = resolveLiveModel(
+                  targetAgent.model || this.voiceService.getDefaultModel(),
+                );
+                session.voiceName =
+                  targetAgent.voice_name || this.voiceService.getDefaultVoice();
+              }
               session.state = pruneSessionState({
                 ...session.state,
                 current_agent_id: targetAgent.id,

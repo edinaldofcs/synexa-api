@@ -198,7 +198,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       return;
     }
 
-    const model = this.options?.model || DEFAULT_LLM_MODEL;
+    let model = this.options?.model || DEFAULT_LLM_MODEL;
+    // Modelos com 'live' ou 'native-audio' são exclusivos do WebSocket BidiGenerateContent
+    // e rejeitam streamGenerateContent (HTTP 400). Faz fallback para o modelo LLM de texto padrão.
+    if (!model || model.includes('live') || model.includes('native-audio')) {
+      model = DEFAULT_LLM_MODEL;
+    }
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${geminiKey}`;
 
     this.abortController = new AbortController();
