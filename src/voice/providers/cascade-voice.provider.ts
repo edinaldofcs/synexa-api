@@ -20,6 +20,10 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private abortController: AbortController | null = null;
 
   private inboundAudioBuffers: Buffer[] = [];
+  private preRollBuffers: Buffer[] = [];
+  private consecutiveBargeInFrames = 0;
+  private hasVoiceInCurrentTurn = false;
+
   private conversationHistory: Array<{
     role: 'user' | 'model';
     parts: Array<{ text?: string; functionCall?: any; functionResponse?: any }>;
@@ -67,31 +71,100 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   public sendAudio(base64Pcm16: string, _sampleRate = 16000): void {
     if (!base64Pcm16) return;
 
-    // Se a IA estiver falando e o usuário emitir som (áudio pelo gate), ativa barge-in imediato
-    if (this.isSpeaking) {
-      this.handleInterruption();
-    }
-
+    let buffer: Buffer;
     try {
-      const buffer = Buffer.from(base64Pcm16, 'base64');
-      this.inboundAudioBuffers.push(buffer);
+      buffer = Buffer.from(base64Pcm16, 'base64');
     } catch (err: any) {
       this.logger.error(`Erro ao decodificar buffer de áudio: ${err.message}`);
+      return;
+    }
+
+    const { peak, rms } = this.getBufferEnergy(buffer);
+    // Limiar de fala perceptível humana (ruído de fundo/sala é tipicamente peak < 400 e rms < 100)
+    const isSpeechChunk = peak >= 1000 || rms >= 180;
+
+    // Cenário 1: A IA está falando no momento
+    if (this.isSpeaking) {
+      if (!isSpeechChunk) {
+        // Silêncio / ruído ambiente do usuário não interrompe a IA nem acumula buffer
+        this.consecutiveBargeInFrames = 0;
+        return;
+      }
+
+      // O usuário está emitindo som real enquanto a IA fala
+      this.consecutiveBargeInFrames++;
+      this.inboundAudioBuffers.push(buffer);
+
+      // Exige pelo menos 2 frames consecutivos de voz (~40-60ms) para confirmar barge-in intencional
+      if (this.consecutiveBargeInFrames >= 2) {
+        this.logger.log(
+          `⚡ [CascadeVoice] Barge-in confirmado pelo usuário (Peak: ${peak}, RMS: ${Math.round(rms)}). Abortando áudio da IA.`,
+        );
+        this.handleInterruption();
+        this.consecutiveBargeInFrames = 0;
+        this.hasVoiceInCurrentTurn = true;
+      }
+      return;
+    }
+
+    // Cenário 2: É a vez do usuário falar (IA calada)
+    if (isSpeechChunk) {
+      if (!this.hasVoiceInCurrentTurn) {
+        this.hasVoiceInCurrentTurn = true;
+        // Prepend pre-roll para não cortar o primeiro fonema
+        if (this.preRollBuffers.length > 0) {
+          this.inboundAudioBuffers.push(...this.preRollBuffers);
+          this.preRollBuffers = [];
+        }
+      }
+      this.inboundAudioBuffers.push(buffer);
+    } else {
+      if (this.hasVoiceInCurrentTurn) {
+        // Usuário já começou a falar e fez uma pausa breve entre palavras; preserva o buffer
+        this.inboundAudioBuffers.push(buffer);
+      } else {
+        // Usuário ainda não falou; mantém apenas janela deslizante de pre-roll (~200ms)
+        this.preRollBuffers.push(buffer);
+        if (this.preRollBuffers.length > 6) {
+          this.preRollBuffers.shift();
+        }
+      }
     }
   }
 
   public sendAudioStreamEnd(): void {
-    if (this.inboundAudioBuffers.length === 0) return;
-
-    const fullBuffer = Buffer.concat(this.inboundAudioBuffers);
-    this.inboundAudioBuffers = [];
-
-    // Ignora buffers minúsculos que sejam apenas ruído estático (< 100ms = 3200 bytes a 16kHz)
-    if (fullBuffer.length < 3200) {
+    // Se não houve fala real no turno atual ou se o buffer está vazio, descarta silêncio
+    if (!this.hasVoiceInCurrentTurn || this.inboundAudioBuffers.length === 0) {
+      this.inboundAudioBuffers = [];
+      this.preRollBuffers = [];
+      this.hasVoiceInCurrentTurn = false;
       return;
     }
 
-    void this.processUserSpeech(fullBuffer);
+    const fullBuffer = Buffer.concat(this.inboundAudioBuffers);
+    this.inboundAudioBuffers = [];
+    this.preRollBuffers = [];
+    this.hasVoiceInCurrentTurn = false;
+
+    const durationMs = Math.round(fullBuffer.length / 32);
+
+    // Ignora buffers menores que 300ms (ruído transiente ou estalo)
+    if (durationMs < 300) {
+      this.logger.debug(`[CascadeVoice] Áudio muito curto descartado (${durationMs}ms)`);
+      return;
+    }
+
+    const { peak, rms } = this.getBufferEnergy(fullBuffer);
+
+    // VAD de nível de energia global: se a energia média for de sala silenciosa, não gasta STT
+    if (peak < 800 && rms < 150) {
+      this.logger.debug(
+        `[CascadeVoice] Áudio descartado por baixa energia (RMS: ${Math.round(rms)}, Peak: ${peak}, Dur: ${durationMs}ms)`,
+      );
+      return;
+    }
+
+    void this.processUserSpeech(fullBuffer, rms, durationMs);
   }
 
   public sendText(text: string): void {
@@ -131,16 +204,84 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       this.cartesiaSession = null;
     }
     this.inboundAudioBuffers = [];
+    this.preRollBuffers = [];
+    this.consecutiveBargeInFrames = 0;
+    this.hasVoiceInCurrentTurn = false;
     this.conversationHistory = [];
     this.options?.onClose?.();
   }
 
   // ── MÉTODOS INTERNOS DO PIPELINE ────────────────────────────────
 
+  private getBufferEnergy(buffer: Buffer): { peak: number; rms: number } {
+    let peak = 0;
+    let sumSquares = 0;
+    const sampleCount = Math.floor(buffer.length / 2);
+    for (let i = 0; i + 1 < buffer.length; i += 2) {
+      const sample = buffer.readInt16LE(i);
+      const abs = Math.abs(sample);
+      if (abs > peak) peak = abs;
+      sumSquares += sample * sample;
+    }
+    const rms = sampleCount > 0 ? Math.sqrt(sumSquares / sampleCount) : 0;
+    return { peak, rms };
+  }
+
+  private isWhisperHallucination(
+    text: string,
+    rms: number,
+    durationMs: number,
+  ): boolean {
+    const clean = text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s]/gi, '')
+      .trim();
+
+    if (!clean) return true;
+
+    // Alucinações clássicas do Whisper geradas em trechos de silêncio ou ruído de microfone
+    const knownHallucinations = new Set([
+      'obrigado',
+      'obrigada',
+      'muito obrigado',
+      'muito obrigada',
+      'e ai',
+      'voce',
+      'amem',
+      'tchau',
+      'valeu',
+      'de nada',
+      'ate a proxima',
+      'ate logo',
+      'bom dia',
+      'boa tarde',
+      'boa noite',
+      'subtitles by',
+      'legendas',
+      'legendas pela comunidade',
+    ]);
+
+    if (knownHallucinations.has(clean)) {
+      // Se a energia foi relativamente baixa ou a duração foi curta, é ruído/alucinação de silêncio
+      if (rms < 350 || durationMs < 1200) {
+        return true;
+      }
+    }
+
+    if (clean.includes('subtitles') || clean.includes('legendas')) {
+      return true;
+    }
+
+    return false;
+  }
+
   private handleInterruption(): void {
     if (this.isSpeaking) {
       this.logger.debug('⚡ [CascadeVoice] Barge-in detectado: abortando fala da IA');
       this.isSpeaking = false;
+      this.consecutiveBargeInFrames = 0;
       if (this.activeContextId && this.cartesiaSession) {
         this.cartesiaSession.cancelContext(this.activeContextId);
         this.activeContextId = null;
@@ -153,7 +294,11 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     }
   }
 
-  private async processUserSpeech(pcmBuffer: Buffer): Promise<void> {
+  private async processUserSpeech(
+    pcmBuffer: Buffer,
+    rms: number,
+    durationMs: number,
+  ): Promise<void> {
     const groqKey =
       this.options?.groqApiKey || process.env.GROQ_API_KEY || '';
 
@@ -169,6 +314,14 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       );
 
       if (!userText || !userText.trim()) return;
+
+      // Filtro Anti-Alucinação do Whisper em áudios de baixa energia/curtos
+      if (this.isWhisperHallucination(userText, rms, durationMs)) {
+        this.logger.warn(
+          `⚠️ [CascadeVoice] Alucinação do Whisper suprimida: "${userText}" (RMS: ${Math.round(rms)}, Dur: ${durationMs}ms)`,
+        );
+        return;
+      }
 
       this.options?.onUserTranscript?.(userText);
       await this.executeLlmAndSpeak(userText);
