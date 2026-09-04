@@ -1,6 +1,6 @@
 import { WebSocket } from 'ws';
 import type { AudioGateSession } from '../services/audio-gate.service';
-import type { GeminiLiveVoiceProvider } from '../providers/gemini-live-voice.provider';
+import type { IVoiceProvider } from '../providers/voice-provider.interface';
 import type { WebRtcAdapter } from '../adapters/webrtc/web-webrtc.adapter';
 
 export interface VoiceAiMessageBuffer {
@@ -21,7 +21,7 @@ export interface VoiceMockSession {
  */
 export class VoiceClientSession {
   clientWs: WebSocket;
-  liveProvider: GeminiLiveVoiceProvider | null = null;
+  liveProvider: IVoiceProvider | null = null;
   gateSession: AudioGateSession | null = null;
   /** Canal Web sob o contrato ITelephonyAdapter (pipeline unificado). */
   callAdapter: WebRtcAdapter | null = null;
@@ -42,6 +42,7 @@ export class VoiceClientSession {
   aiResponseStarted = false;
   model = 'gemini-3.1-flash-live-preview';
   voiceName = 'Aoede';
+  voiceEngine: 'hybrid' | 'live_api' = 'hybrid';
   holdsSessionSlot = false;
   telemetryPersisted = false;
   state: Record<string, unknown> = {};

@@ -52,6 +52,9 @@ function makeGateway(config: Record<string, unknown> = {}, redis?: any) {
       buildTelemetryPayload: jest.fn().mockReturnValue(null),
     } as any,
     redisService as any,
+    {} as any,
+    {} as any,
+    {} as any,
   );
   return {
     gateway,

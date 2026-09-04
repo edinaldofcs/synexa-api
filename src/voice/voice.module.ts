@@ -22,6 +22,8 @@ import { VoiceToolsService } from './voice-tools.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { AnalyticsModule } from '../analytics/analytics.module';
 import { SessionService } from '../common/auth/session.service';
+import { CartesiaTtsService } from './services/cartesia-tts.service';
+import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
 
 // No standalone (SERVICE_ROLE=voice) o VoiceModule nao passa pelo AppModule,
 // que registra o ThrottlerGuard global — aqui registramos o Throttler apenas
@@ -56,6 +58,8 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     ModelPricingService,
     ProviderKeyResolverService,
     VoiceToolsService,
+    CartesiaTtsService,
+    GroqWhisperSttService,
     ...(voiceStandalone
       ? [
           {
@@ -78,6 +82,8 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     TelephonyAdapterFactory,
     TelephonyEndpointResolverService,
     VoiceSessionFactory,
+    CartesiaTtsService,
+    GroqWhisperSttService,
   ],
 })
 export class VoiceModule {}

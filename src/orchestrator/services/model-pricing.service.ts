@@ -131,6 +131,25 @@ export class ModelPricingService {
     return Number((durationCost + tokenCost).toFixed(6));
   }
 
+  calculateHybridVoiceCost(params: {
+    durationSeconds: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    ttsCharacters?: number;
+  }): number {
+    const duration = params.durationSeconds || 0;
+    const sttCost = this.calculateAudioCost(duration);
+    // Cartesia Sonic: $35 por 1M caracteres (~15 chars/seg de fala ativa)
+    const ttsChars = params.ttsCharacters ?? Math.round(duration * 15);
+    const cartesiaCost = (ttsChars / 1_000_000) * 35;
+    const llmCost = this.calculateTokenCost({
+      model: 'gemini-2.5-flash-lite',
+      inputTokens: params.inputTokens || 0,
+      outputTokens: params.outputTokens || 0,
+    });
+    return Number((sttCost + cartesiaCost + llmCost).toFixed(6));
+  }
+
   calculateBillable(rawCostUsd: number, isByok = false): BillableCalculation {
     const markupPercent = isByok ? 0 : this.getMarkupPercent();
     const exchangeRate = this.getExchangeRate();

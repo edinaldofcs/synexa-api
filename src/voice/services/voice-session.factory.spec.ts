@@ -16,6 +16,8 @@ const buildFactory = (maxSessions: number) => {
     {} as any,
     keyResolver as any,
     {} as any,
+    {} as any,
+    {} as any,
   );
 };
 

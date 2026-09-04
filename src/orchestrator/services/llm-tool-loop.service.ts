@@ -111,6 +111,8 @@ export class LlmToolLoopService {
         return this.listGroqModels(apiKey);
       case 'openrouter':
         return this.listOpenRouterModels(apiKey);
+      case 'cartesia':
+        return this.listCartesiaModels(apiKey);
       default:
         throw new Error(`Provedor desconhecido: ${provider}`);
     }
@@ -894,5 +896,21 @@ export class LlmToolLoopService {
       .filter((model: any) => model.id)
       .map((model: any) => model.id)
       .sort();
+  }
+
+  private async listCartesiaModels(apiKey: string): Promise<string[]> {
+    if (!apiKey) throw new Error('API key da Cartesia não fornecida');
+    const res = await fetch('https://api.cartesia.ai/voices', {
+      headers: {
+        'X-API-Key': apiKey,
+        'Cartesia-Version': '2024-11-13',
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Cartesia API erro (${res.status}): ${err}`);
+    }
+    return ['sonic-3.6'];
   }
 }

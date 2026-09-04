@@ -193,11 +193,18 @@ export class VoiceTelemetryService {
     if (!session.companyId) return;
 
     try {
-      const rawCost = this.pricingService.calculateVoiceLiveCost({
-        durationSeconds,
-        inputTokens: session.inputTokens,
-        outputTokens: session.outputTokens,
-      });
+      const rawCost =
+        session.voiceEngine === 'hybrid'
+          ? this.pricingService.calculateHybridVoiceCost({
+              durationSeconds,
+              inputTokens: session.inputTokens,
+              outputTokens: session.outputTokens,
+            })
+          : this.pricingService.calculateVoiceLiveCost({
+              durationSeconds,
+              inputTokens: session.inputTokens,
+              outputTokens: session.outputTokens,
+            });
 
       // 1. Fecha a conversa omnichannel
       if (session.conversationId) {
@@ -217,7 +224,10 @@ export class VoiceTelemetryService {
             company_id: session.companyId,
             client_id: session.clientId,
             conversation_id: session.conversationId,
-            provider: 'gemini-live',
+            provider:
+              session.voiceEngine === 'hybrid'
+                ? 'cartesia-cascade'
+                : 'gemini-live',
             model: session.model,
             status: 'success',
             input_tokens: session.inputTokens,
@@ -226,7 +236,8 @@ export class VoiceTelemetryService {
             cost: rawCost,
             latency_ms: durationSeconds * 1000,
             trace: {
-              type: 'voice_live_session',
+              type: 'voice_session',
+              engine: session.voiceEngine,
               duration_seconds: durationSeconds,
               voice_name: session.voiceName,
               interrupted_count: session.interruptedCount,

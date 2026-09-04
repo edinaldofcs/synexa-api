@@ -68,7 +68,9 @@ const EXPENSIVE_VOICES_MAP: Record<string, number> = {
 const DEFAULT_WS_BACKPRESSURE_BYTES = 1048576;
 const BACKPRESSURE_LOG_EVERY = 100;
 
-export class GeminiLiveVoiceProvider {
+import { IVoiceProvider } from './voice-provider.interface';
+
+export class GeminiLiveVoiceProvider implements IVoiceProvider {
   private readonly logger = new Logger(GeminiLiveVoiceProvider.name);
   private ws: WebSocket | null = null;
   private isReady = false;

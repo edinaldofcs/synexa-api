@@ -369,6 +369,8 @@ export class TestChatService {
           model = 'llama-3.3-70b-versatile';
         } else if (provider.toLowerCase() === 'openrouter') {
           model = 'google/gemini-2.5-flash';
+        } else if (provider.toLowerCase() === 'cartesia') {
+          model = 'sonic-3.6';
         }
       }
 
@@ -399,6 +401,34 @@ export class TestChatService {
       throw new Error(
         `Configuração incompleta ou chave não encontrada para o provedor "${provider || 'desconhecido'}". Verifique a chave de API em Configurações > Provedores de IA.`,
       );
+    }
+
+    if (provider.toLowerCase() === 'cartesia') {
+      const startMs = Date.now();
+      const res = await fetch('https://api.cartesia.ai/voices', {
+        headers: {
+          'X-API-Key': apiKey,
+          'Cartesia-Version': '2024-11-13',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Cartesia API erro (${res.status}): ${err}`);
+      }
+      return {
+        text: 'Chave da Cartesia validada com sucesso! Provedor de Voz pronto para uso.',
+        debug: {
+          originChannel: originChannel || 'test',
+          provider: 'cartesia',
+          model: 'sonic-3.6',
+          latencyMs: Date.now() - startMs,
+          memory: { source: 'none', messagesUsed: 0 },
+          contextVariables: {},
+          availableTools: [],
+          toolCalls: [],
+        },
+      };
     }
 
     if (!conversationId || !clientId || !companyId) {

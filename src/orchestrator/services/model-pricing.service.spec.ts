@@ -48,6 +48,20 @@ describe('ModelPricingService', () => {
     expect(cost).toBeGreaterThanOrEqual(0.06);
   });
 
+  it('should calculate Hybrid voice cascade session cost (Groq + Flash Lite + Cartesia Sonic)', () => {
+    const cost = service.calculateHybridVoiceCost({
+      durationSeconds: 60, // 1 minuto
+      inputTokens: 1000,
+      outputTokens: 500,
+      ttsCharacters: 900,
+    });
+
+    expect(cost).toBeGreaterThan(0);
+    // STT: ~0.005, Cartesia: 900/1M * 35 = 0.0315, LLM: 1000*0.0375/1M + 500*0.15/1M = ~0.0001
+    // Total deve ficar em torno de ~0.036 USD por minuto
+    expect(cost).toBeCloseTo(0.0366, 3);
+  });
+
   it('should calculate billable price with 25% default markup and BRL exchange rate', () => {
     const rawCostUsd = 1.0; // 1 USD
     const billable = service.calculateBillable(rawCostUsd, false);

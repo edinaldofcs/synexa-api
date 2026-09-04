@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ITelephonyAdapter } from '../adapters/telephony-adapter.interface';
 import { GeminiLiveVoiceProvider } from '../providers/gemini-live-voice.provider';
+import { CascadeVoiceProvider } from '../providers/cascade-voice.provider';
+import { IVoiceProvider } from '../providers/voice-provider.interface';
 import {
   VoiceCallSession,
   VoiceCallSessionConfig,
@@ -13,6 +15,8 @@ import { ModelPricingService } from '../../orchestrator/services/model-pricing.s
 import { ProviderKeyResolverService } from '../../orchestrator/services/provider-key-resolver.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { resolveAudioGateConfig } from './voice-runtime.util';
+import { CartesiaTtsService } from './cartesia-tts.service';
+import { GroqWhisperSttService } from './groq-whisper-stt.service';
 
 export type VoiceSessionFactoryDeps = VoiceCallSessionConfig;
 
@@ -34,6 +38,8 @@ export class VoiceSessionFactory {
     private readonly pricingService: ModelPricingService,
     private readonly keyResolver: ProviderKeyResolverService,
     private readonly voiceToolsService: VoiceToolsService,
+    private readonly cartesiaTtsService: CartesiaTtsService,
+    private readonly groqWhisperSttService: GroqWhisperSttService,
   ) {
     this.maxSessions = this.configService.get<number>('VOICE_MAX_SESSIONS', 50);
   }
@@ -55,23 +61,57 @@ export class VoiceSessionFactory {
     overrides?: VoiceSessionFactoryDeps,
   ): Promise<{
     session: VoiceCallSession;
-    liveProvider: GeminiLiveVoiceProvider;
+    liveProvider: IVoiceProvider;
   }> {
     const client = (route?.client || {}) as Record<string, any>;
     const agent = (route?.agent || {}) as Record<string, any>;
     const clientId = route?.client_id;
     const companyId = route?.company_id;
 
-    // Chave da IA por tenant (provider_credentials criptografada), caindo
-    // para a env apenas como último recurso.
-    const tenantKey = clientId
+    const clientMeta = (client?.metadata as Record<string, unknown>) || {};
+    const voiceEngine =
+      overrides?.voiceEngine || (clientMeta.voice_engine as string) || 'hybrid';
+
+    // Chave da IA por tenant (provider_credentials criptografada)
+    const tenantGeminiKey = clientId
       ? await this.keyResolver.resolveApiKey(clientId, 'gemini')
       : '';
     const apiKey =
       overrides?.apiKey ||
-      tenantKey ||
+      tenantGeminiKey ||
       this.configService.get<string>('GEMINI_API_KEY') ||
       '';
+
+    let liveProvider: IVoiceProvider;
+    let resolvedVoiceName =
+      overrides?.voiceName ||
+      (agent.voice_name as string) ||
+      (client.voice_name as string);
+
+    let cartesiaApiKey = overrides?.cartesiaApiKey || '';
+    let groqApiKey = overrides?.groqApiKey || '';
+
+    if (voiceEngine === 'hybrid') {
+      if (!cartesiaApiKey && clientId) {
+        cartesiaApiKey = await this.keyResolver.resolveApiKey(clientId, 'cartesia');
+      }
+      if (!groqApiKey && clientId) {
+        groqApiKey = await this.keyResolver.resolveApiKey(clientId, 'groq');
+      }
+      if (!resolvedVoiceName || resolvedVoiceName.length < 20) {
+        resolvedVoiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
+      }
+      liveProvider = new CascadeVoiceProvider(
+        this.cartesiaTtsService,
+        this.groqWhisperSttService,
+      );
+    } else {
+      if (!resolvedVoiceName) {
+        resolvedVoiceName =
+          this.configService.get<string>('GEMINI_LIVE_DEFAULT_VOICE') || 'Aoede';
+      }
+      liveProvider = new GeminiLiveVoiceProvider();
+    }
 
     const config: VoiceCallSessionConfig = {
       ...(overrides || {}),
@@ -84,12 +124,10 @@ export class VoiceSessionFactory {
         (agent.model as string) ||
         this.configService.get<string>('GEMINI_LIVE_VOICE_MODEL') ||
         undefined,
-      voiceName:
-        overrides?.voiceName ||
-        (agent.voice_name as string) ||
-        (client.voice_name as string) ||
-        this.configService.get<string>('GEMINI_LIVE_DEFAULT_VOICE') ||
-        'Aoede',
+      voiceName: resolvedVoiceName,
+      voiceEngine: voiceEngine as 'hybrid' | 'live_api',
+      cartesiaApiKey,
+      groqApiKey,
       gateConfig: resolveAudioGateConfig(client),
       channel: overrides?.channel || 'voice_sip',
     };
@@ -100,7 +138,6 @@ export class VoiceSessionFactory {
       );
     }
 
-    const liveProvider = new GeminiLiveVoiceProvider();
     const session = new VoiceCallSession({
       telephonyAdapter: adapter,
       liveProvider,

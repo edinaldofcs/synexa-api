@@ -14,6 +14,11 @@ import {
   GeminiLiveVoiceProvider,
   resolveLiveModel,
 } from './providers/gemini-live-voice.provider';
+import { CascadeVoiceProvider } from './providers/cascade-voice.provider';
+import { IVoiceProvider } from './providers/voice-provider.interface';
+import { CartesiaTtsService } from './services/cartesia-tts.service';
+import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
+import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { AudioGateService } from './services/audio-gate.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -94,6 +99,9 @@ export class VoiceGateway
     private readonly nativeToolsService: NativeToolsService,
     private readonly telemetryService: VoiceTelemetryService,
     private readonly redis: RedisService,
+    private readonly cartesiaTtsService: CartesiaTtsService,
+    private readonly groqWhisperSttService: GroqWhisperSttService,
+    private readonly keyResolver: ProviderKeyResolverService,
   ) {}
 
   handleConnection(clientWs: AuthenticatedWebSocket) {
@@ -535,7 +543,7 @@ export class VoiceGateway
             const handleToolCalls = async (
               functionCalls: any[],
               generation: number,
-              responseProvider: GeminiLiveVoiceProvider,
+              responseProvider: IVoiceProvider,
             ) => {
               if (generation !== session.providerGeneration) {
                 return;
@@ -1050,10 +1058,37 @@ export class VoiceGateway
                 return;
               }
 
-              const provider = new GeminiLiveVoiceProvider();
-              // Fecha o provider anterior antes de sobrescrever: 'start'
-              // concorrente sem este close deixava o WS do Gemini aberto
-              // (conectado e faturando) até o fim do processo
+              const clientMeta = (clientDb?.metadata as Record<string, unknown>) || {};
+              const voiceEngine = ((msg.engine || clientMeta.voice_engine || 'hybrid') as string) === 'live_api' ? 'live_api' : 'hybrid';
+              session.voiceEngine = voiceEngine;
+
+              let provider: IVoiceProvider;
+              let cartesiaApiKey = '';
+              let groqApiKey = '';
+
+              if (voiceEngine === 'hybrid') {
+                if (session.clientId) {
+                  cartesiaApiKey = await this.keyResolver.resolveApiKey(
+                    session.clientId,
+                    'cartesia',
+                  );
+                  groqApiKey = await this.keyResolver.resolveApiKey(
+                    session.clientId,
+                    'groq',
+                  );
+                }
+                if (!session.voiceName || session.voiceName.length < 20) {
+                  session.voiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
+                }
+                provider = new CascadeVoiceProvider(
+                  this.cartesiaTtsService,
+                  this.groqWhisperSttService,
+                );
+              } else {
+                provider = new GeminiLiveVoiceProvider();
+              }
+
+              // Fecha o provider anterior antes de sobrescrever
               if (session.liveProvider && session.liveProvider !== provider) {
                 session.liveProvider.close();
               }
@@ -1061,6 +1096,8 @@ export class VoiceGateway
 
               provider.connect({
                 apiKey,
+                cartesiaApiKey,
+                groqApiKey,
                 model: session.model,
                 voiceName: session.voiceName,
                 systemPrompt,
@@ -1076,8 +1113,14 @@ export class VoiceGateway
                   session.isReady = true;
                   sendDebug(
                     'model',
-                    'Gemini Live conectado e pronto para receber áudio.',
-                    { model: session.model, voice: session.voiceName },
+                    voiceEngine === 'hybrid'
+                      ? 'Cascata Híbrida (Cartesia Sonic + Groq) pronta para receber áudio.'
+                      : 'Gemini Live conectado e pronto para receber áudio.',
+                    {
+                      model: session.model,
+                      voice: session.voiceName,
+                      engine: voiceEngine,
+                    },
                     'success',
                   );
                   sendToClient({ type: 'ready' });

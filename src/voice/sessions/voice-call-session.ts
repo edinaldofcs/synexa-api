@@ -4,6 +4,7 @@ import {
   GeminiLiveVoiceProvider,
   resolveLiveModel,
 } from '../providers/gemini-live-voice.provider';
+import { IVoiceProvider } from '../providers/voice-provider.interface';
 import {
   AudioGateService,
   AudioGateSession,
@@ -43,6 +44,9 @@ export interface VoiceCallSessionConfig {
   gateConfig?: VoiceGateRuntimeConfig;
   /** Canal usado na sincronização com painel_interactions (ex: voice_sip, voice_webrtc) */
   channel?: string;
+  voiceEngine?: 'hybrid' | 'live_api';
+  cartesiaApiKey?: string;
+  groqApiKey?: string;
   /**
    * Handler chamado quando a IA solicita o encerramento da chamada
    * (tool `finalizar_chamada`). Ex: AMI hangupChannel no Asterisk.
@@ -67,7 +71,7 @@ export class VoiceCallSession {
 
   private gateSession: AudioGateSession | null = null;
   private telephonyAdapter: ITelephonyAdapter;
-  private liveProvider: GeminiLiveVoiceProvider;
+  private liveProvider: IVoiceProvider;
   private audioGateService: AudioGateService;
   private voiceToolsService: VoiceToolsService | undefined;
   private pricingService: ModelPricingService;
@@ -100,7 +104,7 @@ export class VoiceCallSession {
 
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
-    liveProvider: GeminiLiveVoiceProvider;
+    liveProvider: IVoiceProvider;
     audioGateService: AudioGateService;
     pricingService: ModelPricingService;
     prisma: PrismaService;
@@ -329,8 +333,10 @@ export class VoiceCallSession {
     // 6. Conecta a IA (Gemini Live Provider)
     await this.liveProvider.connect({
       apiKey: this.config.apiKey || process.env.GEMINI_API_KEY || '',
+      cartesiaApiKey: this.config.cartesiaApiKey,
+      groqApiKey: this.config.groqApiKey,
       model: resolveLiveModel(this.config.model),
-      voiceName: this.config.voiceName || 'Aoede',
+      voiceName: this.config.voiceName,
       systemPrompt,
       contextCompressionEnabled: this.config.contextCompressionEnabled ?? true,
       tools: toolsDeclarations.length
@@ -764,11 +770,18 @@ export class VoiceCallSession {
         Math.round((Date.now() - this.startTime) / 1000),
       );
       const stats = this.gateSession?.getStats();
-      const rawCost = this.pricingService.calculateVoiceLiveCost({
-        durationSeconds,
-        inputTokens: this.inputTokens,
-        outputTokens: this.outputTokens,
-      });
+      const rawCost =
+        this.config.voiceEngine === 'hybrid'
+          ? this.pricingService.calculateHybridVoiceCost({
+              durationSeconds,
+              inputTokens: this.inputTokens,
+              outputTokens: this.outputTokens,
+            })
+          : this.pricingService.calculateVoiceLiveCost({
+              durationSeconds,
+              inputTokens: this.inputTokens,
+              outputTokens: this.outputTokens,
+            });
 
       if (
         this.config.clientId &&
