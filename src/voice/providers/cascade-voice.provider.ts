@@ -73,11 +73,11 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     // Inicializa Silero VAD v5 se disponível (Rede Neural via ONNX Runtime)
     if (this.sileroVadService) {
       this.vadSession = this.sileroVadService.createSession({
-        positiveSpeechThreshold: 0.5,
-        negativeSpeechThreshold: 0.35,
-        minSpeechFrames: 3, // ~96ms para confirmar voz
+        positiveSpeechThreshold: 0.45,
+        negativeSpeechThreshold: 0.25,
+        minSpeechFrames: 2, // ~64ms para confirmar voz rapidamente
         redemptionFrames: 12, // ~384ms de silêncio para fechar turno
-        preRollFrames: 6, // ~192ms de áudio pré-fala
+        preRollFrames: 8, // ~256ms de áudio pré-fala
         onSpeechStart: () => {
           if (this.isSpeaking) {
             this.logger.log(

@@ -25,6 +25,7 @@ export class SileroVadSession {
 
   private stateTensor: any = null;
   private readonly srTensor: any = null;
+  private context: Float32Array = new Float32Array(64);
 
   private pcmAccumulator: Buffer = Buffer.alloc(0);
   private preRollQueue: Buffer[] = [];
@@ -51,7 +52,7 @@ export class SileroVadSession {
       // Inicializa o estado recorrente do Silero v5: [2, 1, 128] com zeros
       this.stateTensor = new this.ort.Tensor(
         'float32',
-        new Array(2 * 1 * 128).fill(0),
+        Array.from(new Float32Array(2 * 1 * 128)),
         [2, 1, 128],
       );
       this.srTensor = new this.ort.Tensor('int64', [16000n], [1]);
@@ -84,25 +85,40 @@ export class SileroVadSession {
 
     this.pcmAccumulator = Buffer.concat([this.pcmAccumulator, pcm16Chunk]);
 
-    // Silero VAD v5 opera estritamente em janelas de 512 amostras a 16kHz (1024 bytes)
+    // Silero VAD v5 opera em janelas de 512 amostras a 16kHz (1024 bytes) com 64 amostras de contexto (576 total)
     const FRAME_BYTES = 1024;
     const SAMPLES_PER_FRAME = 512;
+    const CONTEXT_SAMPLES = 64;
+    const TOTAL_INPUT_SAMPLES = CONTEXT_SAMPLES + SAMPLES_PER_FRAME;
 
     while (this.pcmAccumulator.length >= FRAME_BYTES) {
       const frameBuffer = this.pcmAccumulator.subarray(0, FRAME_BYTES);
       this.pcmAccumulator = this.pcmAccumulator.subarray(FRAME_BYTES);
 
       // Converte PCM 16-bit inteiro (-32768 a 32767) para Float32 normalizado (-1.0 a 1.0)
+      // e avalia energia acústica da janela (Peak / RMS)
       const float32 = new Float32Array(SAMPLES_PER_FRAME);
+      let peak = 0;
+      let sum = 0;
       for (let i = 0; i < SAMPLES_PER_FRAME; i++) {
-        float32[i] = frameBuffer.readInt16LE(i * 2) / 32768.0;
+        const s = frameBuffer.readInt16LE(i * 2);
+        const abs = Math.abs(s);
+        if (abs > peak) peak = abs;
+        sum += s * s;
+        float32[i] = s / 32768.0;
       }
+      const rms = Math.sqrt(sum / SAMPLES_PER_FRAME);
 
       try {
+        // Silero VAD v5 exige concatenação: 64 amostras de contexto anterior + 512 novas = 576 amostras
+        const inputBuffer = new Float32Array(TOTAL_INPUT_SAMPLES);
+        inputBuffer.set(this.context, 0);
+        inputBuffer.set(float32, CONTEXT_SAMPLES);
+
         const inputTensor = new this.ort.Tensor(
           'float32',
-          Array.from(float32),
-          [1, SAMPLES_PER_FRAME],
+          Array.from(inputBuffer),
+          [1, TOTAL_INPUT_SAMPLES],
         );
         const results = await this.inferenceSession.run({
           input: inputTensor,
@@ -114,18 +130,21 @@ export class SileroVadSession {
         this.lastProbability = prob;
         this.options.onSpeechProbability?.(prob);
 
-        // Atualiza o estado recorrente do Silero para o próximo frame diretamente com o tensor de saída
+        // Atualiza estado recorrente e buffer de contexto rotativo para o próximo frame
         this.stateTensor = results.stateN;
+        this.context = new Float32Array(
+          float32.subarray(SAMPLES_PER_FRAME - CONTEXT_SAMPLES),
+        );
 
-        // Diagnóstico: a cada ~1s (30 frames de 32ms), loga a prob para rastrear no deploy
+        // Diagnóstico: a cada ~1s (30 frames de 32ms), loga métricas para monitoramento
         this.frameCount++;
         if (this.frameCount % 30 === 0) {
           this.logger.log(
-            `📊 [SileroVAD] Diagnóstico: frame=${this.frameCount} prob=${(prob * 100).toFixed(1)}% speaking=${this.isSpeaking} speechFrames=${this.consecutiveSpeechFrames} silenceFrames=${this.consecutiveSilenceFrames}`,
+            `📊 [SileroVAD] Diagnóstico: frame=${this.frameCount} prob=${(prob * 100).toFixed(1)}% peak=${peak} rms=${Math.round(rms)} speaking=${this.isSpeaking} speechFrames=${this.consecutiveSpeechFrames} silenceFrames=${this.consecutiveSilenceFrames}`,
           );
         }
 
-        this.updateStateMachine(frameBuffer, prob);
+        this.updateStateMachine(frameBuffer, prob, peak, rms);
       } catch (err: any) {
         this.logger.error(`Erro na inferência do Silero VAD: ${err.stack || err.message}`);
         this.fallbackRmsVad(frameBuffer);
@@ -135,8 +154,19 @@ export class SileroVadSession {
     return { isSpeech: this.isSpeaking, probability: this.lastProbability };
   }
 
-  private updateStateMachine(frame: Buffer, prob: number): void {
-    if (prob >= this.positiveThreshold) {
+  private updateStateMachine(
+    frame: Buffer,
+    prob: number,
+    peak = 0,
+    rms = 0,
+  ): void {
+    // Fusão Híbrida: Silero VAD neural v5 como árbitro primário,
+    // com salvaguarda acústica se voz humana audível for confirmada por RMS/Peak
+    const isNeuralSpeech = prob >= this.positiveThreshold;
+    const isAcousticVoice = peak >= 1500 && rms >= 250;
+    const isSpeech = isNeuralSpeech || (isAcousticVoice && prob >= 0.2);
+
+    if (isSpeech) {
       this.consecutiveSpeechFrames++;
       this.consecutiveSilenceFrames = 0;
 
@@ -145,7 +175,7 @@ export class SileroVadSession {
         if (this.consecutiveSpeechFrames >= this.minSpeechFrames) {
           this.isSpeaking = true;
           this.logger.log(
-            `🎙️ [SileroVAD] Fala humana detectada (Prob: ${(prob * 100).toFixed(1)}%). Ativando turno.`,
+            `🎙️ [SileroVAD] Fala humana detectada (Prob: ${(prob * 100).toFixed(1)}%, Peak: ${peak}, RMS: ${Math.round(rms)}). Ativando turno.`,
           );
           this.speechFrames = [...this.preRollQueue, frame];
           this.preRollQueue = [];
@@ -159,7 +189,7 @@ export class SileroVadSession {
       } else {
         this.speechFrames.push(frame);
       }
-    } else if (prob < this.negativeThreshold) {
+    } else if (prob < this.negativeThreshold && !isAcousticVoice) {
       this.consecutiveSilenceFrames++;
       this.consecutiveSpeechFrames = 0;
 
@@ -238,10 +268,11 @@ export class SileroVadSession {
     this.consecutiveSpeechFrames = 0;
     this.consecutiveSilenceFrames = 0;
     this.lastProbability = 0;
+    this.context = new Float32Array(64).fill(0);
     if (this.ort) {
       this.stateTensor = new this.ort.Tensor(
         'float32',
-        new Array(2 * 1 * 128).fill(0),
+        Array.from(new Float32Array(2 * 1 * 128)),
         [2, 1, 128],
       );
     }
