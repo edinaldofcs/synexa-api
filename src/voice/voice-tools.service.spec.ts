@@ -500,4 +500,46 @@ describe('VoiceToolsService - cache Redis por (clientId, agentId)', () => {
       'secret-gemini-key',
     );
   });
+
+  describe('applyExtractData com regras compostas e caminhos dinâmicos', () => {
+    const { service } = buildPrisma({});
+    const rawPayload = {
+      cliente: { nome: 'Ana Lima', status: 'ativo' },
+      contrato: { dias_atraso: 40, valor_devido: 1200, valor_original: 1000 },
+    };
+
+    it('avalia regras com logic AND/OR e retorno dinâmico de caminho', () => {
+      const mapping = {
+        valor_cobranca: {
+          path: 'contrato.dias_atraso',
+          rules: [
+            {
+              operator: '==',
+              compare_value: '',
+              return_value: 'contrato.valor_devido',
+              return_type: 'path',
+              logic: 'and',
+              conditions: [
+                {
+                  path: 'contrato.dias_atraso',
+                  operator: '>',
+                  compare_value: '30',
+                },
+                {
+                  path: 'cliente.status',
+                  operator: '==',
+                  compare_value: 'ativo',
+                },
+              ],
+            },
+          ],
+          fallback: 'contrato.valor_original',
+          fallback_type: 'path',
+        },
+      };
+
+      const res = (service as any).applyExtractData(rawPayload, mapping);
+      expect(res.valor_cobranca).toBe(1200);
+    });
+  });
 });

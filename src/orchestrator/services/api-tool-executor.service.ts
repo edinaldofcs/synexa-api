@@ -1374,20 +1374,31 @@ export class ApiToolExecutorService {
           value = value.slice(0, cfg.max_items);
         }
 
+        let matchedRule = false;
         if (cfg.rules?.length) {
-          value = this.evaluateComparisonRules(value, cfg.rules);
+          const res = this.evaluateComparisonRules(value, cfg.rules, raw);
+          value = res.value;
+          matchedRule = res.matched;
         }
 
-        if (cfg.modifier) {
+        if (cfg.modifier && (!cfg.rules?.length || matchedRule)) {
           value = this.applyExtractModifier(value, cfg.modifier);
         }
 
+        const isMissing = value === null || value === undefined || value === '';
+        const ruleFailedWithFallback =
+          Boolean(cfg.rules?.length) &&
+          !matchedRule &&
+          cfg.fallback !== undefined;
+
         if (
-          (value === null || value === undefined || value === '') &&
+          (isMissing || ruleFailedWithFallback) &&
           cfg.fallback !== undefined
         ) {
           const fb: any = cfg.fallback;
-          if (
+          if (cfg.fallback_type === 'path') {
+            value = this.getByPath(raw, String(fb));
+          } else if (
             cfg.fallback_type === 'boolean' ||
             fb === true ||
             fb === false ||
@@ -1410,22 +1421,112 @@ export class ApiToolExecutorService {
     return output;
   }
 
+  private matchesCondition(
+    val: unknown,
+    op: string,
+    compareVal: unknown,
+  ): boolean {
+    if (op === 'is_empty_array') {
+      return Array.isArray(val) && val.length === 0;
+    }
+    if (op === 'is_not_empty_array') {
+      return Array.isArray(val) && val.length > 0;
+    }
+    if (op === 'is_empty') {
+      return (
+        val === null ||
+        val === undefined ||
+        val === '' ||
+        (Array.isArray(val) && val.length === 0) ||
+        (typeof val === 'object' && Object.keys(val as object).length === 0)
+      );
+    }
+    if (op === 'is_not_empty') {
+      return (
+        val !== null &&
+        val !== undefined &&
+        val !== '' &&
+        (!Array.isArray(val) || val.length > 0)
+      );
+    }
+
+    if (val === null || val === undefined) return false;
+
+    if (
+      op === '==' &&
+      Array.isArray(val) &&
+      (compareVal === '[]' || compareVal === '')
+    ) {
+      return val.length === 0;
+    }
+    if (
+      op === '!=' &&
+      Array.isArray(val) &&
+      (compareVal === '[]' || compareVal === '')
+    ) {
+      return val.length > 0;
+    }
+
+    const numVal = Number(val);
+    const numRule = Number(compareVal);
+    const shouldCompareAsNumber =
+      !isNaN(numVal) && !isNaN(numRule) && String(compareVal).trim() !== '';
+    const valToCompare: string | number = shouldCompareAsNumber
+      ? numVal
+      : String(val).trim();
+    const ruleVal: string | number = shouldCompareAsNumber
+      ? numRule
+      : String(compareVal).trim();
+
+    switch (op) {
+      case '==':
+        return valToCompare == ruleVal;
+      case '!=':
+        return valToCompare != ruleVal;
+      case '>=':
+        return Number(valToCompare) >= Number(ruleVal);
+      case '<=':
+        return Number(valToCompare) <= Number(ruleVal);
+      case '>':
+        return Number(valToCompare) > Number(ruleVal);
+      case '<':
+        return Number(valToCompare) < Number(ruleVal);
+      case 'includes':
+        if (Array.isArray(val)) {
+          return val.includes(compareVal);
+        }
+        return String(valToCompare).includes(String(ruleVal));
+      default:
+        return false;
+    }
+  }
+
   private evaluateComparisonRules(
     value: unknown,
     rules: Array<{
-      operator: string;
-      compare_value: string;
+      operator?: string;
+      compare_value?: string;
       return_value: unknown;
       return_type?: string;
+      logic?: string;
+      conditions?: Array<{
+        path?: string;
+        operator: string;
+        compare_value: string;
+      }>;
     }>,
-  ): unknown {
-    if (!rules || !rules.length) return value;
+    rootRaw?: unknown,
+  ): { value: unknown; matched: boolean } {
+    if (!rules || !rules.length) return { value, matched: false };
 
     for (const rule of rules) {
-      const { operator, compare_value, return_type } = rule as any;
+      const { operator, compare_value, return_type, logic, conditions } =
+        rule as any;
       let return_value = rule.return_value;
 
-      if (
+      if (return_type === 'path') {
+        return_value = this.getByPath(rootRaw, String(return_value));
+      } else if (
         return_type === 'boolean' ||
         return_value === true ||
         return_value === false ||
@@ -1438,101 +1539,28 @@ export class ApiToolExecutorService {
         if (!isNaN(num)) return_value = num;
       }
 
-      if (operator === 'is_empty_array') {
-        if (Array.isArray(value) && value.length === 0) return return_value;
-        continue;
-      }
-      if (operator === 'is_not_empty_array') {
-        if (Array.isArray(value) && value.length > 0) return return_value;
-        continue;
-      }
-      if (operator === 'is_empty') {
-        if (
-          value === null ||
-          value === undefined ||
-          value === '' ||
-          (Array.isArray(value) && value.length === 0) ||
-          (typeof value === 'object' &&
-            Object.keys(value as object).length === 0)
-        ) {
-          return return_value;
-        }
-        continue;
-      }
-      if (operator === 'is_not_empty') {
-        if (
-          value !== null &&
-          value !== undefined &&
-          value !== '' &&
-          (!Array.isArray(value) || value.length > 0)
-        ) {
-          return return_value;
-        }
+      if (Array.isArray(conditions) && conditions.length > 0) {
+        const logOp = logic === 'or' ? 'or' : 'and';
+        const evalCond = (c: any) => {
+          const targetVal = c.path ? this.getByPath(rootRaw, c.path) : value;
+          return this.matchesCondition(targetVal, c.operator, c.compare_value);
+        };
+
+        const isMatch =
+          logOp === 'or'
+            ? conditions.some(evalCond)
+            : conditions.every(evalCond);
+
+        if (isMatch) return { value: return_value, matched: true };
         continue;
       }
 
-      if (value === null || value === undefined) continue;
-
-      if (
-        operator === '==' &&
-        Array.isArray(value) &&
-        (compare_value === '[]' || compare_value === '')
-      ) {
-        if (value.length === 0) return return_value;
-        continue;
-      }
-      if (
-        operator === '!=' &&
-        Array.isArray(value) &&
-        (compare_value === '[]' || compare_value === '')
-      ) {
-        if (value.length > 0) return return_value;
-        continue;
-      }
-
-      const numVal = Number(value);
-      const numRule = Number(compare_value);
-      const shouldCompareAsNumber =
-        !isNaN(numVal) &&
-        !isNaN(numRule) &&
-        String(compare_value).trim() !== '';
-      const valToCompare: string | number = shouldCompareAsNumber
-        ? numVal
-        : String(value).trim();
-      const ruleVal: string | number = shouldCompareAsNumber
-        ? numRule
-        : String(compare_value).trim();
-
-      const isMatch = (() => {
-        switch (operator) {
-          case '==':
-            return valToCompare == ruleVal;
-          case '!=':
-            return valToCompare != ruleVal;
-          case '>=':
-            return Number(valToCompare) >= Number(ruleVal);
-          case '<=':
-            return Number(valToCompare) <= Number(ruleVal);
-          case '>':
-            return Number(valToCompare) > Number(ruleVal);
-          case '<':
-            return Number(valToCompare) < Number(ruleVal);
-          case 'includes':
-            if (Array.isArray(value)) {
-              return value.includes(compare_value);
-            }
-            return String(valToCompare).includes(String(ruleVal));
-          default:
-            return false;
-        }
-      })();
-
-      if (isMatch) {
-        return return_value;
+      if (this.matchesCondition(value, operator, compare_value)) {
+        return { value: return_value, matched: true };
       }
     }
 
-    return value;
+    return { value, matched: false };
   }
 
   private getByPath(value: unknown, path: string): unknown {
