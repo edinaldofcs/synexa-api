@@ -28,6 +28,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private preRollBuffers: Buffer[] = [];
   private consecutiveBargeInFrames = 0;
   private hasVoiceInCurrentTurn = false;
+  private _firstAudioLogged = false;
 
   private conversationHistory: Array<{
     role: 'user' | 'model';
@@ -112,6 +113,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
     // Pipeline 1: Silero VAD v5 Neural
     if (this.vadSession) {
+      if (!this._firstAudioLogged) {
+        this._firstAudioLogged = true;
+        this.logger.log(
+          `🔊 [CascadeVoice] Primeiro chunk de áudio recebido (${buffer.length} bytes). Encaminhando ao Silero VAD.`,
+        );
+      }
       void this.vadSession.processChunk(buffer);
       return;
     }

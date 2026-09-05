@@ -34,6 +34,7 @@ export class SileroVadSession {
   private consecutiveSpeechFrames = 0;
   private consecutiveSilenceFrames = 0;
   private lastProbability = 0;
+  private frameCount = 0;
 
   constructor(
     private readonly inferenceSession: any | null,
@@ -115,6 +116,14 @@ export class SileroVadSession {
 
         // Atualiza o estado recorrente do Silero para o próximo frame diretamente com o tensor de saída
         this.stateTensor = results.stateN;
+
+        // Diagnóstico: a cada ~1s (30 frames de 32ms), loga a prob para rastrear no deploy
+        this.frameCount++;
+        if (this.frameCount % 30 === 0) {
+          this.logger.log(
+            `📊 [SileroVAD] Diagnóstico: frame=${this.frameCount} prob=${(prob * 100).toFixed(1)}% speaking=${this.isSpeaking} speechFrames=${this.consecutiveSpeechFrames} silenceFrames=${this.consecutiveSilenceFrames}`,
+          );
+        }
 
         this.updateStateMachine(frameBuffer, prob);
       } catch (err: any) {

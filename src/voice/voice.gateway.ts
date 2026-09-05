@@ -368,6 +368,11 @@ export class VoiceGateway
             }
 
             await closeVoiceSession();
+            // Reseta a flag de encerramento: a sessão anterior foi limpa,
+            // mas esta é uma nova sessão válida.
+            voiceSessionClosed = false;
+            introTurnSent = false;
+            maxDurationArmed = false;
             if (session.mockSession) {
               session.mockSession.close();
               session.mockSession = null;
