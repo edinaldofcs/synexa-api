@@ -240,6 +240,26 @@ export class TestChatService {
         nome_empresa: (client as any).company_name || 'Synexa',
         empresa: (client as any).company_name || 'Synexa',
       };
+
+      const inboundMeta = metadata.inbound_variable_mapping;
+      if (inboundMeta?.default_variables) {
+        if (Array.isArray(inboundMeta.default_variables)) {
+          for (const item of inboundMeta.default_variables) {
+            if (item?.key) {
+              const cleanK = item.key.replace(/[[\]{}]/g, '').trim();
+              contextVariables[cleanK] = item.value;
+              contextVariables[item.key] = item.value;
+            }
+          }
+        } else if (typeof inboundMeta.default_variables === 'object') {
+          for (const [k, v] of Object.entries(inboundMeta.default_variables)) {
+            const cleanK = k.replace(/[[\]{}]/g, '').trim();
+            contextVariables[cleanK] = v;
+            contextVariables[k] = v;
+          }
+        }
+      }
+
       Object.assign(contextVariables, this.withMessageAliases(message));
       if (metadata.variable_schema) {
         contextVariables._variable_schema = metadata.variable_schema;

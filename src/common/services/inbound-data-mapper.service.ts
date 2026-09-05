@@ -1,4 +1,4 @@
-﻿import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 export type InboundTransformType =
   | 'text'
@@ -30,10 +30,18 @@ export interface InboundMappingRule {
   description?: string;
 }
 
+export interface DefaultSessionVariable {
+  id?: string;
+  key: string;
+  value: string;
+  description?: string;
+}
+
 export interface InboundMappingConfig {
   enabled?: boolean;
   preserve_unmapped?: boolean;
   rules?: InboundMappingRule[];
+  default_variables?: DefaultSessionVariable[] | Record<string, unknown>;
 }
 
 @Injectable()
@@ -49,11 +57,32 @@ export class InboundDataMapperService {
     config: InboundMappingConfig | null | undefined,
     channel?: string,
   ): Record<string, unknown> {
-    if (!rawData || typeof rawData !== 'object') {
-      return {};
+    const mappedState: Record<string, unknown> = {};
+
+    // 1. Inicializa com variáveis padrão da sessão (se configuradas)
+    if (config?.default_variables) {
+      if (Array.isArray(config.default_variables)) {
+        for (const item of config.default_variables) {
+          if (item?.key) {
+            const cleanKey = item.key.replace(/[[\]{}]/g, '').trim();
+            mappedState[cleanKey] = item.value;
+            mappedState[item.key] = item.value;
+          }
+        }
+      } else if (typeof config.default_variables === 'object') {
+        for (const [key, val] of Object.entries(config.default_variables)) {
+          const cleanKey = key.replace(/[[\]{}]/g, '').trim();
+          mappedState[cleanKey] = val;
+          mappedState[key] = val;
+        }
+      }
     }
 
-    const mappedState: Record<string, unknown> = {};
+    // Se não houver dados brutos recebidos, retorna as variáveis padrão
+    if (!rawData || typeof rawData !== 'object') {
+      return mappedState;
+    }
+
     const rules = config?.rules || [];
     const isEnabled = config?.enabled !== false;
     const preserveUnmapped = config?.preserve_unmapped !== false;
@@ -61,9 +90,9 @@ export class InboundDataMapperService {
     // Normaliza canal
     const normalizedChannel = (channel || 'all').toLowerCase();
 
-    // Se as regras estiverem desabilitadas, retorna os dados brutos
+    // Se as regras estiverem desabilitadas, retorna os dados brutos combinados com defaults
     if (!isEnabled || rules.length === 0) {
-      return { ...rawData };
+      return { ...mappedState, ...rawData };
     }
 
     const appliedSourceKeys = new Set<string>();

@@ -217,4 +217,64 @@ describe('InboundDataMapperService', () => {
     expect(result.cliente_nome).toBe('Carlos Eduardo');
     expect(result.nome_cliente).toBe('Carlos Eduardo');
   });
+
+  it('injeta variáveis padrão da sessão mesmo quando rawData for vazio ou nulo', () => {
+    const config: InboundMappingConfig = {
+      enabled: true,
+      default_variables: [
+        {
+          key: 'nome_empresa',
+          value: 'Acme Financeira',
+          description: 'Parceira de cobrança',
+        },
+        {
+          key: 'departamento',
+          value: 'Cobrança',
+        },
+      ],
+      rules: [
+        {
+          source_channel: 'all',
+          source_field: 'var_1',
+          target_variable: 'cpf',
+        },
+      ],
+    };
+
+    const emptyResult = service.mapInboundData({}, config, 'voice');
+    expect(emptyResult.nome_empresa).toBe('Acme Financeira');
+    expect(emptyResult.departamento).toBe('Cobrança');
+
+    const nullResult = service.mapInboundData(null, config, 'voice');
+    expect(nullResult.nome_empresa).toBe('Acme Financeira');
+    expect(nullResult.departamento).toBe('Cobrança');
+  });
+
+  it('combina variáveis padrão da sessão com regras de de-para em rawData', () => {
+    const rawData = {
+      var_1: '12345678909',
+    };
+
+    const config: InboundMappingConfig = {
+      enabled: true,
+      default_variables: [
+        {
+          key: 'status_atendimento',
+          value: 'iniciado',
+        },
+      ],
+      rules: [
+        {
+          source_channel: 'all',
+          source_field: 'var_1',
+          target_variable: 'cpf',
+          transform: 'cpf_cnpj',
+        },
+      ],
+    };
+
+    const result = service.mapInboundData(rawData, config, 'voice');
+    expect(result.status_atendimento).toBe('iniciado');
+    expect(result.cpf).toBe('123.456.789-09');
+  });
 });
