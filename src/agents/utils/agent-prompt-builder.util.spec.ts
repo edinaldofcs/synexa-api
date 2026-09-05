@@ -206,5 +206,25 @@ describe('buildAgentPromptFromBlocks', () => {
     expect(prompt).toContain('## Regras de Output & Formatação\nRegra geral: seja sempre cortês.');
     expect(prompt).not.toContain('Diretriz de voz.');
   });
+
+  it('should fallback between api and webchat channel rules for unified web/api support', () => {
+    const prompt = buildAgentPromptFromBlocks(
+      {
+        persona_blocks: {
+          identidade_persona: 'Você é um assistente.',
+          regras_output: 'Regra geral: seja objetivo.',
+          regras_output_canais: {
+            webchat: 'Em chat/api: use markdown completo e tabelas.',
+          },
+        },
+      },
+      {
+        canal: 'api',
+      },
+    );
+
+    expect(prompt).toContain('### Diretrizes Específicas do Canal (API / Integração)');
+    expect(prompt).toContain('Em chat/api: use markdown completo e tabelas.');
+  });
 });
 

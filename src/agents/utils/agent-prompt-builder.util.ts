@@ -143,6 +143,8 @@ export function buildAgentPromptFromBlocks(
 
           const rawChannelContent =
             (activeKey && blocks.regras_output_canais[activeKey]) ||
+            (activeKey === 'api' && blocks.regras_output_canais['webchat']) ||
+            (activeKey === 'webchat' && blocks.regras_output_canais['api']) ||
             (rawChannel &&
               blocks.regras_output_canais[String(rawChannel).toLowerCase()]) ||
             undefined;
