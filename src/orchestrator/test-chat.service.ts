@@ -25,7 +25,7 @@ import { ModelPricingService } from './services/model-pricing.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { MediaService } from '../media/media.service';
-import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
+import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 import {
   ApiToolExecutorService,
   type ApiTool,
@@ -105,7 +105,7 @@ export interface TestChatDebug {
   contextVariables: Record<string, unknown>;
   availableTools: string[];
   toolCalls: ToolCallDebug[];
-  crmRecord?: Record<string, unknown>;
+  sessionRecord?: Record<string, unknown>;
 }
 
 /**
@@ -126,7 +126,7 @@ export class TestChatService {
     private readonly modelPricingService: ModelPricingService,
     private readonly conversationsService: ConversationsService,
     private readonly mediaService: MediaService,
-    private readonly crmDataTransformer: CrmDataTransformerService,
+    private readonly sessionDataTransformer: SessionDataTransformerService,
     private readonly analyticsService: AnalyticsService,
     private readonly apiToolExecutor: ApiToolExecutorService,
     private readonly llmToolLoop: LlmToolLoopService,
@@ -749,19 +749,20 @@ export class TestChatService {
               model: immediateResult.model,
             });
 
-            // Handoff imediato retorna antes do bloco normal de CRM:
-            // grava Analytics/CRM aqui para não perder o registro do turno.
-            const immediateCrmRecord = await this.recordAnalyticsAndCrm({
-              clientId,
-              companyId,
-              conversationId,
-              originChannel,
-              contextVariables: immediateResult.contextVariables,
-              state,
-              toolCalls: immediateResult.result.toolCalls || [],
-              client,
-              conversationRecord,
-            });
+            // Handoff imediato retorna antes do bloco normal de finalização:
+            // grava Analytics/Session Data aqui para não perder o registro do turno.
+            const immediateSessionRecord =
+              await this.recordAnalyticsAndSessionData({
+                clientId,
+                companyId,
+                conversationId,
+                originChannel,
+                contextVariables: immediateResult.contextVariables,
+                state,
+                toolCalls: immediateResult.result.toolCalls || [],
+                client,
+                conversationRecord,
+              });
 
             return {
               ...immediateResult.result,
@@ -780,7 +781,7 @@ export class TestChatService {
                   messagesUsed: history.length,
                 },
                 contextVariables: immediateResult.contextVariables,
-                crmRecord: immediateCrmRecord,
+                sessionRecord: immediateSessionRecord,
                 availableTools: immediateResult.availableTools,
                 toolCalls: immediateResult.result.toolCalls || [],
                 usage: immediateResult.result.usage,
@@ -801,12 +802,12 @@ export class TestChatService {
         }
       }
 
-      let crmRecord: Record<string, unknown> | undefined;
+      let sessionRecord: Record<string, unknown> | undefined;
       if (conversationId) {
         // P31: reaproveita client/conversation/state lidos no início do turno
         // (nenhuma re-leitura de painel_clients, conversations ou
         // conversation_state aqui).
-        crmRecord = await this.recordAnalyticsAndCrm({
+        sessionRecord = await this.recordAnalyticsAndSessionData({
           clientId,
           companyId,
           conversationId,
@@ -840,7 +841,7 @@ export class TestChatService {
           toolCalls: result.toolCalls || [],
           usage: result.usage,
           latencyMs,
-          crmRecord,
+          sessionRecord,
         },
       };
 
@@ -1009,7 +1010,7 @@ export class TestChatService {
 
   /**
    * P31: leitura única da conversa por turno (com end_users para o bloco de
-   * CRM/analytics). O resultado é cacheado em `conversationRecord` no send().
+   * session data/analytics). O resultado é cacheado em `conversationRecord` no send().
    */
   private loadConversationRecord(conversationId: string) {
     return this.prisma.conversations.findUnique({
@@ -1020,7 +1021,7 @@ export class TestChatService {
 
   /**
    * P31: leitura única do client por turno. O resultado é cacheado em
-   * `client` no send() e reutilizado no bloco de CRM.
+   * `client` no send() e reutilizado no bloco de session data.
    */
   private loadPainelClient(clientId: string) {
     return this.prisma.painel_clients.findUnique({
@@ -1288,7 +1289,7 @@ export class TestChatService {
   ) {
     const schema =
       (contextVariables._variable_schema as Record<string, unknown>) || null;
-    let crmInstruction = '';
+    let dataCollectionInstruction = '';
     if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {
       const fieldList = schema.fields
         .map(
@@ -1297,10 +1298,10 @@ export class TestChatService {
         )
         .join('\n');
 
-      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou confirme os seguintes campos durante o atendimento (eles são persistidos automaticamente no CRM pela plataforma):\n${fieldList}\nSempre que o cliente fornecer um desses dados, confirme-o claramente na conversa e, se houver uma API disponível para registrá-lo, utilize-a.`;
+      dataCollectionInstruction = `\n\n[DIRETRIZES DE COLETA DE DADOS DA SESSÃO - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou confirme os seguintes campos durante o atendimento (eles são validados e registrados automaticamente na sessão pela plataforma):\n${fieldList}\nSempre que o cliente fornecer um desses dados, confirme-o claramente na conversa e, se houver uma API disponível para registrá-lo, utilize-a.`;
     }
 
-    const basePrompt = (systemPrompt || '') + crmInstruction;
+    const basePrompt = (systemPrompt || '') + dataCollectionInstruction;
     const conditionalResolved = resolveConditionalString(
       basePrompt,
       contextVariables || {},
@@ -1741,12 +1742,12 @@ export class TestChatService {
   }
 
   /**
-   * Grava Analytics (marcadores de negócio), o crmRecord transformado e o
-   * contexto/CRM no metadata da conversa. Extraída do fluxo principal para
+   * Grava Analytics (marcadores de negócio), o sessionRecord transformado e o
+   * contexto no metadata da conversa. Extraída do fluxo principal para
    * também ser invocada no handoff imediato, que retorna antes do bloco
-   * normal de CRM. Retorna o crmRecord (quando produzido).
+   * normal de finalização. Retorna o sessionRecord (quando produzido).
    */
-  private async recordAnalyticsAndCrm(params: {
+  private async recordAnalyticsAndSessionData(params: {
     clientId?: string;
     companyId?: string;
     conversationId?: string;
@@ -1770,13 +1771,13 @@ export class TestChatService {
       client,
       conversationRecord,
     } = params;
-    let crmRecord: Record<string, unknown> | undefined;
-    if (!conversationId) return crmRecord;
+    let sessionRecord: Record<string, unknown> | undefined;
+    if (!conversationId) return sessionRecord;
     try {
       const freshConv = conversationRecord;
 
       const clientMeta = (client?.metadata as Record<string, unknown>) || {};
-      const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
+      const outputConfig = (clientMeta.session_output_config as any) || null;
 
       const combinedState = {
         ...contextVariables,
@@ -1800,11 +1801,11 @@ export class TestChatService {
         });
       }
 
-      crmRecord = this.crmDataTransformer.transform({
+      sessionRecord = this.sessionDataTransformer.transform({
         sessionState: combinedState,
         endUser: freshConv?.end_users,
         conversation: freshConv,
-        config: crmOutputConfig,
+        config: outputConfig,
       });
 
       if (freshConv) {
@@ -1818,17 +1819,17 @@ export class TestChatService {
               // Reconstitui o contexto persistido neste turno
               // (saveConversationContext) sem reler o documento.
               [TEST_CHAT_CONTEXT_KEY]: contextVariables,
-              crm_record: crmRecord,
+              session_record: sessionRecord,
             } as any,
           },
         });
       }
-    } catch (crmErr) {
+    } catch (outputErr) {
       this.logger.warn(
-        { error: (crmErr as Error).message },
-        'Falha ao transformar crmRecord no test-chat',
+        { error: (outputErr as Error).message },
+        'Falha ao transformar session_record no test-chat',
       );
     }
-    return crmRecord;
+    return sessionRecord;
   }
 }

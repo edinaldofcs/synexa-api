@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-export type CrmRuleOperator =
+export type SessionRuleOperator =
   | 'pass_through'
   | 'exists'
   | 'not_exists'
@@ -13,10 +13,10 @@ export type CrmRuleOperator =
   | '<'
   | 'includes';
 
-export interface CrmDerivedFieldRule {
+export interface SessionDerivedFieldRule {
   target_column: string;
   type?: 'any' | 'boolean' | 'string' | 'number' | 'currency' | 'date';
-  operator: CrmRuleOperator;
+  operator: SessionRuleOperator;
   source_field: string;
   compare_value?: unknown;
   return_if_true?: unknown;
@@ -24,7 +24,7 @@ export interface CrmDerivedFieldRule {
   fallback?: unknown;
 }
 
-export interface CrmOutputConfig {
+export interface SessionOutputConfig {
   enabled?: boolean;
   operation_type?: string;
   standard_fields_mapping?: {
@@ -32,12 +32,12 @@ export interface CrmOutputConfig {
     name?: string;
     phone?: string;
   };
-  derived_fields?: CrmDerivedFieldRule[];
+  derived_fields?: SessionDerivedFieldRule[];
   include_unmapped_as_json?: boolean;
   unmapped_json_column_name?: string;
 }
 
-export interface CrmTransformedRecord {
+export interface SessionTransformedRecord {
   // Colunas Padronizadas Nativas
   id_sessao?: string | null;
   id_contato?: string | null;
@@ -48,7 +48,7 @@ export interface CrmTransformedRecord {
   status_conversa?: string | null;
   timestamp?: string;
 
-  // Campos Derivados e Mapeados
+  // Campos Derivados e Mapeados da Operação
   [key: string]: unknown;
 
   // Variáveis Livres Agrupadas em JSON
@@ -56,11 +56,12 @@ export interface CrmTransformedRecord {
 }
 
 @Injectable()
-export class CrmDataTransformerService {
-  private readonly logger = new Logger(CrmDataTransformerService.name);
+export class SessionDataTransformerService {
+  protected readonly logger = new Logger(SessionDataTransformerService.name);
 
   /**
-   * Transforma o estado da sessão e metadados em um registro estruturado pronto para CRM.
+   * Transforma o estado da sessão e metadados em um registro estruturado
+   * pronto para exportação para plataformas externas (ERPs, Webhooks, Data Lakes).
    */
   transform(params: {
     sessionState: Record<string, unknown>;
@@ -76,8 +77,8 @@ export class CrmDataTransformerService {
       closed_at?: Date | string | null;
       metadata?: unknown;
     } | null;
-    config?: CrmOutputConfig | null;
-  }): CrmTransformedRecord {
+    config?: SessionOutputConfig | null;
+  }): SessionTransformedRecord {
     const { sessionState, endUser, conversation, config } = params;
 
     const userMeta = (endUser?.metadata as Record<string, unknown>) || {};
@@ -114,7 +115,7 @@ export class CrmDataTransformerService {
       (userMeta.normalized_phone as string) ||
       null;
 
-    const record: CrmTransformedRecord = {
+    const record: SessionTransformedRecord = {
       id_sessao,
       id_contato,
       documento,
@@ -145,7 +146,7 @@ export class CrmDataTransformerService {
       'pending_agent_id',
     ]);
 
-    // 2. Processamento de Campos Derivados por Regras
+    // 2. Processamento de Campos Derivados por Regras Configuradas
     const derivedRules = config?.derived_fields || [];
     for (const rule of derivedRules) {
       if (!rule.target_column || !rule.source_field) continue;
@@ -199,7 +200,8 @@ export class CrmDataTransformerService {
       record[rule.target_column] = this.castType(finalVal, rule.type);
     }
 
-    // Regra Padrão Automática de Cobrança: se houver agreementId na sessão, deriva promessa se não houver regra explícita
+    // 3. Regra de Derivação Automática de Acordo (se houver id de acordo e não foi explicitamente sobrescrito)
+    const opType = String(config?.operation_type || '').toLowerCase();
     if (!('promessa' in record)) {
       const agreementId =
         this.getByPath(sessionState, 'agreementId') ||
@@ -209,7 +211,8 @@ export class CrmDataTransformerService {
       if (
         agreementId !== undefined &&
         agreementId !== null &&
-        agreementId !== ''
+        agreementId !== '' &&
+        (opType === 'cobranca' || opType === '' || opType === 'geral')
       ) {
         record['promessa'] = true;
         record['id_acordo'] = String(agreementId);
@@ -219,7 +222,7 @@ export class CrmDataTransformerService {
       }
     }
 
-    // 3. Coleta de Variáveis Restantes no JSONB `dados_variaveis`
+    // 4. Coleta de Variáveis Restantes no JSONB `dados_variaveis`
     const includeUnmapped = config?.include_unmapped_as_json !== false;
     if (includeUnmapped) {
       const unmappedColName =
@@ -261,7 +264,7 @@ export class CrmDataTransformerService {
   }
 
   private evaluateOperator(
-    operator: CrmRuleOperator,
+    operator: SessionRuleOperator,
     value: unknown,
     compareVal?: unknown,
   ): boolean {

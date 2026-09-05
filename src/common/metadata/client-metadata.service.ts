@@ -138,8 +138,8 @@ WHERE a.id = ${clientId}::uuid
         ...(currentMetadata.variable_schema
           ? { variable_schema: currentMetadata.variable_schema }
           : {}),
-        ...(currentMetadata.crm_output_config
-          ? { crm_output_config: currentMetadata.crm_output_config }
+        ...(currentMetadata.session_output_config
+          ? { session_output_config: currentMetadata.session_output_config }
           : {}),
         ...(currentMetadata.llm_providers
           ? { llm_providers: currentMetadata.llm_providers }

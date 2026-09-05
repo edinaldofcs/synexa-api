@@ -4,7 +4,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { MediaService } from '../media/media.service';
-import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
+import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { ApiToolExecutorService } from './services/api-tool-executor.service';
 import { LlmToolLoopService } from './services/llm-tool-loop.service';
@@ -162,7 +162,7 @@ describe('TestChatService', () => {
           useValue: { calculateTokenCost: jest.fn().mockReturnValue(0.0001) },
         },
         {
-          provide: CrmDataTransformerService,
+          provide: SessionDataTransformerService,
           useValue: { transform: jest.fn().mockReturnValue({ cliente: 'x' }) },
         },
         {
@@ -215,16 +215,18 @@ describe('TestChatService', () => {
       );
     });
 
-    it('deve reutilizar a conversa lida no inicio do turno ao gravar crm_record, preservando o contexto persistido', async () => {
+    it('deve reutilizar a conversa lida no inicio do turno ao gravar session_record, preservando o contexto persistido', async () => {
       await service.send(buildDto());
 
       const updateCalls = mockPrisma.conversations.update.mock.calls;
-      const crmUpdate = updateCalls[updateCalls.length - 1][0];
-      expect(crmUpdate.where).toEqual({ id: 'conv-1' });
-      expect(crmUpdate.data.metadata[CONTEXT_KEY]).toMatchObject({
+      const sessionUpdate = updateCalls[updateCalls.length - 1][0];
+      expect(sessionUpdate.where).toEqual({ id: 'conv-1' });
+      expect(sessionUpdate.data.metadata[CONTEXT_KEY]).toMatchObject({
         pedido: '123',
       });
-      expect(crmUpdate.data.metadata.crm_record).toEqual({ cliente: 'x' });
+      expect(sessionUpdate.data.metadata.session_record).toEqual({
+        cliente: 'x',
+      });
     });
   });
 

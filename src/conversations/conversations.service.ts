@@ -95,7 +95,7 @@ export class ConversationsService {
       throw err;
     }
 
-    // Mapeia variáveis de entrada (CRM, Webhook, API, Discador) para o estado da sessão
+    // Mapeia variáveis de entrada (Sistemas Externos, Webhook, API, Discador) para o estado da sessão
     try {
       let inboundConfig: InboundMappingConfig | undefined;
       if (dto.client_id) {

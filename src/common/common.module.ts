@@ -4,7 +4,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { ClientMetadataService } from './metadata/client-metadata.service';
 import { CredentialAuditService } from './services/credential-audit.service';
-import { CrmDataTransformerService } from './services/crm-data-transformer.service';
+import { SessionDataTransformerService } from './services/session-data-transformer.service';
 import { InboundDataMapperService } from './services/inbound-data-mapper.service';
 import { NativeToolsService } from './services/native-tools.service';
 import { TenantInterceptor } from './interceptors/tenant.interceptor';
@@ -20,7 +20,7 @@ import { ToolsController } from './controllers/tools.controller';
   providers: [
     ClientMetadataService,
     CredentialAuditService,
-    CrmDataTransformerService,
+    SessionDataTransformerService,
     InboundDataMapperService,
     NativeToolsService,
     HealthService,
@@ -38,7 +38,7 @@ import { ToolsController } from './controllers/tools.controller';
     RedisModule,
     ClientMetadataService,
     CredentialAuditService,
-    CrmDataTransformerService,
+    SessionDataTransformerService,
     InboundDataMapperService,
     NativeToolsService,
     HealthService,

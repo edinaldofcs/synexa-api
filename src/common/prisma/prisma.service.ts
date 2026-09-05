@@ -2,7 +2,15 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { tenantLocalStorage } from '../auth/tenant-context';
 
-// Lista de modelos que possuem a coluna 'company_id' para aplicação do filtro
+/**
+ * Lista de modelos que possuem a coluna direta 'company_id' para aplicação automática do filtro.
+ *
+ * NOTA ARQUITETURAL DE SEGURANÇA MULTI-TENANT:
+ * Em produção, o isolamento multi-tenant é garantido na camada de aplicação por esta extensão Prisma.
+ * Modelos subordinados (ex: painel_agents, painel_subagents, painel_apis, painel_tracks) possuem vínculo
+ * com 'painel_clients'. Queries nesses modelos DEVEM sempre ser filtradas via relação com o cliente
+ * (ex: client.company_id == tenant.companyId) para manter o isolamento estrito.
+ */
 export const TENANT_SUPPORTED_MODELS = [
   'users',
   'conversations',

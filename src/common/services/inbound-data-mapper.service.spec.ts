@@ -58,7 +58,7 @@ describe('InboundDataMapperService', () => {
     expect(result.extra_unmapped).toBe('info_adicional');
   });
 
-  it('maps CRM / Webhook payload correctly', () => {
+  it('maps External System / Webhook payload correctly', () => {
     const rawData = {
       customer_tax_id: '12345678000195',
       customer_name: 'Empresa XPTO Ltda',
@@ -69,19 +69,19 @@ describe('InboundDataMapperService', () => {
       enabled: true,
       rules: [
         {
-          source_channel: 'crm',
+          source_channel: 'external_system',
           source_field: 'customer_tax_id',
           target_variable: 'cnpj_cpf',
           transform: 'cpf_cnpj',
         },
         {
-          source_channel: 'crm',
+          source_channel: 'external_system',
           source_field: 'customer_name',
           target_variable: 'razao_social',
           transform: 'uppercase',
         },
         {
-          source_channel: 'crm',
+          source_channel: 'external_system',
           source_field: 'due_date',
           target_variable: 'data_vencimento',
           transform: 'date',
@@ -89,7 +89,7 @@ describe('InboundDataMapperService', () => {
       ],
     };
 
-    const result = service.mapInboundData(rawData, config, 'crm');
+    const result = service.mapInboundData(rawData, config, 'external_system');
 
     expect(result.cnpj_cpf).toBe('12.345.678/0001-95');
     expect(result.razao_social).toBe('EMPRESA XPTO LTDA');

@@ -204,6 +204,8 @@ describe('validateEnv', () => {
         JWT_SECRET: 'a-32-character-jwt-secret-for-tests!',
         ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
         VOICE_PROVIDER: 'gemini',
+        LLM_PROVIDER: 'gemini',
+        GEMINI_API_KEY: 'test-gemini-key',
       };
       expect(() => validateEnv(config)).not.toThrow();
     });
@@ -293,8 +295,45 @@ describe('validateEnv', () => {
         SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
         ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
         VOICE_PROVIDER: 'gemini',
+        LLM_PROVIDER: 'gemini',
+        GEMINI_API_KEY: 'gemini-prod-test-key',
       };
       expect(() => validateEnv(config)).not.toThrow();
+    });
+
+    it('should throw in production when LLM_PROVIDER is mock', () => {
+      const config = {
+        ...baseConfig,
+        ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
+        SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
+        ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
+        VOICE_PROVIDER: 'gemini',
+        LLM_PROVIDER: 'mock',
+        GEMINI_API_KEY: 'gemini-prod-test-key',
+      };
+      expect(() => validateEnv(config)).toThrow(
+        'LLM_PROVIDER cannot be "mock" in production environment',
+      );
+    });
+
+    it('should throw in production when no LLM key is configured', () => {
+      const config = {
+        ...baseConfig,
+        ENVIRONMENT: 'production',
+        AUTH_PROVIDER: 'supabase',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_PUBLISH_KEY: 'supabase-publish-key',
+        SUPABASE_SERVICE_ROLE_KEY: 'supabase-service-role-key',
+        ENCRYPTION_KEY: 'this-is-a-very-long-encryption-key!',
+        VOICE_PROVIDER: 'gemini',
+        LLM_PROVIDER: 'gemini',
+      };
+      expect(() => validateEnv(config)).toThrow(
+        'At least one LLM API key (GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY) must be configured in production environment',
+      );
     });
 
     it('should accept valid staging config', () => {

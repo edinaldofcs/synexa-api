@@ -472,6 +472,21 @@ export function validateEnv(
         'VOICE_PROVIDER cannot be "mock" in production environment',
       );
     }
+    if (validatedConfig.LLM_PROVIDER === LlmProvider.MOCK) {
+      throw new Error(
+        'LLM_PROVIDER cannot be "mock" in production environment',
+      );
+    }
+    const hasAnyLlmKey =
+      Boolean(validatedConfig.GEMINI_API_KEY) ||
+      Boolean(validatedConfig.GROQ_API_KEY) ||
+      Boolean(validatedConfig.OPENROUTER_API_KEY);
+
+    if (!hasAnyLlmKey) {
+      throw new Error(
+        'At least one LLM API key (GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY) must be configured in production environment',
+      );
+    }
   }
 
   return validatedConfig;

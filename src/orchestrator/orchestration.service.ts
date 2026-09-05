@@ -46,7 +46,7 @@ import {
   retryWithBackoff,
   isRetryableError,
 } from './utils/retry-with-backoff.util';
-import { CrmDataTransformerService } from '../common/services/crm-data-transformer.service';
+import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 
 @Injectable()
@@ -64,7 +64,7 @@ export class OrchestrationService {
     private readonly modelPricingService: ModelPricingService,
     private readonly circuitBreaker: ProviderCircuitBreakerService,
     private readonly fallbackProviderService: FallbackProviderService,
-    private readonly crmDataTransformer: CrmDataTransformerService,
+    private readonly sessionDataTransformer: SessionDataTransformerService,
     private readonly analyticsService: AnalyticsService,
   ) {}
 
@@ -848,7 +848,7 @@ export class OrchestrationService {
       if (conv) {
         const clientMeta =
           (conv.painel_clients?.metadata as Record<string, unknown>) || {};
-        const crmOutputConfig = (clientMeta.crm_output_config as any) || null;
+        const outputConfig = (clientMeta.session_output_config as any) || null;
         const freshState =
           await this.conversationsService.getState(conversationId);
 
@@ -865,11 +865,11 @@ export class OrchestrationService {
           });
         }
 
-        const crmRecord = this.crmDataTransformer.transform({
+        const sessionRecord = this.sessionDataTransformer.transform({
           sessionState: freshState,
           endUser: conv.end_users,
           conversation: conv,
-          config: crmOutputConfig,
+          config: outputConfig,
         });
 
         const existingMeta = (conv.metadata as Record<string, unknown>) || {};
@@ -878,15 +878,15 @@ export class OrchestrationService {
           data: {
             metadata: {
               ...existingMeta,
-              crm_record: crmRecord,
+              session_record: sessionRecord,
             } as any,
           },
         });
       }
-    } catch (crmErr) {
+    } catch (outputErr) {
       this.logger.warn(
-        { error: (crmErr as Error).message },
-        'Falha ao atualizar crm_record no handleOutput',
+        { error: (outputErr as Error).message },
+        'Falha ao atualizar session_record no handleOutput',
       );
     }
 
@@ -971,7 +971,7 @@ export class OrchestrationService {
     const schema =
       (metadata.variable_schema as Record<string, unknown>) || null;
 
-    let crmInstruction = '';
+    let dataCollectionInstruction = '';
     if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {
       const fieldList = schema.fields
         .map(
@@ -980,7 +980,7 @@ export class OrchestrationService {
         )
         .join('\n');
 
-      crmInstruction = `\n\n[DIRETRIZES DE CRM & COLETA DE DADOS - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou confirme os seguintes campos durante o atendimento (eles são persistidos automaticamente no CRM pela plataforma):\n${fieldList}\nSempre que o cliente fornecer um desses dados, confirme-o claramente na conversa e, se houver uma API disponível para registrá-lo, utilize-a.`;
+      dataCollectionInstruction = `\n\n[DIRETRIZES DE COLETA DE DADOS DA SESSÃO - OPERAÇÃO: ${String(schema.operation_type || 'GERAL').toUpperCase()}]\nColete ou confirme os seguintes campos durante o atendimento (eles são validados e registrados automaticamente na sessão pela plataforma):\n${fieldList}\nSempre que o cliente fornecer um desses dados, confirme-o claramente na conversa e, se houver uma API disponível para registrá-lo, utilize-a.`;
     }
 
     const variables: Record<string, unknown> = {
@@ -993,7 +993,7 @@ export class OrchestrationService {
       }
     }
 
-    const fullPrompt = prompt + crmInstruction;
+    const fullPrompt = prompt + dataCollectionInstruction;
     return resolvePromptTemplateString(fullPrompt, variables);
   }
 }

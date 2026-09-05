@@ -182,7 +182,7 @@ export class VoiceCallSession {
         nome_agente: fallbackAgentName,
         agent_name: fallbackAgentName,
         // nome_cliente = nome da PESSOA na linha (caller_name limpo, ou
-        // sobrescrito pelo mapeamento inbound/CRM); NUNCA o nome da empresa
+        // sobrescrito pelo mapeamento inbound de variáveis); NUNCA o nome da empresa
         nome_cliente: callerNameClean,
         // nome_empresa/empresa/company_name = empresa (tenant)
         nome_empresa: fallbackCompanyName,
@@ -288,7 +288,7 @@ export class VoiceCallSession {
       toolsDeclarations.push({
         name: 'set_call_variable',
         description:
-          'Define ou atualiza uma variável na telefonia/PBX para o fluxo da chamada ou CRM.',
+          'Define ou atualiza uma variável na telefonia/PBX para o fluxo da chamada ou sistemas externos.',
         parameters: {
           type: 'OBJECT',
           properties: {

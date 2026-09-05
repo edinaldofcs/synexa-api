@@ -14,11 +14,11 @@ export type InboundTransformType =
 export type InboundChannelSource =
   | 'all'
   | 'voice'
-  | 'crm'
   | 'webhook'
   | 'api'
   | 'whatsapp'
-  | 'webchat';
+  | 'webchat'
+  | 'external_system';
 
 export interface InboundMappingRule {
   id?: string;
@@ -49,7 +49,7 @@ export class InboundDataMapperService {
   private readonly logger = new Logger(InboundDataMapperService.name);
 
   /**
-   * Mapeia dados brutos de entrada (Discador, CRM, API, Webhook)
+   * Mapeia dados brutos de entrada (Discador, Telefonia, Webhooks, APIs ou Sistemas Externos)
    * para variáveis padronizadas da sessão com base nas regras do cliente.
    */
   mapInboundData(
@@ -114,10 +114,8 @@ export class InboundDataMapperService {
             'asterisk',
             'sip',
           ].includes(normalizedChannel)) ||
-        (ruleChannel === 'crm' &&
-          ['crm', 'webhook', 'api'].includes(normalizedChannel)) ||
-        (ruleChannel === 'api' &&
-          ['api', 'webhook'].includes(normalizedChannel));
+        (['webhook', 'api', 'external_system'].includes(ruleChannel) &&
+          ['webhook', 'api', 'external_system'].includes(normalizedChannel));
 
       if (!channelMatches) continue;
 

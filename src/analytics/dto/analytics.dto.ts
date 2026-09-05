@@ -135,4 +135,3 @@ export class BusinessEventRecord {
   marker_code!: string;
   values!: Record<string, unknown>;
 }
-
