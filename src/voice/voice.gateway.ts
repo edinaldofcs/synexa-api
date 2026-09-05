@@ -378,17 +378,23 @@ export class VoiceGateway
               session.mockSession = null;
             }
 
-            session.beginSession({
-              companyId: authenticatedUser.company_id,
-              agentId: selectedAgent?.id,
-              state: selectedAgent?.id
-                ? { current_agent_id: selectedAgent.id }
-                : {},
-            });
-
             // Configurações salvas do cliente (buscadas em paralelo à seleção
             // do agente durante a abertura)
             const clientDb = await clientDbPromise;
+
+            session.beginSession({
+              companyId: authenticatedUser.company_id,
+              agentId: selectedAgent?.id,
+              state: {
+                ...(selectedAgent?.id ? { current_agent_id: selectedAgent.id } : {}),
+                nome_agente: clientDb?.agent_name || selectedAgent?.service_step || 'Assistente',
+                agent_name: clientDb?.agent_name || selectedAgent?.service_step || 'Assistente',
+                nome_empresa: clientDb?.company_name || 'Synexa',
+                company_name: clientDb?.company_name || 'Synexa',
+                ...(msg.variables && typeof msg.variables === 'object' ? msg.variables : {}),
+                ...(msg.contextVariables && typeof msg.contextVariables === 'object' ? msg.contextVariables : {}),
+              },
+            });
 
             const clientMeta = (clientDb?.metadata as Record<string, unknown>) || {};
             const voiceEngine = ((msg.engine || clientMeta.voice_engine || 'hybrid') as string) === 'live_api' ? 'live_api' : 'hybrid';
@@ -702,6 +708,16 @@ export class VoiceGateway
                       `💾 Variável salva na sessão pelo assistente.`,
                       { state: summarizeState(session.state) },
                     );
+                    sendToClient({
+                      type: 'context_variables',
+                      variables: {
+                        nome_agente: clientDb?.agent_name || 'Assistente',
+                        agent_name: clientDb?.agent_name || 'Assistente',
+                        nome_empresa: clientDb?.company_name || 'Synexa',
+                        company_name: clientDb?.company_name || 'Synexa',
+                        ...session.state,
+                      },
+                    });
                   }
                   responses.push({
                     id: call.id,
@@ -779,6 +795,16 @@ export class VoiceGateway
                       { state: session.state },
                       'info',
                     );
+                    sendToClient({
+                      type: 'context_variables',
+                      variables: {
+                        nome_agente: clientDb?.agent_name || 'Assistente',
+                        agent_name: clientDb?.agent_name || 'Assistente',
+                        nome_empresa: clientDb?.company_name || 'Synexa',
+                        company_name: clientDb?.company_name || 'Synexa',
+                        ...session.state,
+                      },
+                    });
                     // Na voz a troca é SEMPRE imediata após a validação da API
                     // (o activation_mode se aplica apenas ao texto)
                     const conditionAgent = await findActivationAgent(
@@ -978,22 +1004,25 @@ export class VoiceGateway
                 : null;
               const rawPrompt = buildRawAgentPrompt(agent);
 
+              const currentVariables: Record<string, any> = {
+                nome_agente: clientDb?.agent_name || agent?.service_step || 'Assistente',
+                agent_name: clientDb?.agent_name || agent?.service_step || 'Assistente',
+                nome_empresa: clientDb?.company_name || 'Synexa',
+                company_name: clientDb?.company_name || 'Synexa',
+                ...session.state,
+              };
+
               // Resolve variáveis {{chave}} do prompt com o estado da sessão
               // (incluindo retornos de APIs) + dados do cliente — pipeline
               // compartilhado com a telefonia
               const systemPrompt = buildVoiceSystemPrompt({
                 agent,
+                agentVariables: currentVariables,
                 fallbackPrompt:
                   msg.systemPrompt ||
                   msg.prompt ||
                   'Você é um assistente de voz inteligente e natural do Synexa. Responda com clareza e empatia.',
-                variables: {
-                  nome_agente: clientDb?.agent_name || '',
-                  // nome_empresa = empresa/tenant; nome_cliente (pessoa na
-                  // linha) só existe se estiver no estado da sessão
-                  nome_empresa: clientDb?.company_name || '',
-                  ...session.state,
-                },
+                variables: currentVariables,
               });
 
               // Informa ao painel qual agente está ativo e com quais
@@ -1007,6 +1036,7 @@ export class VoiceGateway
                 voiceName: session.voiceName,
                 systemPrompt,
                 rawPrompt,
+                variables: currentVariables,
                 tools: voiceToolDeclarations.map((tool) => ({
                   name: tool.name,
                   description: tool.description,
@@ -1410,15 +1440,19 @@ export class VoiceGateway
                 'success',
               );
               const targetRawPrompt = buildRawAgentPrompt(targetAgent);
+              const targetVariables: Record<string, any> = {
+                nome_agente: clientDb?.agent_name || targetAgent?.service_step || 'Assistente',
+                agent_name: clientDb?.agent_name || targetAgent?.service_step || 'Assistente',
+                nome_empresa: clientDb?.company_name || 'Synexa',
+                company_name: clientDb?.company_name || 'Synexa',
+                ...session.state,
+              };
               const targetSystemPrompt = buildVoiceSystemPrompt({
                 agent: targetAgent,
+                agentVariables: targetVariables,
                 fallbackPrompt:
                   'Você é um assistente de voz inteligente e natural do Synexa.',
-                variables: {
-                  nome_agente: clientDb?.agent_name || '',
-                  nome_empresa: clientDb?.company_name || '',
-                  ...session.state,
-                },
+                variables: targetVariables,
               });
               sendToClient({
                 type: 'agent_switched',
@@ -1429,6 +1463,7 @@ export class VoiceGateway
                 voiceName: session.voiceName,
                 rawPrompt: targetRawPrompt,
                 systemPrompt: targetSystemPrompt,
+                variables: targetVariables,
               });
             };
 

@@ -59,6 +59,18 @@ export function buildAgentPromptFromBlocks(
   }
   // nome_cliente = nome da PESSOA na linha (vem de caller_name, mapeamento
   // inbound ou set_session_variable) — não tem relação com company_name
+  if (mergedState.client_name && !mergedState.nome_cliente) {
+    mergedState.nome_cliente = mergedState.client_name;
+  } else if (mergedState.nome_cliente && !mergedState.client_name) {
+    mergedState.client_name = mergedState.nome_cliente;
+  }
+
+  // contrato
+  if (mergedState.contract_id && !mergedState.contrato) {
+    mergedState.contrato = mergedState.contract_id;
+  } else if (mergedState.contrato && !mergedState.contract_id) {
+    mergedState.contract_id = mergedState.contrato;
+  }
 
   if (blocks && typeof blocks === 'object') {
     const parts = STRUCTURED_SECTIONS.map(({ key, label }) => {

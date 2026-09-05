@@ -208,8 +208,31 @@ export function resolvePromptTemplateString(
     // 1. Verifica variáveis customizadas do contexto
     if (Object.prototype.hasOwnProperty.call(variables, key)) {
       const val = variables[key];
-      if (val === null || val === undefined) return '';
-      return typeof val === 'string' ? val : JSON.stringify(val);
+      if (val !== null && val !== undefined) {
+        return typeof val === 'string' ? val : JSON.stringify(val);
+      }
+    }
+
+    // 1.1 Fallbacks de aliases comuns
+    const aliases: Record<string, string[]> = {
+      nome_agente: ['agent_name', 'nome_atendente', 'atendente'],
+      agent_name: ['nome_agente'],
+      nome_empresa: ['company_name', 'empresa'],
+      company_name: ['nome_empresa', 'empresa'],
+      nome_cliente: ['client_name', 'caller_name', 'customer_name', 'cliente'],
+      client_name: ['nome_cliente'],
+      contrato: ['contract_id', 'contract', 'numero_contrato'],
+      valor_original: ['valor', 'debt_amount', 'valor_divida'],
+      dias_atraso: ['atraso', 'dias_em_atraso'],
+    };
+    const keyAliases = aliases[key] || [];
+    for (const alias of keyAliases) {
+      if (Object.prototype.hasOwnProperty.call(variables, alias)) {
+        const val = variables[alias];
+        if (val !== null && val !== undefined && val !== '') {
+          return typeof val === 'string' ? val : JSON.stringify(val);
+        }
+      }
     }
 
     // 2. Verifica variáveis dinâmicas do sistema (ex: hoje, saudacao_tempo, etc.)

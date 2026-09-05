@@ -45,9 +45,10 @@ export interface VoiceSystemPromptOptions {
 export function buildVoiceSystemPrompt(
   options: VoiceSystemPromptOptions,
 ): string {
+  const agentVars = options.agentVariables || options.variables;
   const basePrompt =
     (options.agent
-      ? buildAgentPromptFromBlocks(options.agent, options.agentVariables)
+      ? buildAgentPromptFromBlocks(options.agent, agentVars)
       : options.fallbackPrompt) || '';
 
   return resolvePromptTemplateString(basePrompt, options.variables);
