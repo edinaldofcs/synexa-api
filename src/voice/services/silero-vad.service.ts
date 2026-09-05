@@ -40,11 +40,11 @@ export class SileroVadSession {
     private readonly ort: any | null,
     private readonly options: SileroVadSessionOptions = {},
   ) {
-    this.positiveThreshold = options.positiveSpeechThreshold ?? 0.5;
-    this.negativeThreshold = options.negativeSpeechThreshold ?? 0.35;
-    this.minSpeechFrames = options.minSpeechFrames ?? 3;
-    this.redemptionFrames = options.redemptionFrames ?? 10;
-    this.preRollFrames = options.preRollFrames ?? 6;
+    this.positiveThreshold = options.positiveSpeechThreshold ?? 0.4;
+    this.negativeThreshold = options.negativeSpeechThreshold ?? 0.25;
+    this.minSpeechFrames = options.minSpeechFrames ?? 2;
+    this.redemptionFrames = options.redemptionFrames ?? 12;
+    this.preRollFrames = options.preRollFrames ?? 8;
 
     if (this.inferenceSession && this.ort) {
       // Inicializa o estado recorrente do Silero v5: [2, 1, 128] com zeros
@@ -135,7 +135,7 @@ export class SileroVadSession {
         // Fala humana em ascensão
         if (this.consecutiveSpeechFrames >= this.minSpeechFrames) {
           this.isSpeaking = true;
-          this.logger.debug(
+          this.logger.log(
             `🎙️ [SileroVAD] Fala humana detectada (Prob: ${(prob * 100).toFixed(1)}%). Ativando turno.`,
           );
           this.speechFrames = [...this.preRollQueue, frame];
@@ -160,10 +160,10 @@ export class SileroVadSession {
 
         if (this.consecutiveSilenceFrames >= this.redemptionFrames) {
           this.isSpeaking = false;
-          this.logger.debug(
-            `🛑 [SileroVAD] Fim de fala detectado após ${this.redemptionFrames * 32}ms de silêncio neural.`,
-          );
           const fullAudio = Buffer.concat(this.speechFrames);
+          this.logger.log(
+            `🛑 [SileroVAD] Fim de fala detectado após ${this.redemptionFrames * 32}ms de silêncio neural (${fullAudio.length} bytes, ${(fullAudio.length / 32).toFixed(0)}ms).`,
+          );
           this.speechFrames = [];
           this.preRollQueue = [];
           this.options.onSpeechEnd?.(fullAudio);

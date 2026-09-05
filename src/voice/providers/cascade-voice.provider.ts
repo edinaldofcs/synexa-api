@@ -258,8 +258,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
   private async handleSpeechTurnCompleted(speechAudio: Buffer): Promise<void> {
     const durationMs = Math.round(speechAudio.length / 32);
-    if (durationMs < 300) {
-      this.logger.debug(
+    if (durationMs < 200) {
+      this.logger.log(
         `[CascadeVoice] Segmento Silero VAD descartado por duração mínima (${durationMs}ms)`,
       );
       return;
@@ -267,13 +267,16 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
     const { peak, rms } = this.getBufferEnergy(speechAudio);
     // VAD acústico secundário: descarta ruído inaudível de fundo que não seja fala audível
-    if (peak < 400 && rms < 80) {
-      this.logger.debug(
+    if (peak < 150 && rms < 25) {
+      this.logger.log(
         `[CascadeVoice] Segmento Silero VAD descartado por ruído inaudível (RMS: ${Math.round(rms)}, Peak: ${peak})`,
       );
       return;
     }
 
+    this.logger.log(
+      `🎙️ [CascadeVoice] Turno de fala fechado (${durationMs}ms, RMS: ${Math.round(rms)}, Peak: ${peak}). Despachando para Groq Whisper...`,
+    );
     await this.processUserSpeech(speechAudio, rms, durationMs);
   }
 
@@ -377,7 +380,10 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         { apiKey: groqKey },
       );
 
-      if (!userText || !userText.trim()) return;
+      if (!userText || !userText.trim()) {
+        this.logger.log('[CascadeVoice] Whisper retornou texto vazio para o áudio');
+        return;
+      }
 
       // Filtro Anti-Alucinação do Whisper em áudios de baixa energia/curtos
       if (this.isWhisperHallucination(userText, rms, durationMs)) {
@@ -387,6 +393,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         return;
       }
 
+      this.logger.log(`📝 [CascadeVoice] Fala transcrita pelo Groq Whisper: "${userText}"`);
       this.options?.onUserTranscript?.(userText);
       await this.executeLlmAndSpeak(userText);
     } catch (err: any) {

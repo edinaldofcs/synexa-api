@@ -451,12 +451,22 @@ export class VoiceGateway
             // VoiceCallSession)
             callAdapter.onAudio((pcm16) => {
               if (!session.liveProvider) return;
+              const base64Audio = pcm16.toString('base64');
+
+              // No modo híbrido: Silero VAD v5 neural opera localmente com fluxo contínuo.
+              // O AudioGate acústico é bypassado para não picotar a fala nem forçar resets a cada pausa.
+              if (session.voiceEngine === 'hybrid') {
+                session.gateSession?.processChunk(base64Audio, session.isAiSpeaking);
+                session.liveProvider.sendAudio(base64Audio);
+                return;
+              }
+
               if (!session.gateSession) {
-                session.liveProvider.sendAudio(pcm16.toString('base64'));
+                session.liveProvider.sendAudio(base64Audio);
                 return;
               }
               const result = session.gateSession.processChunk(
-                pcm16.toString('base64'),
+                base64Audio,
                 session.isAiSpeaking,
               );
               if (result) {
