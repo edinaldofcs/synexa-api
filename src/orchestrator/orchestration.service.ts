@@ -76,8 +76,15 @@ export class OrchestrationService {
     text: string,
     requestId?: string,
   ): Promise<ProcessMessageResult> {
+    const conversation =
+      await this.conversationsService.getConversation(conversationId);
+    const activeChannel = conversation?.origin_channel || 'webchat';
+
     const state: Record<string, unknown> = {
       ...(await this.conversationsService.getState(conversationId)),
+      canal: activeChannel,
+      origin_channel: activeChannel,
+      channel: activeChannel,
       mensagem_usuario: text,
       user_message: text,
       last_message: text,
@@ -85,15 +92,13 @@ export class OrchestrationService {
       text,
       texto: text,
     };
-    const conversation =
-      await this.conversationsService.getConversation(conversationId);
 
     const hadPendingAgent = Boolean(state.pending_agent_id);
 
     const agentConfig = await this.agentConfigResolver.resolveAgentConfig(
       clientId,
       state,
-      conversation.origin_channel || undefined,
+      activeChannel,
     );
 
     await this.conversationsService.updateState(conversationId, {

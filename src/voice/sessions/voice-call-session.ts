@@ -175,6 +175,9 @@ export class VoiceCallSession {
 
       const rawContextVariables: Record<string, any> = {
         ...adapterCustomVars,
+        canal: 'voice',
+        origin_channel: 'voice',
+        channel: 'voice',
         caller_number: this.telephonyAdapter.metadata.callerNumber,
         caller_name: callerNameClean,
         did_number: this.telephonyAdapter.metadata.didNumber,
@@ -207,6 +210,9 @@ export class VoiceCallSession {
           'Você é um assistente de voz inteligente e natural. Responda com clareza e empatia.',
         variables: {
           ...contextVariables,
+          canal: 'voice',
+          origin_channel: 'voice',
+          channel: 'voice',
           nome_agente: contextVariables.nome_agente || fallbackAgentName,
           agent_name: contextVariables.agent_name || fallbackAgentName,
           // nome da pessoa na linha: sem valor => vazio (não vaza o nome da

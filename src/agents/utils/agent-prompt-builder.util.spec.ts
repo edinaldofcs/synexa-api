@@ -137,4 +137,74 @@ describe('buildAgentPromptFromBlocks', () => {
     expect(prompt).toContain('Trate com tom cordial padrão.');
     expect(prompt).not.toContain('Trate com atenção VIP.');
   });
+
+  it('should inject channel-specific output rules into regras_output section when canal is voice', () => {
+    const prompt = buildAgentPromptFromBlocks(
+      {
+        persona_blocks: {
+          identidade_persona: 'Você é um assistente financeiro.',
+          regras_output: 'Regra geral: seja objetivo.',
+          regras_output_canais: {
+            voice: 'Em voz: nunca use emojis e responda em até 2 frases curtas.',
+            whatsapp: 'No WhatsApp: use emojis e negrito moderadamente.',
+          },
+        },
+      },
+      {
+        canal: 'voice',
+      },
+    );
+
+    expect(prompt).toContain('## Regras de Output & Formatação');
+    expect(prompt).toContain('Regra geral: seja objetivo.');
+    expect(prompt).toContain('### Diretrizes Específicas do Canal (Voz / Telefonia)');
+    expect(prompt).toContain(
+      'Em voz: nunca use emojis e responda em até 2 frases curtas.',
+    );
+    expect(prompt).not.toContain('No WhatsApp: use emojis e negrito');
+  });
+
+  it('should inject channel-specific output rules for whatsapp when canal is evolution or whatsapp', () => {
+    const prompt = buildAgentPromptFromBlocks(
+      {
+        persona_blocks: {
+          identidade_persona: 'Você é um assistente financeiro.',
+          regras_output: 'Regra geral: seja objetivo.',
+          regras_output_canais: {
+            voice: 'Em voz: frases curtas.',
+            whatsapp: 'No WhatsApp: use emojis acolhedores.',
+          },
+        },
+      },
+      {
+        origin_channel: 'evolution',
+      },
+    );
+
+    expect(prompt).toContain('## Regras de Output & Formatação');
+    expect(prompt).toContain('### Diretrizes Específicas do Canal (WhatsApp)');
+    expect(prompt).toContain('No WhatsApp: use emojis acolhedores.');
+    expect(prompt).not.toContain('Em voz: frases curtas.');
+  });
+
+  it('should use only base regras_output when no channel-specific rule exists', () => {
+    const prompt = buildAgentPromptFromBlocks(
+      {
+        persona_blocks: {
+          identidade_persona: 'Você é um assistente.',
+          regras_output: 'Regra geral: seja sempre cortês.',
+          regras_output_canais: {
+            voice: 'Diretriz de voz.',
+          },
+        },
+      },
+      {
+        canal: 'sms',
+      },
+    );
+
+    expect(prompt).toContain('## Regras de Output & Formatação\nRegra geral: seja sempre cortês.');
+    expect(prompt).not.toContain('Diretriz de voz.');
+  });
 });
+

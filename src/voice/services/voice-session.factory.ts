@@ -72,7 +72,10 @@ export class VoiceSessionFactory {
 
     const clientMeta = (client?.metadata as Record<string, unknown>) || {};
     const voiceEngine =
-      overrides?.voiceEngine || (clientMeta.voice_engine as string) || 'hybrid';
+      overrides?.voiceEngine ||
+      (agent?.voice_engine as string) ||
+      (clientMeta.voice_engine as string) ||
+      'hybrid';
 
     // Chave da IA por tenant (provider_credentials criptografada)
     const tenantGeminiKey = clientId
@@ -88,10 +91,17 @@ export class VoiceSessionFactory {
     let resolvedVoiceName =
       overrides?.voiceName ||
       (agent.voice_name as string) ||
-      (client.voice_name as string);
+      (client.voice_name as string) ||
+      '';
 
     let cartesiaApiKey = overrides?.cartesiaApiKey || '';
     let groqApiKey = overrides?.groqApiKey || '';
+
+    const isUuidVoice =
+      resolvedVoiceName &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        resolvedVoiceName.trim(),
+      );
 
     if (voiceEngine === 'hybrid') {
       if (!cartesiaApiKey && clientId) {
@@ -103,7 +113,7 @@ export class VoiceSessionFactory {
       if (!groqApiKey && clientId) {
         groqApiKey = await this.keyResolver.resolveApiKey(clientId, 'groq');
       }
-      if (!resolvedVoiceName || resolvedVoiceName.length < 20) {
+      if (!isUuidVoice) {
         resolvedVoiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
       }
       liveProvider = new CascadeVoiceProvider(
@@ -112,7 +122,7 @@ export class VoiceSessionFactory {
         this.sileroVadService,
       );
     } else {
-      if (!resolvedVoiceName) {
+      if (!resolvedVoiceName || isUuidVoice) {
         resolvedVoiceName =
           this.configService.get<string>('GEMINI_LIVE_DEFAULT_VOICE') ||
           'Aoede';

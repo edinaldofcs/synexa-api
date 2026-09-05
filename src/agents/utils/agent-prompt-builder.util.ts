@@ -12,9 +12,43 @@ export interface PersonaBlocks {
   ofertas_disponiveis?: string | PromptContentBlock[];
   fluxo_conversa?: string | PromptContentBlock[];
   regras_output?: string | PromptContentBlock[];
+  regras_output_canais?: Record<string, string | PromptContentBlock[]>;
   guardrails?: string | PromptContentBlock[];
   variaveis_customizadas?: Record<string, string> | string;
 }
+
+export function normalizeChannelKey(channel?: string): string {
+  if (!channel) return '';
+  const c = String(channel).toLowerCase().trim();
+  if (
+    [
+      'voice',
+      'telephony',
+      'fastagi',
+      'callflex',
+      'sip',
+      'audiosocket',
+      'webrtc',
+      'telefone',
+      'voz',
+    ].includes(c)
+  ) {
+    return 'voice';
+  }
+  if (['whatsapp', 'wpp', 'evolution', 'zap'].includes(c)) return 'whatsapp';
+  if (['sms'].includes(c)) return 'sms';
+  if (['webchat', 'chat', 'widget', 'navegador', 'web'].includes(c)) return 'webchat';
+  if (['api', 'integracao', 'webhook'].includes(c)) return 'api';
+  return c;
+}
+
+export const CHANNEL_LABELS: Record<string, string> = {
+  voice: 'Voz / Telefonia',
+  whatsapp: 'WhatsApp',
+  sms: 'SMS',
+  webchat: 'WebChat',
+  api: 'API / Integração',
+};
 
 const STRUCTURED_SECTIONS: Array<{ key: keyof PersonaBlocks; label: string }> =
   [
@@ -42,6 +76,17 @@ export function buildAgentPromptFromBlocks(
 ): string {
   const blocks = agent.persona_blocks as PersonaBlocks | null | undefined;
   const mergedState: Record<string, any> = { ...(state || {}) };
+
+  // Normaliza canal
+  const rawChannel = (mergedState.canal ||
+    mergedState.origin_channel ||
+    mergedState.channel) as string | undefined;
+  if (rawChannel) {
+    const normalized = normalizeChannelKey(rawChannel);
+    if (!mergedState.canal) mergedState.canal = normalized;
+    if (!mergedState.origin_channel) mergedState.origin_channel = rawChannel;
+    if (!mergedState.channel) mergedState.channel = rawChannel;
+  }
 
   // Normaliza aliases comuns
   if (mergedState.agent_name && !mergedState.nome_agente) {
@@ -74,13 +119,68 @@ export function buildAgentPromptFromBlocks(
 
   if (blocks && typeof blocks === 'object') {
     const parts = STRUCTURED_SECTIONS.map(({ key, label }) => {
-      const content = blocks[key];
-      const value =
-        typeof content === 'string'
-          ? resolveConditionalString(content.trim(), mergedState)
-          : Array.isArray(content)
-            ? resolveConditionalBlocks(content, mergedState).trim()
-            : '';
+      let value = '';
+
+      if (key === 'regras_output') {
+        const baseContent = blocks.regras_output;
+        const baseValue =
+          typeof baseContent === 'string'
+            ? resolveConditionalString(baseContent.trim(), mergedState)
+            : Array.isArray(baseContent)
+              ? resolveConditionalBlocks(baseContent, mergedState).trim()
+              : '';
+
+        let channelValue = '';
+        if (
+          blocks.regras_output_canais &&
+          typeof blocks.regras_output_canais === 'object'
+        ) {
+          const activeKey = normalizeChannelKey(
+            (mergedState.canal as string) ||
+              (mergedState.origin_channel as string) ||
+              (mergedState.channel as string),
+          );
+
+          const rawChannelContent =
+            (activeKey && blocks.regras_output_canais[activeKey]) ||
+            (rawChannel &&
+              blocks.regras_output_canais[String(rawChannel).toLowerCase()]) ||
+            undefined;
+
+          if (rawChannelContent) {
+            channelValue =
+              typeof rawChannelContent === 'string'
+                ? resolveConditionalString(rawChannelContent.trim(), mergedState)
+                : Array.isArray(rawChannelContent)
+                  ? resolveConditionalBlocks(rawChannelContent, mergedState).trim()
+                  : '';
+          }
+        }
+
+        if (baseValue && channelValue) {
+          const activeKey = normalizeChannelKey(
+            (mergedState.canal as string) ||
+              (mergedState.origin_channel as string) ||
+              (mergedState.channel as string),
+          );
+          const channelLabel =
+            CHANNEL_LABELS[activeKey] || activeKey || 'Canal Ativo';
+          value = `${baseValue}\n\n### Diretrizes Específicas do Canal (${channelLabel})\n${channelValue}`;
+        } else if (channelValue) {
+          value = channelValue;
+        } else {
+          value = baseValue;
+        }
+      } else {
+        const content = blocks[key];
+        value =
+          typeof content === 'string'
+            ? resolveConditionalString(content.trim(), mergedState)
+            : Array.isArray(content)
+              ? resolveConditionalBlocks(content, mergedState).trim()
+              : '';
+      }
+
       return value ? `## ${label}\n${value}` : '';
     }).filter((p) => p.length > 0);
 
