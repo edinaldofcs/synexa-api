@@ -55,6 +55,7 @@ function makeGateway(config: Record<string, unknown> = {}, redis?: any) {
     {} as any,
     {} as any,
     {} as any,
+    {} as any,
   );
   return {
     gateway,

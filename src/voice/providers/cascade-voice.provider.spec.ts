@@ -118,4 +118,110 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
     // A alucinação deve ter sido descartada e não disparar transcrição do usuário
     expect(onUserTranscript).not.toHaveBeenCalled();
   });
+
+  describe('Integração com Silero VAD v5', () => {
+    let mockVadSession: any;
+    let sileroVadService: any;
+
+    beforeEach(() => {
+      mockVadSession = {
+        processChunk: jest.fn().mockResolvedValue({ isSpeech: false, probability: 0 }),
+        reset: jest.fn(),
+        flush: jest.fn().mockReturnValue(null),
+        speaking: false,
+        probability: 0,
+      };
+
+      sileroVadService = {
+        createSession: jest.fn().mockImplementation((opts) => {
+          mockVadSession._opts = opts;
+          return mockVadSession;
+        }),
+      };
+    });
+
+    it('deve inicializar SileroVadSession na conexão e delegar chunks de áudio', () => {
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({ apiKey: 'k', systemPrompt: 'p' });
+
+      expect(sileroVadService.createSession).toHaveBeenCalled();
+
+      const chunk = createPcmChunk(500, 512);
+      provider.sendAudio(chunk);
+
+      expect(mockVadSession.processChunk).toHaveBeenCalled();
+    });
+
+    it('deve interromper a IA quando onSpeechStart do Silero VAD for disparado durante a fala', () => {
+      const onInterrupted = jest.fn();
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({ apiKey: 'k', systemPrompt: 'p', onInterrupted });
+
+      (provider as any).isSpeaking = true;
+      (provider as any).activeContextId = 'ctx-1';
+
+      // Dispara o callback de onSpeechStart configurado na sessão
+      mockVadSession._opts.onSpeechStart();
+
+      expect(onInterrupted).toHaveBeenCalledTimes(1);
+      expect((provider as any).isSpeaking).toBe(false);
+      expect(mockSession.cancelContext).toHaveBeenCalledWith('ctx-1');
+    });
+
+    it('deve processar fala quando onSpeechEnd do Silero VAD for disparado', async () => {
+      const onUserTranscript = jest.fn();
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({
+        apiKey: 'k',
+        systemPrompt: 'p',
+        groqApiKey: 'g-k',
+        onUserTranscript,
+      });
+
+      groqWhisperService.transcribePcm.mockResolvedValueOnce('Olá, como posso ajudar?');
+
+      // Gera um buffer de fala de 500ms com energia audível
+      const speechBuffer = Buffer.alloc(16000);
+      for (let i = 0; i < 8000; i++) {
+        speechBuffer.writeInt16LE(2000, i * 2);
+      }
+
+      mockVadSession._opts.onSpeechEnd(speechBuffer);
+
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(groqWhisperService.transcribePcm).toHaveBeenCalledWith(
+        speechBuffer,
+        expect.objectContaining({ apiKey: 'g-k' }),
+      );
+      expect(onUserTranscript).toHaveBeenCalledWith('Olá, como posso ajudar?');
+    });
+
+    it('deve descarregar buffer via flush no sendAudioStreamEnd e resetar no close', () => {
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({ apiKey: 'k', systemPrompt: 'p' });
+
+      provider.sendAudioStreamEnd();
+      expect(mockVadSession.flush).toHaveBeenCalled();
+
+      provider.close();
+      expect(mockVadSession.reset).toHaveBeenCalled();
+    });
+  });
 });

@@ -1,6 +1,6 @@
 # Stage 1: Base & Dependencies
 FROM node:22-alpine AS base
-RUN apk add --no-cache libc6-compat openssl
+RUN apk add --no-cache libc6-compat gcompat libstdc++ openssl
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -22,7 +22,7 @@ RUN npm prune --production
 
 # Stage 4: Production Run
 FROM node:22-alpine AS production
-RUN apk add --no-cache openssl curl
+RUN apk add --no-cache libc6-compat gcompat libstdc++ openssl curl
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 WORKDIR /app
 COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./

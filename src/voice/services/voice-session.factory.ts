@@ -17,6 +17,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { resolveAudioGateConfig } from './voice-runtime.util';
 import { CartesiaTtsService } from './cartesia-tts.service';
 import { GroqWhisperSttService } from './groq-whisper-stt.service';
+import { SileroVadService } from './silero-vad.service';
 
 export type VoiceSessionFactoryDeps = VoiceCallSessionConfig;
 
@@ -40,6 +41,7 @@ export class VoiceSessionFactory {
     private readonly voiceToolsService: VoiceToolsService,
     private readonly cartesiaTtsService: CartesiaTtsService,
     private readonly groqWhisperSttService: GroqWhisperSttService,
+    private readonly sileroVadService: SileroVadService,
   ) {
     this.maxSessions = this.configService.get<number>('VOICE_MAX_SESSIONS', 50);
   }
@@ -104,6 +106,7 @@ export class VoiceSessionFactory {
       liveProvider = new CascadeVoiceProvider(
         this.cartesiaTtsService,
         this.groqWhisperSttService,
+        this.sileroVadService,
       );
     } else {
       if (!resolvedVoiceName) {

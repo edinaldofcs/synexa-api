@@ -4,6 +4,9 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "deleteOutDir": false,
-    "watchAssets": true
+    "watchAssets": true,
+    "assets": [
+      { "include": "voice/models/**/*", "watchAssets": true }
+    ]
   }
 }

@@ -6,6 +6,10 @@ import {
 } from './voice-provider.interface';
 import { CartesiaTtsService } from '../services/cartesia-tts.service';
 import { GroqWhisperSttService } from '../services/groq-whisper-stt.service';
+import {
+  SileroVadService,
+  SileroVadSession,
+} from '../services/silero-vad.service';
 
 const DEFAULT_CARTESIA_VOICE = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
 const DEFAULT_LLM_MODEL = 'gemini-2.5-flash-lite';
@@ -14,6 +18,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private readonly logger = new Logger(CascadeVoiceProvider.name);
   private options: VoiceProviderConnectOptions | null = null;
   private cartesiaSession: ReturnType<CartesiaTtsService['createSession']> | null = null;
+  private vadSession: SileroVadSession | null = null;
   private isReady = false;
   private isSpeaking = false;
   private activeContextId: string | null = null;
@@ -32,6 +37,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   constructor(
     private readonly cartesiaTtsService: CartesiaTtsService,
     private readonly groqWhisperSttService: GroqWhisperSttService,
+    private readonly sileroVadService?: SileroVadService,
   ) {}
 
   public get ready(): boolean {
@@ -63,6 +69,31 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       language: 'pt',
     });
 
+    // Inicializa Silero VAD v5 se disponível (Rede Neural via ONNX Runtime)
+    if (this.sileroVadService) {
+      this.vadSession = this.sileroVadService.createSession({
+        positiveSpeechThreshold: 0.5,
+        negativeSpeechThreshold: 0.35,
+        minSpeechFrames: 3, // ~96ms para confirmar voz
+        redemptionFrames: 12, // ~384ms de silêncio para fechar turno
+        preRollFrames: 6, // ~192ms de áudio pré-fala
+        onSpeechStart: () => {
+          if (this.isSpeaking) {
+            this.logger.log(
+              '⚡ [CascadeVoice] Barge-in confirmado pelo Silero VAD. Abortando áudio da IA.',
+            );
+            this.handleInterruption();
+          }
+        },
+        onSpeechEnd: (speechAudio: Buffer) => {
+          void this.handleSpeechTurnCompleted(speechAudio);
+        },
+      });
+      this.logger.log(
+        '🧠 [CascadeVoice] Silero VAD v5 ativado para detecção neural e barge-in',
+      );
+    }
+
     this.isReady = true;
     this.logger.log('🎉 [CascadeVoice] Provedor em Cascata conectado (Cartesia Sonic + Groq)');
     this.options.onSetupComplete?.();
@@ -79,26 +110,29 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       return;
     }
 
+    // Pipeline 1: Silero VAD v5 Neural
+    if (this.vadSession) {
+      void this.vadSession.processChunk(buffer);
+      return;
+    }
+
+    // Pipeline 2: Fallback Acústico RMS/Peak
     const { peak, rms } = this.getBufferEnergy(buffer);
-    // Limiar de fala perceptível humana (ruído de fundo/sala é tipicamente peak < 400 e rms < 100)
     const isSpeechChunk = peak >= 1000 || rms >= 180;
 
     // Cenário 1: A IA está falando no momento
     if (this.isSpeaking) {
       if (!isSpeechChunk) {
-        // Silêncio / ruído ambiente do usuário não interrompe a IA nem acumula buffer
         this.consecutiveBargeInFrames = 0;
         return;
       }
 
-      // O usuário está emitindo som real enquanto a IA fala
       this.consecutiveBargeInFrames++;
       this.inboundAudioBuffers.push(buffer);
 
-      // Exige pelo menos 2 frames consecutivos de voz (~40-60ms) para confirmar barge-in intencional
       if (this.consecutiveBargeInFrames >= 2) {
         this.logger.log(
-          `⚡ [CascadeVoice] Barge-in confirmado pelo usuário (Peak: ${peak}, RMS: ${Math.round(rms)}). Abortando áudio da IA.`,
+          `⚡ [CascadeVoice] Barge-in confirmado por fallback acústico (Peak: ${peak}, RMS: ${Math.round(rms)}). Abortando áudio da IA.`,
         );
         this.handleInterruption();
         this.consecutiveBargeInFrames = 0;
@@ -111,7 +145,6 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     if (isSpeechChunk) {
       if (!this.hasVoiceInCurrentTurn) {
         this.hasVoiceInCurrentTurn = true;
-        // Prepend pre-roll para não cortar o primeiro fonema
         if (this.preRollBuffers.length > 0) {
           this.inboundAudioBuffers.push(...this.preRollBuffers);
           this.preRollBuffers = [];
@@ -120,10 +153,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       this.inboundAudioBuffers.push(buffer);
     } else {
       if (this.hasVoiceInCurrentTurn) {
-        // Usuário já começou a falar e fez uma pausa breve entre palavras; preserva o buffer
         this.inboundAudioBuffers.push(buffer);
       } else {
-        // Usuário ainda não falou; mantém apenas janela deslizante de pre-roll (~200ms)
         this.preRollBuffers.push(buffer);
         if (this.preRollBuffers.length > 6) {
           this.preRollBuffers.shift();
@@ -133,7 +164,15 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   public sendAudioStreamEnd(): void {
-    // Se não houve fala real no turno atual ou se o buffer está vazio, descarta silêncio
+    if (this.vadSession) {
+      const flushedAudio = this.vadSession.flush();
+      if (flushedAudio && flushedAudio.length > 0) {
+        void this.handleSpeechTurnCompleted(flushedAudio);
+      }
+      return;
+    }
+
+    // Fallback acústico: Se não houve fala real no turno atual ou se o buffer está vazio, descarta silêncio
     if (!this.hasVoiceInCurrentTurn || this.inboundAudioBuffers.length === 0) {
       this.inboundAudioBuffers = [];
       this.preRollBuffers = [];
@@ -203,6 +242,10 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       this.cartesiaSession.close();
       this.cartesiaSession = null;
     }
+    if (this.vadSession) {
+      this.vadSession.reset();
+      this.vadSession = null;
+    }
     this.inboundAudioBuffers = [];
     this.preRollBuffers = [];
     this.consecutiveBargeInFrames = 0;
@@ -212,6 +255,27 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   // ── MÉTODOS INTERNOS DO PIPELINE ────────────────────────────────
+
+  private async handleSpeechTurnCompleted(speechAudio: Buffer): Promise<void> {
+    const durationMs = Math.round(speechAudio.length / 32);
+    if (durationMs < 300) {
+      this.logger.debug(
+        `[CascadeVoice] Segmento Silero VAD descartado por duração mínima (${durationMs}ms)`,
+      );
+      return;
+    }
+
+    const { peak, rms } = this.getBufferEnergy(speechAudio);
+    // VAD acústico secundário: descarta ruído inaudível de fundo que não seja fala audível
+    if (peak < 400 && rms < 80) {
+      this.logger.debug(
+        `[CascadeVoice] Segmento Silero VAD descartado por ruído inaudível (RMS: ${Math.round(rms)}, Peak: ${peak})`,
+      );
+      return;
+    }
+
+    await this.processUserSpeech(speechAudio, rms, durationMs);
+  }
 
   private getBufferEnergy(buffer: Buffer): { peak: number; rms: number } {
     let peak = 0;

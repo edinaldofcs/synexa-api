@@ -18,6 +18,7 @@ import { CascadeVoiceProvider } from './providers/cascade-voice.provider';
 import { IVoiceProvider } from './providers/voice-provider.interface';
 import { CartesiaTtsService } from './services/cartesia-tts.service';
 import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
+import { SileroVadService } from './services/silero-vad.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { AudioGateService } from './services/audio-gate.service';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -101,6 +102,7 @@ export class VoiceGateway
     private readonly redis: RedisService,
     private readonly cartesiaTtsService: CartesiaTtsService,
     private readonly groqWhisperSttService: GroqWhisperSttService,
+    private readonly sileroVadService: SileroVadService,
     private readonly keyResolver: ProviderKeyResolverService,
   ) {}
 
@@ -1111,6 +1113,7 @@ export class VoiceGateway
                 provider = new CascadeVoiceProvider(
                   this.cartesiaTtsService,
                   this.groqWhisperSttService,
+                  this.sileroVadService,
                 );
               } else {
                 session.model = resolveLiveModel(session.model);
