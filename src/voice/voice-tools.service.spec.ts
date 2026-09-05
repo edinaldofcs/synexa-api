@@ -541,5 +541,32 @@ describe('VoiceToolsService - cache Redis por (clientId, agentId)', () => {
       const res = (service as any).applyExtractData(rawPayload, mapping);
       expect(res.valor_cobranca).toBe(1200);
     });
+
+    it('retorna string "true" e não booleano true quando return_type é string', () => {
+      const mapping = {
+        status_string: {
+          path: 'contrato.valor_devido',
+          rules: [
+            {
+              operator: '>',
+              compare_value: '0',
+              return_value: 'true',
+              return_type: 'string',
+            },
+          ],
+        },
+        fallback_string: {
+          path: 'contrato.campo_nulo',
+          fallback: 'false',
+          fallback_type: 'string',
+        },
+      };
+
+      const res = (service as any).applyExtractData(rawPayload, mapping);
+      expect(typeof res.status_string).toBe('string');
+      expect(res.status_string).toBe('true');
+      expect(typeof res.fallback_string).toBe('string');
+      expect(res.fallback_string).toBe('false');
+    });
   });
 });

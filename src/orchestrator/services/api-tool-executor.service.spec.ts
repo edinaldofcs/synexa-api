@@ -297,6 +297,36 @@ describe('ApiToolExecutorService - chaining tenant scope & cycle guard', () => {
       expect(extracted.regra_and_com_falha).toBe('Recusado pelo Fallback');
       expect(extracted.regra_or).toBe('Aprovado pelo OR');
     });
+
+    it('retorna string "true" e não booleano true quando return_type é string', () => {
+      const extractMap = {
+        status_string: {
+          path: 'divida.valor_atualizado',
+          rules: [
+            {
+              operator: '>',
+              compare_value: '0',
+              return_value: 'true',
+              return_type: 'string',
+            },
+          ],
+        },
+        fallback_string: {
+          path: 'divida.campo_inexistente',
+          fallback: 'false',
+          fallback_type: 'string',
+        },
+      };
+
+      const extracted = (service as any).applyExtractData(
+        rawPayload,
+        extractMap,
+      );
+      expect(typeof extracted.status_string).toBe('string');
+      expect(extracted.status_string).toBe('true');
+      expect(typeof extracted.fallback_string).toBe('string');
+      expect(extracted.fallback_string).toBe('false');
+    });
   });
 });
 

@@ -1398,18 +1398,24 @@ export class ApiToolExecutorService {
           const fb: any = cfg.fallback;
           if (cfg.fallback_type === 'path') {
             value = this.getByPath(raw, String(fb));
-          } else if (
-            cfg.fallback_type === 'boolean' ||
-            fb === true ||
-            fb === false ||
-            fb === 'true' ||
-            fb === 'false'
-          ) {
+          } else if (cfg.fallback_type === 'boolean') {
             value = fb === true || fb === 'true';
           } else if (cfg.fallback_type === 'number') {
             value = Number(fb);
+          } else if (cfg.fallback_type === 'string') {
+            value = String(fb ?? '');
           } else {
-            value = fb;
+            // legacy fallback when fallback_type is not provided
+            if (
+              fb === true ||
+              fb === false ||
+              fb === 'true' ||
+              fb === 'false'
+            ) {
+              value = fb === true || fb === 'true';
+            } else {
+              value = fb;
+            }
           }
         }
 
@@ -1526,17 +1532,23 @@ export class ApiToolExecutorService {
 
       if (return_type === 'path') {
         return_value = this.getByPath(rootRaw, String(return_value));
-      } else if (
-        return_type === 'boolean' ||
-        return_value === true ||
-        return_value === false ||
-        return_value === 'true' ||
-        return_value === 'false'
-      ) {
+      } else if (return_type === 'boolean') {
         return_value = return_value === true || return_value === 'true';
       } else if (return_type === 'number') {
         const num = Number(return_value);
         if (!isNaN(num)) return_value = num;
+      } else if (return_type === 'string') {
+        return_value = String(return_value ?? '');
+      } else {
+        // legacy fallback when return_type is not provided
+        if (
+          return_value === true ||
+          return_value === false ||
+          return_value === 'true' ||
+          return_value === 'false'
+        ) {
+          return_value = return_value === true || return_value === 'true';
+        }
       }
 
       if (Array.isArray(conditions) && conditions.length > 0) {
