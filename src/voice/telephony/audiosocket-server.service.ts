@@ -116,6 +116,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    let session: any = null;
     try {
       // Roteamento: UUID → AsteriskDB → canal real → telephony_endpoints
       const { channel: asteriskChannel, vars: channelVars } =
@@ -227,15 +228,12 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const { session } = await this.voiceSessionFactory.create(
-        adapter,
-        route,
-        {
-          onAiHangupRequest: async () => {
-            await this.amiService.hangupChannel(asteriskChannel || channelId);
-          },
+      const created = await this.voiceSessionFactory.create(adapter, route, {
+        onAiHangupRequest: async () => {
+          await this.amiService.hangupChannel(asteriskChannel || channelId);
         },
-      );
+      });
+      session = created.session;
 
       this.logger.log(
         `📞 [AudioSocket] Sessão iniciada | canal=${channelId} | canal_asterisk=${asteriskChannel ?? 'n/d'} | cliente=${route.client_id} | agente=${route.agent?.id ?? 'default'}`,
@@ -245,6 +243,11 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `[AudioSocket] Erro ao processar chamada ${channelId}: ${err.message}`,
       );
+      if (session) {
+        try {
+          await session.end('start_failed');
+        } catch {}
+      }
       adapter.hangup('internal_error');
     }
   }

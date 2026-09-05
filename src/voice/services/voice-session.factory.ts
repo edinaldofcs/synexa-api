@@ -95,7 +95,10 @@ export class VoiceSessionFactory {
 
     if (voiceEngine === 'hybrid') {
       if (!cartesiaApiKey && clientId) {
-        cartesiaApiKey = await this.keyResolver.resolveApiKey(clientId, 'cartesia');
+        cartesiaApiKey = await this.keyResolver.resolveApiKey(
+          clientId,
+          'cartesia',
+        );
       }
       if (!groqApiKey && clientId) {
         groqApiKey = await this.keyResolver.resolveApiKey(clientId, 'groq');
@@ -111,7 +114,8 @@ export class VoiceSessionFactory {
     } else {
       if (!resolvedVoiceName) {
         resolvedVoiceName =
-          this.configService.get<string>('GEMINI_LIVE_DEFAULT_VOICE') || 'Aoede';
+          this.configService.get<string>('GEMINI_LIVE_DEFAULT_VOICE') ||
+          'Aoede';
       }
       liveProvider = new GeminiLiveVoiceProvider();
     }

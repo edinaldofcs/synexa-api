@@ -39,7 +39,10 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
 
   it('não deve interromper a fala da IA em chunks de silêncio ou ruído ambiente', () => {
     const onInterrupted = jest.fn();
-    const provider = new CascadeVoiceProvider(cartesiaService, groqWhisperService);
+    const provider = new CascadeVoiceProvider(
+      cartesiaService,
+      groqWhisperService,
+    );
     provider.connect({ apiKey: 'k', systemPrompt: 'p', onInterrupted });
 
     // Simula que a IA está falando
@@ -58,7 +61,10 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
 
   it('deve confirmar barge-in e interromper a IA após frames consecutivos de voz real', () => {
     const onInterrupted = jest.fn();
-    const provider = new CascadeVoiceProvider(cartesiaService, groqWhisperService);
+    const provider = new CascadeVoiceProvider(
+      cartesiaService,
+      groqWhisperService,
+    );
     provider.connect({ apiKey: 'k', systemPrompt: 'p', onInterrupted });
 
     // Simula que a IA está falando
@@ -79,7 +85,10 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
 
   it('não deve enviar silêncio acumulado ao Whisper se o usuário não falou', async () => {
     const onUserTranscript = jest.fn();
-    const provider = new CascadeVoiceProvider(cartesiaService, groqWhisperService);
+    const provider = new CascadeVoiceProvider(
+      cartesiaService,
+      groqWhisperService,
+    );
     provider.connect({ apiKey: 'k', systemPrompt: 'p', onUserTranscript });
 
     // IA calada, usuário mudo (apenas ruído ambiente do mic)
@@ -96,7 +105,10 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
 
   it('deve filtrar alucinações comuns do Whisper em áudios de baixa energia', async () => {
     const onUserTranscript = jest.fn();
-    const provider = new CascadeVoiceProvider(cartesiaService, groqWhisperService);
+    const provider = new CascadeVoiceProvider(
+      cartesiaService,
+      groqWhisperService,
+    );
     provider.connect({
       apiKey: 'k',
       systemPrompt: 'p',
@@ -125,7 +137,9 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
 
     beforeEach(() => {
       mockVadSession = {
-        processChunk: jest.fn().mockResolvedValue({ isSpeech: false, probability: 0 }),
+        processChunk: jest
+          .fn()
+          .mockResolvedValue({ isSpeech: false, probability: 0 }),
         reset: jest.fn(),
         flush: jest.fn().mockReturnValue(null),
         speaking: false,
@@ -211,7 +225,9 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
         onUserTranscript,
       });
 
-      groqWhisperService.transcribePcm.mockResolvedValueOnce('Olá, como posso ajudar?');
+      groqWhisperService.transcribePcm.mockResolvedValueOnce(
+        'Olá, como posso ajudar?',
+      );
 
       // Gera um buffer de fala de 500ms com energia audível
       const speechBuffer = Buffer.alloc(16000);

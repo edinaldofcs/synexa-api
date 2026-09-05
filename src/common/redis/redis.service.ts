@@ -24,7 +24,10 @@ export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private client: Redis;
   private readonly sessionTtl = 60 * 60 * 24;
-  private readonly lockTokens = new Map<string, string>();
+  private readonly lockTokens = new Map<
+    string,
+    { token: string; expiresAt: number }
+  >();
 
   constructor(private readonly configService: ConfigService) {
     const redisUrl = this.configService.get<string>(
@@ -53,6 +56,7 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async del(key: string): Promise<void> {
+    this.lockTokens.delete(key);
     await this.client.del(key);
   }
 
@@ -83,6 +87,11 @@ export class RedisService implements OnModuleDestroy {
     const current = await this.client.incr(windowKey);
     if (current === 1) {
       await this.client.expire(windowKey, windowSeconds);
+    } else {
+      const currentTtl = await this.client.ttl(windowKey);
+      if (currentTtl === -1) {
+        await this.client.expire(windowKey, windowSeconds);
+      }
     }
 
     const ttl = await this.client.ttl(windowKey);
@@ -93,7 +102,17 @@ export class RedisService implements OnModuleDestroy {
     return { allowed, remaining, resetAt };
   }
 
+  private cleanExpiredLockTokens(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.lockTokens.entries()) {
+      if (entry.expiresAt <= now) {
+        this.lockTokens.delete(key);
+      }
+    }
+  }
+
   async acquireLock(key: string, ttlSeconds: number = 30): Promise<boolean> {
+    this.cleanExpiredLockTokens();
     const token = randomUUID();
     const result = await this.client.set(
       key,
@@ -103,20 +122,28 @@ export class RedisService implements OnModuleDestroy {
       'NX',
     );
     if (result === 'OK') {
-      this.lockTokens.set(key, token);
+      this.lockTokens.set(key, {
+        token,
+        expiresAt: Date.now() + ttlSeconds * 1000,
+      });
       return true;
     }
     return false;
   }
 
   async releaseLock(key: string): Promise<boolean> {
-    const token = this.lockTokens.get(key);
-    if (!token) {
+    const entry = this.lockTokens.get(key);
+    if (!entry) {
       // Never released a lock we do not own.
       return false;
     }
     try {
-      const result = await this.client.eval(RELEASE_LOCK_SCRIPT, 1, key, token);
+      const result = await this.client.eval(
+        RELEASE_LOCK_SCRIPT,
+        1,
+        key,
+        entry.token,
+      );
       return result === 1;
     } finally {
       this.lockTokens.delete(key);
@@ -124,18 +151,22 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async renewLock(key: string, ttlSeconds: number = 30): Promise<boolean> {
-    const token = this.lockTokens.get(key);
-    if (!token) {
+    const entry = this.lockTokens.get(key);
+    if (!entry) {
       return false;
     }
     const result = await this.client.eval(
       RENEW_LOCK_SCRIPT,
       1,
       key,
-      token,
+      entry.token,
       ttlSeconds * 1000,
     );
-    return result === 1;
+    if (result === 1) {
+      entry.expiresAt = Date.now() + ttlSeconds * 1000;
+      return true;
+    }
+    return false;
   }
 
   async rpush(key: string, value: unknown): Promise<void> {
@@ -156,7 +187,7 @@ export class RedisService implements OnModuleDestroy {
     await this.client.quit();
   }
 
-  onModuleDestroy() {
-    this.quit();
+  async onModuleDestroy(): Promise<void> {
+    await this.quit();
   }
 }

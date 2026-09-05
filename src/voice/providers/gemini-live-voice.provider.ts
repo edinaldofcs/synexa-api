@@ -322,10 +322,26 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
   }
 
   public close(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.close();
+    if (this.ws) {
+      const socket = this.ws;
+      this.ws = null;
+      if (
+        socket.readyState === WebSocket.OPEN ||
+        socket.readyState === WebSocket.CONNECTING
+      ) {
+        try {
+          if (socket.readyState === WebSocket.CONNECTING) {
+            socket.terminate();
+          } else {
+            socket.close();
+          }
+        } catch {
+          try {
+            socket.terminate();
+          } catch {}
+        }
+      }
     }
-    this.ws = null;
     this.isReady = false;
   }
 }

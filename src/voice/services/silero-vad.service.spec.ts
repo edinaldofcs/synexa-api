@@ -13,7 +13,11 @@ describe('SileroVadService & SileroVadSession (Silero VAD v5)', () => {
 
   const createMockOrt = () => ({
     Tensor: class {
-      constructor(public type: string, public data: any, public dims: any) {}
+      constructor(
+        public type: string,
+        public data: any,
+        public dims: any,
+      ) {}
     },
   });
 

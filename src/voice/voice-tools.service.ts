@@ -617,16 +617,167 @@ export class VoiceToolsService {
     if (!keys.length || !raw || typeof raw !== 'object') return raw;
     const result: Record<string, unknown> = {};
     for (const key of keys) {
-      const path = mapping[key];
-      if (typeof path === 'string') result[key] = this.getByPath(raw, path);
-      else if (path && typeof path === 'object' && 'path' in path) {
-        result[key] = this.getByPath(
-          raw,
-          String((path as { path: unknown }).path),
-        );
+      const config = mapping[key];
+      if (typeof config === 'boolean' || typeof config === 'number') {
+        result[key] = config;
+      } else if (typeof config === 'string') {
+        result[key] = this.getByPath(raw, config);
+      } else if (config && typeof config === 'object' && 'path' in config) {
+        const cfg = config as any;
+        let value = this.getByPath(raw, String(cfg.path || ''));
+        if (cfg.rules?.length) {
+          value = this.evaluateComparisonRules(value, cfg.rules);
+        }
+        if (
+          (value === null || value === undefined || value === '') &&
+          cfg.fallback !== undefined
+        ) {
+          const fb = cfg.fallback;
+          if (
+            cfg.fallback_type === 'boolean' ||
+            fb === true ||
+            fb === false ||
+            fb === 'true' ||
+            fb === 'false'
+          ) {
+            value = fb === true || fb === 'true';
+          } else if (cfg.fallback_type === 'number') {
+            value = Number(fb);
+          } else {
+            value = fb;
+          }
+        }
+        result[key] = value;
+      } else {
+        result[key] = config;
       }
     }
     return result;
+  }
+
+  private evaluateComparisonRules(
+    value: unknown,
+    rules: Array<{
+      operator: string;
+      compare_value: string;
+      return_value: unknown;
+      return_type?: string;
+    }>,
+  ): unknown {
+    if (!rules || !rules.length) return value;
+
+    for (const rule of rules) {
+      const { operator, compare_value, return_type } = rule as any;
+      let return_value = rule.return_value;
+
+      if (
+        return_type === 'boolean' ||
+        return_value === true ||
+        return_value === false ||
+        return_value === 'true' ||
+        return_value === 'false'
+      ) {
+        return_value = return_value === true || return_value === 'true';
+      } else if (return_type === 'number') {
+        const num = Number(return_value);
+        if (!isNaN(num)) return_value = num;
+      }
+
+      if (operator === 'is_empty_array') {
+        if (Array.isArray(value) && value.length === 0) return return_value;
+        continue;
+      }
+      if (operator === 'is_not_empty_array') {
+        if (Array.isArray(value) && value.length > 0) return return_value;
+        continue;
+      }
+      if (operator === 'is_empty') {
+        if (
+          value === null ||
+          value === undefined ||
+          value === '' ||
+          (Array.isArray(value) && value.length === 0) ||
+          (typeof value === 'object' &&
+            Object.keys(value as object).length === 0)
+        ) {
+          return return_value;
+        }
+        continue;
+      }
+      if (operator === 'is_not_empty') {
+        if (
+          value !== null &&
+          value !== undefined &&
+          value !== '' &&
+          (!Array.isArray(value) || value.length > 0)
+        ) {
+          return return_value;
+        }
+        continue;
+      }
+
+      if (value === null || value === undefined) continue;
+
+      if (
+        operator === '==' &&
+        Array.isArray(value) &&
+        (compare_value === '[]' || compare_value === '')
+      ) {
+        if (value.length === 0) return return_value;
+        continue;
+      }
+      if (
+        operator === '!=' &&
+        Array.isArray(value) &&
+        (compare_value === '[]' || compare_value === '')
+      ) {
+        if (value.length > 0) return return_value;
+        continue;
+      }
+
+      const numVal = Number(value);
+      const numRule = Number(compare_value);
+      const shouldCompareAsNumber =
+        !isNaN(numVal) &&
+        !isNaN(numRule) &&
+        String(compare_value).trim() !== '';
+      const valToCompare: string | number = shouldCompareAsNumber
+        ? numVal
+        : String(value).trim();
+      const ruleVal: string | number = shouldCompareAsNumber
+        ? numRule
+        : String(compare_value).trim();
+
+      const isMatch = (() => {
+        switch (operator) {
+          case '==':
+            return valToCompare == ruleVal;
+          case '!=':
+            return valToCompare != ruleVal;
+          case '>=':
+            return Number(valToCompare) >= Number(ruleVal);
+          case '<=':
+            return Number(valToCompare) <= Number(ruleVal);
+          case '>':
+            return Number(valToCompare) > Number(ruleVal);
+          case '<':
+            return Number(valToCompare) < Number(ruleVal);
+          case 'includes':
+            if (Array.isArray(value)) {
+              return value.includes(compare_value);
+            }
+            return String(valToCompare).includes(String(ruleVal));
+          default:
+            return false;
+        }
+      })();
+
+      if (isMatch) {
+        return return_value;
+      }
+    }
+
+    return value;
   }
 
   private getByPath(value: unknown, path: string): unknown {

@@ -38,20 +38,25 @@ export class GroqWhisperSttService {
     }
 
     const startMs = Date.now();
-    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${options.apiKey}`,
+    const res = await fetch(
+      'https://api.groq.com/openai/v1/audio/transcriptions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+        },
+        body: formData,
+        signal: AbortSignal.timeout(10_000),
       },
-      body: formData,
-      signal: AbortSignal.timeout(10_000),
-    });
+    );
 
     const latencyMs = Date.now() - startMs;
 
     if (!res.ok) {
       const errText = await res.text();
-      this.logger.error(`❌ [GroqSTT] Erro na transcrição (${res.status}): ${errText}`);
+      this.logger.error(
+        `❌ [GroqSTT] Erro na transcrição (${res.status}): ${errText}`,
+      );
       throw new Error(`Falha no Groq Whisper: ${res.status} - ${errText}`);
     }
 

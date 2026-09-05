@@ -1355,12 +1355,14 @@ export class ApiToolExecutorService {
         const cfg = config as {
           path?: string;
           modifier?: string;
-          fallback?: string;
+          fallback?: unknown;
+          fallback_type?: string;
           max_items?: number;
           rules?: Array<{
             operator: string;
             compare_value: string;
-            return_value: string;
+            return_value: unknown;
+            return_type?: string;
           }>;
         };
         let value = this.getByPath(
@@ -1384,7 +1386,20 @@ export class ApiToolExecutorService {
           (value === null || value === undefined || value === '') &&
           cfg.fallback !== undefined
         ) {
-          value = cfg.fallback;
+          const fb: any = cfg.fallback;
+          if (
+            cfg.fallback_type === 'boolean' ||
+            fb === true ||
+            fb === false ||
+            fb === 'true' ||
+            fb === 'false'
+          ) {
+            value = fb === true || fb === 'true';
+          } else if (cfg.fallback_type === 'number') {
+            value = Number(fb);
+          } else {
+            value = fb;
+          }
         }
 
         output[key] = value;
@@ -1400,13 +1415,28 @@ export class ApiToolExecutorService {
     rules: Array<{
       operator: string;
       compare_value: string;
-      return_value: string;
+      return_value: unknown;
+      return_type?: string;
     }>,
   ): unknown {
     if (!rules || !rules.length) return value;
 
     for (const rule of rules) {
-      const { operator, compare_value, return_value } = rule;
+      const { operator, compare_value, return_type } = rule as any;
+      let return_value = rule.return_value;
+
+      if (
+        return_type === 'boolean' ||
+        return_value === true ||
+        return_value === false ||
+        return_value === 'true' ||
+        return_value === 'false'
+      ) {
+        return_value = return_value === true || return_value === 'true';
+      } else if (return_type === 'number') {
+        const num = Number(return_value);
+        if (!isNaN(num)) return_value = num;
+      }
 
       if (operator === 'is_empty_array') {
         if (Array.isArray(value) && value.length === 0) return return_value;

@@ -254,6 +254,7 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
       unknown
     >;
 
+    let session: any = null;
     try {
       // 2. Roteamento plug-and-play: DID/variáveis -> telephony_endpoints
       const route = await this.endpointResolver.resolve({
@@ -286,21 +287,23 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
 
       // 3. Pipeline único de IA via factory
       const channelId = (adapter.metadata.channelId as string) || undefined;
-      const { session } = await this.voiceSessionFactory.create(
-        adapter,
-        route,
-        {
-          onAiHangupRequest: async () => {
-            if (channelId) {
-              await this.amiService.hangupChannel(channelId);
-            }
-          },
+      const created = await this.voiceSessionFactory.create(adapter, route, {
+        onAiHangupRequest: async () => {
+          if (channelId) {
+            await this.amiService.hangupChannel(channelId);
+          }
         },
-      );
+      });
+      session = created.session;
 
       await session.start();
     } catch (err: any) {
       this.logger.error(`❌ [FastAGI] Erro ao iniciar sessão: ${err.message}`);
+      if (session) {
+        try {
+          await session.end('start_failed');
+        } catch {}
+      }
       adapter.hangup('internal_error');
     }
   }

@@ -13,11 +13,14 @@ import {
 
 const DEFAULT_CARTESIA_VOICE = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
 const DEFAULT_LLM_MODEL = 'gemini-2.5-flash-lite';
+const MAX_CONVERSATION_HISTORY = 20;
 
 export class CascadeVoiceProvider implements IVoiceProvider {
   private readonly logger = new Logger(CascadeVoiceProvider.name);
   private options: VoiceProviderConnectOptions | null = null;
-  private cartesiaSession: ReturnType<CartesiaTtsService['createSession']> | null = null;
+  private cartesiaSession: ReturnType<
+    CartesiaTtsService['createSession']
+  > | null = null;
   private vadSession: SileroVadSession | null = null;
   private isReady = false;
   private isSpeaking = false;
@@ -81,7 +84,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         redemptionFrames: 12, // ~384ms de silêncio para fechar turno
         preRollFrames: 8, // ~256ms de áudio pré-fala
         onSpeechStart: () => {
-          const isAiAudible = this.isSpeaking || Date.now() < this.aiPlaybackUntil;
+          const isAiAudible =
+            this.isSpeaking || Date.now() < this.aiPlaybackUntil;
           if (isAiAudible) {
             this.logger.log(
               '⚡ [CascadeVoice] Barge-in confirmado pelo Silero VAD. Abortando áudio da IA.',
@@ -99,7 +103,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     }
 
     this.isReady = true;
-    this.logger.log('🎉 [CascadeVoice] Provedor em Cascata conectado (Cartesia Sonic + Groq)');
+    this.logger.log(
+      '🎉 [CascadeVoice] Provedor em Cascata conectado (Cartesia Sonic + Groq)',
+    );
     this.options.onSetupComplete?.();
   }
 
@@ -200,7 +206,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
     // Ignora buffers menores que 300ms (ruído transiente ou estalo)
     if (durationMs < 300) {
-      this.logger.debug(`[CascadeVoice] Áudio muito curto descartado (${durationMs}ms)`);
+      this.logger.debug(
+        `[CascadeVoice] Áudio muito curto descartado (${durationMs}ms)`,
+      );
       return;
     }
 
@@ -219,7 +227,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
   public sendText(text: string): void {
     if (!text || !text.trim()) return;
-    this.logger.log(`🤖 [CascadeVoice] Enviando texto de entrada (saudação): "${text}"`);
+    this.logger.log(
+      `🤖 [CascadeVoice] Enviando texto de entrada (saudação): "${text}"`,
+    );
     void this.executeLlmAndSpeak(text);
   }
 
@@ -363,7 +373,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private handleInterruption(): void {
     const wasSpeaking = this.isSpeaking || Date.now() < this.aiPlaybackUntil;
     if (wasSpeaking) {
-      this.logger.log('⚡ [CascadeVoice] Barge-in detectado: abortando fala da IA');
+      this.logger.log(
+        '⚡ [CascadeVoice] Barge-in detectado: abortando fala da IA',
+      );
       this.isSpeaking = false;
       this.aiPlaybackUntil = 0;
       this.consecutiveBargeInFrames = 0;
@@ -388,11 +400,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     rms: number,
     durationMs: number,
   ): Promise<void> {
-    const groqKey =
-      this.options?.groqApiKey || process.env.GROQ_API_KEY || '';
+    const groqKey = this.options?.groqApiKey || process.env.GROQ_API_KEY || '';
 
     if (!groqKey) {
-      this.logger.error('❌ [CascadeVoice] GROQ_API_KEY não configurada para STT');
+      this.logger.error(
+        '❌ [CascadeVoice] GROQ_API_KEY não configurada para STT',
+      );
       return;
     }
 
@@ -403,7 +416,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       );
 
       if (!userText || !userText.trim()) {
-        this.logger.log('[CascadeVoice] Whisper retornou texto vazio para o áudio');
+        this.logger.log(
+          '[CascadeVoice] Whisper retornou texto vazio para o áudio',
+        );
         return;
       }
 
@@ -415,7 +430,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         return;
       }
 
-      this.logger.log(`📝 [CascadeVoice] Fala transcrita pelo Groq Whisper: "${userText}"`);
+      this.logger.log(
+        `📝 [CascadeVoice] Fala transcrita pelo Groq Whisper: "${userText}"`,
+      );
       this.options?.onUserTranscript?.(userText);
       await this.executeLlmAndSpeak(userText);
     } catch (err: any) {
@@ -466,6 +483,20 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     if (this.turnCompleteTimer) {
       clearTimeout(this.turnCompleteTimer);
       this.turnCompleteTimer = null;
+    }
+
+    // Janela deslizante: limita o histórico para evitar explosão de memória, latência e custo
+    if (this.conversationHistory.length > MAX_CONVERSATION_HISTORY) {
+      this.conversationHistory = this.conversationHistory.slice(
+        -MAX_CONVERSATION_HISTORY,
+      );
+      while (
+        this.conversationHistory.length > 0 &&
+        (this.conversationHistory[0].role !== 'user' ||
+          this.conversationHistory[0].parts.some((p) => p.functionResponse))
+      ) {
+        this.conversationHistory.shift();
+      }
     }
 
     // Formata o payload com histórico, system prompt e declarações de ferramentas
@@ -585,15 +616,21 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        this.logger.debug('🛑 [CascadeVoice] Stream do LLM abortado por interrupção');
+        this.logger.debug(
+          '🛑 [CascadeVoice] Stream do LLM abortado por interrupção',
+        );
         if (fullAiResponse.trim()) {
           this.conversationHistory.push({
             role: 'model',
-            parts: [{ text: fullAiResponse + '... [interrompido pelo usuário]' }],
+            parts: [
+              { text: fullAiResponse + '... [interrompido pelo usuário]' },
+            ],
           });
         }
       } else {
-        this.logger.error(`❌ [CascadeVoice] Erro no stream do LLM: ${err.message}`);
+        this.logger.error(
+          `❌ [CascadeVoice] Erro no stream do LLM: ${err.message}`,
+        );
         this.options?.onError?.(err);
       }
     }
@@ -612,12 +649,16 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         // 24kHz 16-bit mono = 48 bytes/ms
         const chunkDurationMs = Math.round(pcmChunk.length / 48);
         const now = Date.now();
-        this.aiPlaybackUntil = Math.max(now, this.aiPlaybackUntil) + chunkDurationMs;
+        this.aiPlaybackUntil =
+          Math.max(now, this.aiPlaybackUntil) + chunkDurationMs;
         this.options?.onAudio?.(pcmChunk.toString('base64'));
       },
       onDone: () => {
         // Aguarda a janela de reprodução acústica no cliente terminar antes de fechar o turno
-        const remainingPlaybackMs = Math.max(0, this.aiPlaybackUntil - Date.now());
+        const remainingPlaybackMs = Math.max(
+          0,
+          this.aiPlaybackUntil - Date.now(),
+        );
         if (this.turnCompleteTimer) {
           clearTimeout(this.turnCompleteTimer);
         }
@@ -628,7 +669,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         }, remainingPlaybackMs);
       },
       onError: (err) => {
-        this.logger.error(`❌ [CascadeVoice] Erro no Cartesia TTS: ${err.message}`);
+        this.logger.error(
+          `❌ [CascadeVoice] Erro no Cartesia TTS: ${err.message}`,
+        );
         this.isSpeaking = false;
         this.aiPlaybackUntil = 0;
         if (this.turnCompleteTimer) {

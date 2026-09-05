@@ -146,7 +146,9 @@ export class SileroVadSession {
 
         this.updateStateMachine(frameBuffer, prob, peak, rms);
       } catch (err: any) {
-        this.logger.error(`Erro na inferência do Silero VAD: ${err.stack || err.message}`);
+        this.logger.error(
+          `Erro na inferência do Silero VAD: ${err.stack || err.message}`,
+        );
         this.fallbackRmsVad(frameBuffer);
       }
     }
@@ -230,9 +232,10 @@ export class SileroVadSession {
   /**
    * Fallback acústico caso o runtime ONNX não esteja disponível
    */
-  private fallbackRmsVad(
-    chunk: Buffer,
-  ): { isSpeech: boolean; probability: number } {
+  private fallbackRmsVad(chunk: Buffer): {
+    isSpeech: boolean;
+    probability: number;
+  } {
     let peak = 0;
     let sum = 0;
     const count = Math.floor(chunk.length / 2);

@@ -79,15 +79,20 @@ export class CartesiaTtsService {
           }
           if (contextId) activeContexts.delete(contextId);
         } else if (data.type === 'error') {
-          const errMsg = data.error || data.message || 'Erro desconhecido na Cartesia';
-          this.logger.error(`❌ [CartesiaTTS] Erro no contexto ${contextId}: ${errMsg}`);
+          const errMsg =
+            data.error || data.message || 'Erro desconhecido na Cartesia';
+          this.logger.error(
+            `❌ [CartesiaTTS] Erro no contexto ${contextId}: ${errMsg}`,
+          );
           if (callbacks?.onError) {
             callbacks.onError(new Error(errMsg));
           }
           if (contextId) activeContexts.delete(contextId);
         }
       } catch (err: any) {
-        this.logger.error(`❌ [CartesiaTTS] Falha ao processar mensagem WS: ${err.message}`);
+        this.logger.error(
+          `❌ [CartesiaTTS] Falha ao processar mensagem WS: ${err.message}`,
+        );
       }
     });
 
@@ -104,6 +109,8 @@ export class CartesiaTtsService {
         `🔌 [CartesiaTTS] WebSocket fechado (código: ${code}, motivo: ${reason || 'normal'})`,
       );
       isConnected = false;
+      activeContexts.clear();
+      pendingMessages.length = 0;
     });
 
     const sendPayload = (payload: Record<string, any>) => {
@@ -188,7 +195,10 @@ export class CartesiaTtsService {
       close: () => {
         activeContexts.clear();
         pendingMessages.length = 0;
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        if (
+          ws.readyState === WebSocket.OPEN ||
+          ws.readyState === WebSocket.CONNECTING
+        ) {
           ws.close();
         }
       },

@@ -386,18 +386,37 @@ export class VoiceGateway
               companyId: authenticatedUser.company_id,
               agentId: selectedAgent?.id,
               state: {
-                ...(selectedAgent?.id ? { current_agent_id: selectedAgent.id } : {}),
-                nome_agente: clientDb?.agent_name || selectedAgent?.service_step || 'Assistente',
-                agent_name: clientDb?.agent_name || selectedAgent?.service_step || 'Assistente',
+                ...(selectedAgent?.id
+                  ? { current_agent_id: selectedAgent.id }
+                  : {}),
+                nome_agente:
+                  clientDb?.agent_name ||
+                  selectedAgent?.service_step ||
+                  'Assistente',
+                agent_name:
+                  clientDb?.agent_name ||
+                  selectedAgent?.service_step ||
+                  'Assistente',
                 nome_empresa: clientDb?.company_name || 'Synexa',
                 company_name: clientDb?.company_name || 'Synexa',
-                ...(msg.variables && typeof msg.variables === 'object' ? msg.variables : {}),
-                ...(msg.contextVariables && typeof msg.contextVariables === 'object' ? msg.contextVariables : {}),
+                ...(msg.variables && typeof msg.variables === 'object'
+                  ? msg.variables
+                  : {}),
+                ...(msg.contextVariables &&
+                typeof msg.contextVariables === 'object'
+                  ? msg.contextVariables
+                  : {}),
               },
             });
 
-            const clientMeta = (clientDb?.metadata as Record<string, unknown>) || {};
-            const voiceEngine = ((msg.engine || clientMeta.voice_engine || 'hybrid') as string) === 'live_api' ? 'live_api' : 'hybrid';
+            const clientMeta =
+              (clientDb?.metadata as Record<string, unknown>) || {};
+            const voiceEngine =
+              ((msg.engine ||
+                clientMeta.voice_engine ||
+                'hybrid') as string) === 'live_api'
+                ? 'live_api'
+                : 'hybrid';
             session.voiceEngine = voiceEngine;
 
             const rawModel =
@@ -414,8 +433,13 @@ export class VoiceGateway
                   ? rawModel
                   : 'gemini-2.5-flash-lite';
               session.voiceName =
-                (selectedAgent?.voice_name && selectedAgent.voice_name.length > 20 ? selectedAgent.voice_name : null) ||
-                (clientDb?.voice_name && clientDb.voice_name.length > 20 ? clientDb.voice_name : null) ||
+                (selectedAgent?.voice_name &&
+                selectedAgent.voice_name.length > 20
+                  ? selectedAgent.voice_name
+                  : null) ||
+                (clientDb?.voice_name && clientDb.voice_name.length > 20
+                  ? clientDb.voice_name
+                  : null) ||
                 (msg.voice && msg.voice.length > 20 ? msg.voice : null) ||
                 'cb2694c3-715f-4da9-99f3-1c974fff2928';
             } else {
@@ -467,7 +491,10 @@ export class VoiceGateway
               // No modo híbrido: Silero VAD v5 neural opera localmente com fluxo contínuo.
               // O AudioGate acústico é bypassado para não picotar a fala nem forçar resets a cada pausa.
               if (session.voiceEngine === 'hybrid') {
-                session.gateSession?.processChunk(base64Audio, session.isAiSpeaking);
+                session.gateSession?.processChunk(
+                  base64Audio,
+                  session.isAiSpeaking,
+                );
                 session.liveProvider.sendAudio(base64Audio);
                 return;
               }
@@ -1005,8 +1032,10 @@ export class VoiceGateway
               const rawPrompt = buildRawAgentPrompt(agent);
 
               const currentVariables: Record<string, any> = {
-                nome_agente: clientDb?.agent_name || agent?.service_step || 'Assistente',
-                agent_name: clientDb?.agent_name || agent?.service_step || 'Assistente',
+                nome_agente:
+                  clientDb?.agent_name || agent?.service_step || 'Assistente',
+                agent_name:
+                  clientDb?.agent_name || agent?.service_step || 'Assistente',
                 nome_empresa: clientDb?.company_name || 'Synexa',
                 company_name: clientDb?.company_name || 'Synexa',
                 ...session.state,
@@ -1125,8 +1154,14 @@ export class VoiceGateway
                 return;
               }
 
-              const clientMeta = (clientDb?.metadata as Record<string, unknown>) || {};
-              const voiceEngine = ((msg.engine || clientMeta.voice_engine || 'hybrid') as string) === 'live_api' ? 'live_api' : 'hybrid';
+              const clientMeta =
+                (clientDb?.metadata as Record<string, unknown>) || {};
+              const voiceEngine =
+                ((msg.engine ||
+                  clientMeta.voice_engine ||
+                  'hybrid') as string) === 'live_api'
+                  ? 'live_api'
+                  : 'hybrid';
               session.voiceEngine = voiceEngine;
 
               let provider: IVoiceProvider;
@@ -1441,8 +1476,14 @@ export class VoiceGateway
               );
               const targetRawPrompt = buildRawAgentPrompt(targetAgent);
               const targetVariables: Record<string, any> = {
-                nome_agente: clientDb?.agent_name || targetAgent?.service_step || 'Assistente',
-                agent_name: clientDb?.agent_name || targetAgent?.service_step || 'Assistente',
+                nome_agente:
+                  clientDb?.agent_name ||
+                  targetAgent?.service_step ||
+                  'Assistente',
+                agent_name:
+                  clientDb?.agent_name ||
+                  targetAgent?.service_step ||
+                  'Assistente',
                 nome_empresa: clientDb?.company_name || 'Synexa',
                 company_name: clientDb?.company_name || 'Synexa',
                 ...session.state,

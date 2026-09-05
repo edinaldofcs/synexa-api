@@ -175,10 +175,10 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
   }
 
   public close(): void {
+    this.pacer.dispose();
     if (this.isClosed) return;
     this.isClosed = true;
-    this.pacer.dispose();
-    if (!this.socket.destroyed) {
+    if (this.socket && !this.socket.destroyed) {
       this.socket.end();
       this.socket = null as unknown as net.Socket;
     }
@@ -203,6 +203,7 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
     this.socket.on('close', () => {
       if (!this.isClosed) {
         this.isClosed = true;
+        this.pacer.dispose();
         this.callEndCallback?.('socket_closed');
       }
     });
@@ -232,8 +233,11 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
         }
         break;
       case AUDIOSOCKET_TYPES.TERMINATE:
-        this.isClosed = true;
-        this.callEndCallback?.('audiosocket_terminate');
+        if (!this.isClosed) {
+          this.isClosed = true;
+          this.pacer.dispose();
+          this.callEndCallback?.('audiosocket_terminate');
+        }
         break;
       case AUDIOSOCKET_TYPES.ERROR:
         this.errorCallback?.(

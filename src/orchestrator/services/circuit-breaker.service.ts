@@ -17,6 +17,7 @@ export class ProviderCircuitBreakerService {
   private readonly failureThreshold = 3;
   private readonly cooldownPeriodMs = 60_000; // 60 segundos
   private readonly probeTtlSeconds = 10;
+  private readonly maxInMemoryEntries = 500;
   private readonly inMemoryState = new Map<string, CircuitInfo>();
 
   constructor(
@@ -58,7 +59,7 @@ export class ProviderCircuitBreakerService {
     const evaluated = this.evaluateState(info);
     if (evaluated.state !== info.state) {
       // Transição lazy OPEN→HALF_OPEN: persiste somente na mudança de estado
-      this.inMemoryState.set(key, evaluated);
+      this.setInMemoryState(key, evaluated);
       await this.persistState(key, evaluated);
     }
 
@@ -107,7 +108,7 @@ export class ProviderCircuitBreakerService {
       consecutiveFailures: 0,
     };
 
-    this.inMemoryState.set(key, updated);
+    this.setInMemoryState(key, updated);
 
     // Persistência (Redis + PG) somente em transição de estado; em CLOSED
     // estável (fluxo normal por turno) nada é escrito
@@ -159,7 +160,7 @@ export class ProviderCircuitBreakerService {
       nextAttemptTime,
     };
 
-    this.inMemoryState.set(key, updated);
+    this.setInMemoryState(key, updated);
 
     // Persistência (Redis + PG) somente na transição de estado
     if (state !== current.state) {
@@ -173,10 +174,29 @@ export class ProviderCircuitBreakerService {
     }
   }
 
+  private setInMemoryState(key: string, info: CircuitInfo): void {
+    if (
+      this.inMemoryState.size >= this.maxInMemoryEntries &&
+      !this.inMemoryState.has(key)
+    ) {
+      const oldestKey = this.inMemoryState.keys().next().value;
+      if (oldestKey) this.inMemoryState.delete(oldestKey);
+    }
+    this.inMemoryState.set(key, info);
+  }
+
   private async releaseProbe(key: string): Promise<void> {
+    const probeKey = this.getProbeKey(key);
     try {
-      await this.redisService.del(this.getProbeKey(key));
-    } catch {}
+      const released = await this.redisService.releaseLock(probeKey);
+      if (!released) {
+        await this.redisService.del(probeKey);
+      }
+    } catch {
+      try {
+        await this.redisService.del(probeKey);
+      } catch {}
+    }
   }
 
   private async persistState(key: string, info: CircuitInfo): Promise<void> {
