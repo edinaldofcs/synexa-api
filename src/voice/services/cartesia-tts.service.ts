@@ -170,6 +170,9 @@ export class CartesiaTtsService {
        * Cancela imediatamente a síntese em andamento (Barge-in).
        */
       cancelContext: (contextId: string) => {
+        if (!activeContexts.has(contextId)) {
+          return;
+        }
         activeContexts.delete(contextId);
         if (ws.readyState === WebSocket.OPEN) {
           sendPayload({

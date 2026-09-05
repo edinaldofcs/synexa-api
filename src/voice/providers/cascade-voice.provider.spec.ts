@@ -176,6 +176,27 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
       expect(mockSession.cancelContext).toHaveBeenCalledWith('ctx-1');
     });
 
+    it('deve confirmar barge-in se o usuário falar durante a janela de reprodução do áudio (aiPlaybackUntil) mesmo com isSpeaking false', () => {
+      const onInterrupted = jest.fn();
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({ apiKey: 'k', systemPrompt: 'p', onInterrupted });
+
+      // Simula que a síntese Cartesia já terminou (isSpeaking = false), mas ainda faltam 2 segundos de áudio tocando no cliente
+      (provider as any).isSpeaking = false;
+      (provider as any).aiPlaybackUntil = Date.now() + 2000;
+      (provider as any).activeContextId = 'ctx-2';
+
+      mockVadSession._opts.onSpeechStart();
+
+      expect(onInterrupted).toHaveBeenCalledTimes(1);
+      expect((provider as any).aiPlaybackUntil).toBe(0);
+      expect(mockSession.cancelContext).toHaveBeenCalledWith('ctx-2');
+    });
+
     it('deve processar fala quando onSpeechEnd do Silero VAD for disparado', async () => {
       const onUserTranscript = jest.fn();
       const provider = new CascadeVoiceProvider(

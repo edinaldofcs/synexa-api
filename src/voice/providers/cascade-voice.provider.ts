@@ -21,6 +21,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private vadSession: SileroVadSession | null = null;
   private isReady = false;
   private isSpeaking = false;
+  private aiPlaybackUntil = 0;
+  private turnCompleteTimer: NodeJS.Timeout | null = null;
   private activeContextId: string | null = null;
   private abortController: AbortController | null = null;
 
@@ -79,7 +81,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         redemptionFrames: 12, // ~384ms de silêncio para fechar turno
         preRollFrames: 8, // ~256ms de áudio pré-fala
         onSpeechStart: () => {
-          if (this.isSpeaking) {
+          const isAiAudible = this.isSpeaking || Date.now() < this.aiPlaybackUntil;
+          if (isAiAudible) {
             this.logger.log(
               '⚡ [CascadeVoice] Barge-in confirmado pelo Silero VAD. Abortando áudio da IA.',
             );
@@ -126,9 +129,10 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     // Pipeline 2: Fallback Acústico RMS/Peak
     const { peak, rms } = this.getBufferEnergy(buffer);
     const isSpeechChunk = peak >= 1000 || rms >= 180;
+    const isAiAudible = this.isSpeaking || Date.now() < this.aiPlaybackUntil;
 
-    // Cenário 1: A IA está falando no momento
-    if (this.isSpeaking) {
+    // Cenário 1: A IA está falando no momento ou áudio ainda está tocando no cliente
+    if (isAiAudible) {
       if (!isSpeechChunk) {
         this.consecutiveBargeInFrames = 0;
         return;
@@ -245,6 +249,11 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   public close(): void {
     this.isReady = false;
     this.handleInterruption();
+    if (this.turnCompleteTimer) {
+      clearTimeout(this.turnCompleteTimer);
+      this.turnCompleteTimer = null;
+    }
+    this.aiPlaybackUntil = 0;
     if (this.cartesiaSession) {
       this.cartesiaSession.close();
       this.cartesiaSession = null;
@@ -352,10 +361,16 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   private handleInterruption(): void {
-    if (this.isSpeaking) {
-      this.logger.debug('⚡ [CascadeVoice] Barge-in detectado: abortando fala da IA');
+    const wasSpeaking = this.isSpeaking || Date.now() < this.aiPlaybackUntil;
+    if (wasSpeaking) {
+      this.logger.log('⚡ [CascadeVoice] Barge-in detectado: abortando fala da IA');
       this.isSpeaking = false;
+      this.aiPlaybackUntil = 0;
       this.consecutiveBargeInFrames = 0;
+      if (this.turnCompleteTimer) {
+        clearTimeout(this.turnCompleteTimer);
+        this.turnCompleteTimer = null;
+      }
       if (this.activeContextId && this.cartesiaSession) {
         this.cartesiaSession.cancelContext(this.activeContextId);
         this.activeContextId = null;
@@ -447,6 +462,11 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     const contextId = uuidv4();
     this.activeContextId = contextId;
     this.isSpeaking = true;
+    this.aiPlaybackUntil = Date.now();
+    if (this.turnCompleteTimer) {
+      clearTimeout(this.turnCompleteTimer);
+      this.turnCompleteTimer = null;
+    }
 
     // Formata o payload com histórico, system prompt e declarações de ferramentas
     const contents = this.conversationHistory.map((h) => ({
@@ -566,6 +586,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     } catch (err: any) {
       if (err.name === 'AbortError') {
         this.logger.debug('🛑 [CascadeVoice] Stream do LLM abortado por interrupção');
+        if (fullAiResponse.trim()) {
+          this.conversationHistory.push({
+            role: 'model',
+            parts: [{ text: fullAiResponse + '... [interrompido pelo usuário]' }],
+          });
+        }
       } else {
         this.logger.error(`❌ [CascadeVoice] Erro no stream do LLM: ${err.message}`);
         this.options?.onError?.(err);
@@ -582,16 +608,33 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
     this.cartesiaSession.pushText(contextId, text, continueStream, {
       onAudioChunk: (pcmChunk) => {
-        // Envia o PCM 16kHz base64 para o telephonyAdapter / web client
+        // Envia o PCM 24kHz base64 para o telephonyAdapter / web client
+        // 24kHz 16-bit mono = 48 bytes/ms
+        const chunkDurationMs = Math.round(pcmChunk.length / 48);
+        const now = Date.now();
+        this.aiPlaybackUntil = Math.max(now, this.aiPlaybackUntil) + chunkDurationMs;
         this.options?.onAudio?.(pcmChunk.toString('base64'));
       },
       onDone: () => {
-        this.isSpeaking = false;
-        this.options?.onTurnComplete?.();
+        // Aguarda a janela de reprodução acústica no cliente terminar antes de fechar o turno
+        const remainingPlaybackMs = Math.max(0, this.aiPlaybackUntil - Date.now());
+        if (this.turnCompleteTimer) {
+          clearTimeout(this.turnCompleteTimer);
+        }
+        this.turnCompleteTimer = setTimeout(() => {
+          this.isSpeaking = false;
+          this.turnCompleteTimer = null;
+          this.options?.onTurnComplete?.();
+        }, remainingPlaybackMs);
       },
       onError: (err) => {
         this.logger.error(`❌ [CascadeVoice] Erro no Cartesia TTS: ${err.message}`);
         this.isSpeaking = false;
+        this.aiPlaybackUntil = 0;
+        if (this.turnCompleteTimer) {
+          clearTimeout(this.turnCompleteTimer);
+          this.turnCompleteTimer = null;
+        }
         this.options?.onError?.(err);
       },
     });
