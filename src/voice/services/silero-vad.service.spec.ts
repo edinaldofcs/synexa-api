@@ -45,7 +45,7 @@ describe('SileroVadService & SileroVadSession (Silero VAD v5)', () => {
 
   it('deve operar com fallback acústico se a sessão ONNX for nula', async () => {
     const onSpeechStart = jest.fn();
-    const session = new SileroVadSession(null, { onSpeechStart });
+    const session = new SileroVadSession(null, null, { onSpeechStart });
 
     // Áudio com volume alto simula fala no fallback
     const loudChunk = createPcmChunk(3000, 512);

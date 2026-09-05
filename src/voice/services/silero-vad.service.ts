@@ -1,7 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import * as ort from 'onnxruntime-node';
 import * as path from 'path';
 import * as fs from 'fs';
+
+let ortModule: any = null;
 
 export interface SileroVadSessionOptions {
   positiveSpeechThreshold?: number; // Padrão: 0.50 (início de fala)
@@ -22,8 +23,8 @@ export class SileroVadSession {
   private readonly redemptionFrames: number;
   private readonly preRollFrames: number;
 
-  private stateTensor: ort.Tensor;
-  private readonly srTensor: ort.Tensor;
+  private stateTensor: any = null;
+  private readonly srTensor: any = null;
 
   private pcmAccumulator: Buffer = Buffer.alloc(0);
   private preRollQueue: Buffer[] = [];
@@ -35,7 +36,8 @@ export class SileroVadSession {
   private lastProbability = 0;
 
   constructor(
-    private readonly inferenceSession: ort.InferenceSession | null,
+    private readonly inferenceSession: any | null,
+    private readonly ort: any | null,
     private readonly options: SileroVadSessionOptions = {},
   ) {
     this.positiveThreshold = options.positiveSpeechThreshold ?? 0.5;
@@ -44,13 +46,15 @@ export class SileroVadSession {
     this.redemptionFrames = options.redemptionFrames ?? 10;
     this.preRollFrames = options.preRollFrames ?? 6;
 
-    // Inicializa o estado recorrente do Silero v5: [2, 1, 128] com zeros
-    this.stateTensor = new ort.Tensor(
-      'float32',
-      new Array(2 * 1 * 128).fill(0),
-      [2, 1, 128],
-    );
-    this.srTensor = new ort.Tensor('int64', [16000n], [1]);
+    if (this.inferenceSession && this.ort) {
+      // Inicializa o estado recorrente do Silero v5: [2, 1, 128] com zeros
+      this.stateTensor = new this.ort.Tensor(
+        'float32',
+        new Array(2 * 1 * 128).fill(0),
+        [2, 1, 128],
+      );
+      this.srTensor = new this.ort.Tensor('int64', [16000n], [1]);
+    }
   }
 
   public get speaking(): boolean {
@@ -94,7 +98,7 @@ export class SileroVadSession {
       }
 
       try {
-        const inputTensor = new ort.Tensor(
+        const inputTensor = new this.ort.Tensor(
           'float32',
           Array.from(float32),
           [1, SAMPLES_PER_FRAME],
@@ -225,11 +229,13 @@ export class SileroVadSession {
     this.consecutiveSpeechFrames = 0;
     this.consecutiveSilenceFrames = 0;
     this.lastProbability = 0;
-    this.stateTensor = new ort.Tensor(
-      'float32',
-      new Array(2 * 1 * 128).fill(0),
-      [2, 1, 128],
-    );
+    if (this.ort) {
+      this.stateTensor = new this.ort.Tensor(
+        'float32',
+        new Array(2 * 1 * 128).fill(0),
+        [2, 1, 128],
+      );
+    }
   }
 
   /**
@@ -249,7 +255,7 @@ export class SileroVadSession {
 @Injectable()
 export class SileroVadService implements OnModuleInit {
   private readonly logger = new Logger(SileroVadService.name);
-  private inferenceSession: ort.InferenceSession | null = null;
+  private inferenceSession: any | null = null;
   private isInitialized = false;
 
   public async onModuleInit(): Promise<void> {
@@ -284,17 +290,23 @@ export class SileroVadService implements OnModuleInit {
     }
 
     try {
-      this.inferenceSession = await ort.InferenceSession.create(resolvedPath, {
-        executionProviders: ['cpu'],
-        graphOptimizationLevel: 'all',
-      });
+      if (!ortModule) {
+        ortModule = await import('onnxruntime-node');
+      }
+      this.inferenceSession = await ortModule.InferenceSession.create(
+        resolvedPath,
+        {
+          executionProviders: ['cpu'],
+          graphOptimizationLevel: 'all',
+        },
+      );
       this.isInitialized = true;
       this.logger.log(
         `🧠 [SileroVAD] Silero VAD v5 inicializado com sucesso via onnxruntime-node (${resolvedPath})`,
       );
     } catch (err: any) {
-      this.logger.error(
-        `❌ [SileroVAD] Falha ao carregar sessão ONNX: ${err.message}. Operando com fallback acústico.`,
+      this.logger.warn(
+        `⚠️ [SileroVAD] onnxruntime-node indisponível (${err.message}). Operando com fallback acústico.`,
       );
     }
   }
@@ -303,6 +315,6 @@ export class SileroVadService implements OnModuleInit {
    * Cria uma sessão isolada de VAD neural com estado recorrente independente.
    */
   public createSession(options?: SileroVadSessionOptions): SileroVadSession {
-    return new SileroVadSession(this.inferenceSession, options);
+    return new SileroVadSession(this.inferenceSession, ortModule, options);
   }
 }

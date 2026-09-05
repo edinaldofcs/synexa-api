@@ -1,6 +1,6 @@
 # Stage 1: Base & Dependencies
-FROM node:22-alpine AS base
-RUN apk add --no-cache libc6-compat gcompat libstdc++ openssl
+FROM node:22-bookworm-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends openssl curl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -21,9 +21,9 @@ RUN npm run build
 RUN npm prune --production
 
 # Stage 4: Production Run
-FROM node:22-alpine AS production
-RUN apk add --no-cache libc6-compat gcompat libstdc++ openssl curl
-RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
+FROM node:22-bookworm-slim AS production
+RUN apt-get update && apt-get install -y --no-install-recommends openssl curl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN groupadd -r nodejs && useradd -r -g nodejs nestjs
 WORKDIR /app
 COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./
 COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
