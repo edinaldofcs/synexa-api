@@ -11,6 +11,7 @@ import {
 import type {
   AnalyticsConfigPayload,
   BusinessMarkerDto,
+  SessionFieldMetricDto,
 } from './dto/analytics.dto';
 
 interface EvaluateParams {
@@ -67,11 +68,13 @@ export class AnalyticsService {
     });
     const meta = (client?.metadata as Record<string, unknown>) || {};
     const config = (meta[ANALYTICS_CONFIG_KEY] as AnalyticsConfigPayload) || {
+      metrics: [],
       markers: [],
       funnel: [],
     };
 
     const normalized: AnalyticsConfigPayload = {
+      metrics: Array.isArray(config.metrics) ? config.metrics : [],
       markers: Array.isArray(config.markers) ? config.markers : [],
       funnel: Array.isArray(config.funnel) ? config.funnel : [],
     };
@@ -98,10 +101,9 @@ export class AnalyticsService {
       unknown
     >;
     const normalized: AnalyticsConfigPayload = {
+      metrics: config.metrics ?? [],
       markers: config.markers ?? [],
-      funnel: (config.funnel ?? []).filter((code) =>
-        (config.markers ?? []).some((m) => m.code === code),
-      ),
+      funnel: config.funnel ?? [],
     };
 
     await this.prisma.painel_clients.update({
@@ -126,30 +128,109 @@ export class AnalyticsService {
   // ── Avaliação e registro de eventos ─────────────────────────────
 
   /**
-   * Avalia os marcadores do cliente sobre o estado pós-tool da conversa.
+   * Avalia os marcadores e métricas do cliente sobre o estado pós-tool da conversa.
    * Nunca lança — falhas são logadas e ignoradas para não afetar o atendimento.
    */
   async evaluateAndRecord(params: EvaluateParams): Promise<void> {
     try {
-      const { markers } = await this.getConfig(params.clientId);
-      if (!markers.length) return;
+      const config = await this.getConfig(params.clientId);
+      const markers = config.markers || [];
+      const metrics = config.metrics || [];
+      if (!markers.length && !metrics.length) return;
 
-      await Promise.all(
-        markers.map(async (marker) => {
-          try {
-            await this.evaluateMarker(marker, params);
-          } catch (markerErr) {
+      const promises: Promise<void>[] = [];
+
+      for (const metric of metrics) {
+        promises.push(
+          this.evaluateSessionMetric(metric, params).catch((err) => {
             this.logger.warn(
-              `Erro ao avaliar marcador "${marker.code}": ${(markerErr as Error).message}`,
+              `Erro ao avaliar métrica de sessão "${metric.field}": ${(err as Error).message}`,
             );
-          }
-        }),
-      );
+          }),
+        );
+      }
+
+      for (const marker of markers) {
+        promises.push(
+          this.evaluateMarker(marker, params).catch((err) => {
+            this.logger.warn(
+              `Erro ao avaliar marcador "${marker.code}": ${(err as Error).message}`,
+            );
+          }),
+        );
+      }
+
+      await Promise.all(promises);
     } catch (err) {
       this.logger.warn(
         `Analytics: falha ao carregar configuração: ${(err as Error).message}`,
       );
     }
+  }
+
+  private async evaluateSessionMetric(
+    metric: SessionFieldMetricDto,
+    params: EvaluateParams,
+  ) {
+    const rawVal = params.state[metric.field];
+    if (rawVal === undefined || rawVal === null) return;
+
+    let matched = false;
+    if (metric.expected_value !== undefined && metric.expected_value !== '') {
+      matched =
+        String(rawVal).trim().toLowerCase() ===
+        String(metric.expected_value).trim().toLowerCase();
+    } else if (typeof rawVal === 'boolean') {
+      matched = rawVal;
+    } else if (typeof rawVal === 'number') {
+      matched = rawVal > 0;
+    } else if (typeof rawVal === 'string') {
+      const s = rawVal.trim().toLowerCase();
+      matched =
+        s !== '' &&
+        s !== 'false' &&
+        s !== '0' &&
+        s !== 'null' &&
+        s !== 'undefined';
+    }
+
+    if (!matched) return;
+
+    const code = metric.field;
+    const values: Record<string, unknown> = {
+      [metric.field]: rawVal,
+    };
+
+    const data = {
+      company_id: params.companyId,
+      client_id: params.clientId,
+      conversation_id: params.conversationId || null,
+      end_user_id: params.endUserId || null,
+      marker_code: code,
+      values: values as any,
+      origin_channel: params.originChannel || null,
+    };
+
+    if (params.conversationId) {
+      await this.prisma.business_events.upsert({
+        where: {
+          conversation_id_marker_code: {
+            conversation_id: params.conversationId,
+            marker_code: code,
+          },
+        },
+        update: {
+          values: values as any,
+        },
+        create: data,
+      });
+    } else {
+      await this.prisma.business_events.create({ data });
+    }
+
+    this.logger.log(
+      `📊 Métrica de sessão registrada: ${metric.field}=${rawVal} (conversa ${params.conversationId})`,
+    );
   }
 
   private async evaluateMarker(
@@ -255,9 +336,19 @@ export class AnalyticsService {
 
     const labels = new Map<string, string>();
     const sumFields = new Map<string, Set<string>>();
+    for (const metric of config?.metrics ?? []) {
+      labels.set(metric.field, metric.label || metric.field);
+      if (metric.aggregate === 'sum') {
+        sumFields.set(metric.field, new Set([metric.field]));
+      }
+    }
     for (const marker of config?.markers ?? []) {
-      labels.set(marker.code, marker.label || marker.code);
-      sumFields.set(marker.code, new Set(marker.capture || []));
+      if (!labels.has(marker.code)) {
+        labels.set(marker.code, marker.label || marker.code);
+      }
+      if (!sumFields.has(marker.code)) {
+        sumFields.set(marker.code, new Set(marker.capture || []));
+      }
     }
 
     const totals = new Map<string, MarkerTotal>();

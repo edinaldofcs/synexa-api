@@ -1558,13 +1558,27 @@ export class TestChatService {
     try {
       const vars = params.contextVariables || {};
       const isRightParty = !!(
+        vars.cpc === true ||
+        vars.cpc === 'true' ||
+        vars.cpc === 1 ||
+        vars.is_right_party === true ||
         vars.cliente_cpf ||
         vars.cpf ||
         vars.cliente_nome
       );
       const debtAmount = vars.valor_divida ? Number(vars.valor_divida) : null;
-      const isDebtPresented = debtAmount !== null && debtAmount > 0;
-      const isAgreementReached = !!(vars.acordo_confirmado || vars.acordo_id);
+      const isDebtPresented = !!(
+        vars.cpca === true ||
+        vars.cpca === 'true' ||
+        vars.divida_apresentada === true ||
+        (debtAmount !== null && debtAmount > 0)
+      );
+      const isAgreementReached = !!(
+        vars.acordo === true ||
+        vars.acordo === 'true' ||
+        vars.acordo_confirmado ||
+        vars.acordo_id
+      );
       const isPromiseToPay = !!(vars.promessa_pagamento || vars.data_promessa);
 
       let disposition = 'IN_PROGRESS';

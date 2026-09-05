@@ -450,33 +450,52 @@ describe('AnalyticsService', () => {
       );
     });
 
-    it('should create directly when there is no conversation', async () => {
+    it('should upsert session metric events based on mapped session fields', async () => {
       mockPrisma.painel_clients.findUnique.mockResolvedValue({
         metadata: {
           analytics_config: {
-            markers: [
+            metrics: [
               {
-                code: 'lead',
-                label: 'Lead',
-                conditions: [
-                  { variable: 'cpf', operator: 'exists', value: null },
-                ],
+                id: 'm-cpc',
+                field: 'cpc',
+                label: 'CPC (Pessoa Certa)',
+                resolution: 'max',
+                aggregate: 'count',
+                in_funnel: true,
               },
             ],
-            funnel: [],
+            markers: [],
+            funnel: ['cpc'],
           },
         },
       });
-      mockPrisma.business_events.create.mockResolvedValue({});
+      mockPrisma.business_events.upsert.mockResolvedValue({});
 
       await service.evaluateAndRecord({
         clientId: 'client-1',
         companyId: 'company-1',
-        state: { cpf: '123' },
+        conversationId: 'conv-cpc',
+        state: { cpc: true },
       });
 
-      expect(mockPrisma.business_events.upsert).not.toHaveBeenCalled();
-      expect(mockPrisma.business_events.create).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.business_events.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            conversation_id_marker_code: {
+              conversation_id: 'conv-cpc',
+              marker_code: 'cpc',
+            },
+          },
+          update: {
+            values: { cpc: true },
+          },
+          create: expect.objectContaining({
+            marker_code: 'cpc',
+            values: { cpc: true },
+          }),
+        }),
+      );
     });
   });
 });
+

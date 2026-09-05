@@ -75,16 +75,56 @@ export class BusinessMarkerDto {
   aggregate?: 'sum' | 'count';
 }
 
+export class SessionFieldMetricDto {
+  @IsString()
+  @MaxLength(60)
+  id!: string;
+
+  @IsString()
+  @MaxLength(100)
+  field!: string;
+
+  @IsString()
+  @MaxLength(120)
+  label!: string;
+
+  @IsIn(['last_message', 'max'])
+  resolution!: 'last_message' | 'max';
+
+  @IsOptional()
+  @IsIn(['boolean', 'number', 'string'])
+  value_type?: 'boolean' | 'number' | 'string';
+
+  @IsOptional()
+  @IsString()
+  expected_value?: string;
+
+  @IsOptional()
+  @IsIn(['sum', 'count'])
+  aggregate?: 'sum' | 'count';
+
+  @IsOptional()
+  in_funnel?: boolean;
+}
+
 export interface AnalyticsConfigPayload {
-  markers: BusinessMarkerDto[];
+  metrics?: SessionFieldMetricDto[];
+  markers?: BusinessMarkerDto[];
   funnel: string[];
 }
 
 export class AnalyticsConfigDto {
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SessionFieldMetricDto)
+  metrics?: SessionFieldMetricDto[];
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => BusinessMarkerDto)
-  markers!: BusinessMarkerDto[];
+  markers?: BusinessMarkerDto[];
 
   @IsArray()
   @IsString({ each: true })
@@ -95,3 +135,4 @@ export class BusinessEventRecord {
   marker_code!: string;
   values!: Record<string, unknown>;
 }
+
