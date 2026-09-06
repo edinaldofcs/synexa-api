@@ -59,6 +59,9 @@ export class ConversationsService {
         { conversation_id: conversation.id },
         'Reusing active conversation',
       );
+      if (dto.metadata && Object.keys(dto.metadata).length > 0) {
+        await this.syncInboundState(conversation.id, dto);
+      }
       return this.mapResult(conversation);
     }
 
@@ -90,12 +93,33 @@ export class ConversationsService {
           { conversation_id: conversation.id },
           'Race no find-or-create: reaproveitando conversa criada concorrentemente',
         );
+        if (dto.metadata && Object.keys(dto.metadata).length > 0) {
+          await this.syncInboundState(conversation.id, dto);
+        }
         return this.mapResult(conversation);
       }
       throw err;
     }
 
     // Mapeia variáveis de entrada (Sistemas Externos, Webhook, API, Discador) para o estado da sessão
+    await this.syncInboundState(conversation.id, dto);
+
+    this.logger.log(
+      { conversation_id: conversation.id },
+      'Created new conversation',
+    );
+    return this.mapResult(conversation);
+  }
+
+  /**
+   * Executa o motor InboundDataMapperService aplicando as regras De-Para cadastradas no cliente
+   * e faz merge atômico no conversation_state, garantindo que o agente LLM tenha acesso às variáveis
+   * mapeadas em qualquer turno da conversa.
+   */
+  private async syncInboundState(
+    conversationId: string,
+    dto: FindOrCreateConversationDto,
+  ): Promise<void> {
     try {
       let inboundConfig: InboundMappingConfig | undefined;
       if (dto.client_id) {
@@ -108,35 +132,36 @@ export class ConversationsService {
       }
 
       const rawMetadata = (dto.metadata as Record<string, unknown>) || {};
-      const mappedInitialState = this.inboundDataMapper.mapInboundData(
+      const mappedState = this.inboundDataMapper.mapInboundData(
         rawMetadata,
         inboundConfig,
         dto.origin_channel || 'webchat',
       );
 
-      if (Object.keys(mappedInitialState).length > 0) {
+      if (Object.keys(mappedState).length > 0) {
+        const currentRecord = await this.prisma.conversation_state.findUnique({
+          where: { conversation_id: conversationId },
+        });
+        const currentState =
+          (currentRecord?.state as Record<string, unknown>) || {};
+        const mergedState = { ...currentState, ...mappedState };
+
         await this.prisma.conversation_state.upsert({
-          where: { conversation_id: conversation.id },
+          where: { conversation_id: conversationId },
           create: {
-            conversation_id: conversation.id,
-            state: mappedInitialState as any,
+            conversation_id: conversationId,
+            state: mergedState as any,
           },
           update: {
-            state: mappedInitialState as any,
+            state: mergedState as any,
           },
         });
       }
     } catch (err: any) {
       this.logger.warn(
-        `Erro ao inicializar estado mapeado da conversa: ${err.message}`,
+        `Erro ao sincronizar estado mapeado da conversa: ${err.message}`,
       );
     }
-
-    this.logger.log(
-      { conversation_id: conversation.id },
-      'Created new conversation',
-    );
-    return this.mapResult(conversation);
   }
 
   async addMessage(dto: AddMessageDto) {

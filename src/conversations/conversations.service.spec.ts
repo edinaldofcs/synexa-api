@@ -24,7 +24,10 @@ describe('ConversationsService - findOrCreate race (P2002)', () => {
   };
   const prisma = {
     painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
-    conversation_state: { upsert: jest.fn() },
+    conversation_state: {
+      upsert: jest.fn(),
+      findUnique: jest.fn().mockResolvedValue(null),
+    },
   };
   const service = new ConversationsService(
     prisma as never,
@@ -38,6 +41,8 @@ describe('ConversationsService - findOrCreate race (P2002)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.painel_clients.findUnique.mockResolvedValue(null);
+    conversationsRepo.findActiveByEndUser.mockResolvedValue(null);
+    conversationsRepo.findByExternalKey.mockResolvedValue(null);
   });
 
   it('reaproveita conversa criada concorrentemente quando create falha com P2002', async () => {
@@ -67,6 +72,35 @@ describe('ConversationsService - findOrCreate race (P2002)', () => {
     expect(conversationsRepo.findByExternalKey).toHaveBeenCalledWith(
       'client-1',
       'wa:55119999:msg123',
+    );
+  });
+
+  it('reaproveita conversa ativa e sincroniza inbound metadata no conversation_state', async () => {
+    conversationsRepo.findActiveByEndUser.mockResolvedValue({
+      id: 'conv-active-1',
+      company_id: 'company-1',
+      client_id: 'client-1',
+      status: 'active',
+      mode: 'auto',
+    });
+    prisma.conversation_state.findUnique.mockResolvedValue({
+      conversation_id: 'conv-active-1',
+      state: { anterior: 'antigo' },
+    });
+
+    const result = await service.findOrCreate({
+      company_id: 'company-1',
+      client_id: 'client-1',
+      origin_channel: 'api',
+      external_user_id: '+55119999',
+      metadata: { cpf: '123.456.789-09' },
+    } as any);
+
+    expect(result.id).toBe('conv-active-1');
+    expect(conversationsRepo.findActiveByEndUser).toHaveBeenCalledWith(
+      'client-1',
+      'api',
+      '+55119999',
     );
   });
 
