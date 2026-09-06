@@ -9,7 +9,11 @@ export type InboundTransformType =
   | 'uppercase'
   | 'lowercase'
   | 'number'
-  | 'boolean';
+  | 'boolean'
+  | 'last_chars'
+  | 'first_chars'
+  | 'mask_cpf'
+  | 'substring';
 
 export type InboundChannelSource =
   | 'all'
@@ -26,6 +30,10 @@ export interface InboundMappingRule {
   source_field: string;
   target_variable: string;
   transform?: InboundTransformType;
+  char_count?: number;
+  only_digits?: boolean;
+  slice_start?: number;
+  slice_length?: number;
   default_value?: string;
   description?: string;
 }
@@ -142,7 +150,7 @@ export class InboundDataMapperService {
         finalValue !== null &&
         finalValue !== ''
       ) {
-        finalValue = this.applyTransformation(finalValue, rule.transform);
+        finalValue = this.applyTransformation(finalValue, rule.transform, rule);
 
         // Remove colchetes ou chaves que o usuário possa ter digitado (ex: [[cnpj_cpf]] -> cnpj_cpf)
         const cleanTarget = rule.target_variable.replace(/[[\]{}]/g, '').trim();
@@ -295,6 +303,7 @@ export class InboundDataMapperService {
   applyTransformation(
     value: unknown,
     transform?: InboundTransformType,
+    rule?: InboundMappingRule,
   ): unknown {
     if (value === null || value === undefined) return value;
     const strVal = String(value).trim();
@@ -400,6 +409,45 @@ export class InboundDataMapperService {
           return `${day}/${month}/${year}`;
         }
         return strVal;
+      }
+
+      case 'last_chars': {
+        const count = Math.max(1, rule?.char_count ?? 2);
+        const source =
+          rule?.only_digits !== false ? strVal.replace(/\D/g, '') : strVal;
+        if (!source) return strVal;
+        return source.length <= count ? source : source.slice(-count);
+      }
+
+      case 'first_chars': {
+        const count = Math.max(1, rule?.char_count ?? 2);
+        const source =
+          rule?.only_digits !== false ? strVal.replace(/\D/g, '') : strVal;
+        if (!source) return strVal;
+        return source.slice(0, count);
+      }
+
+      case 'mask_cpf': {
+        const digits = strVal.replace(/\D/g, '');
+        const visibleCount = Math.max(1, rule?.char_count ?? 2);
+        if (digits.length === 11) {
+          const visible = digits.slice(-visibleCount);
+          return `***.***.***-${visible}`;
+        } else if (digits.length > visibleCount) {
+          return `***${digits.slice(-visibleCount)}`;
+        }
+        return digits || strVal;
+      }
+
+      case 'substring': {
+        const start = Math.max(0, rule?.slice_start ?? 0);
+        const length = rule?.slice_length;
+        const source =
+          rule?.only_digits === true ? strVal.replace(/\D/g, '') : strVal;
+        if (length !== undefined && length > 0) {
+          return source.substring(start, start + length);
+        }
+        return source.substring(start);
       }
 
       case 'text':

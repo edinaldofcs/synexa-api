@@ -145,7 +145,8 @@ describe('buildAgentPromptFromBlocks', () => {
           identidade_persona: 'Você é um assistente financeiro.',
           regras_output: 'Regra geral: seja objetivo.',
           regras_output_canais: {
-            voice: 'Em voz: nunca use emojis e responda em até 2 frases curtas.',
+            voice:
+              'Em voz: nunca use emojis e responda em até 2 frases curtas.',
             whatsapp: 'No WhatsApp: use emojis e negrito moderadamente.',
           },
         },
@@ -157,7 +158,9 @@ describe('buildAgentPromptFromBlocks', () => {
 
     expect(prompt).toContain('## Regras de Output & Formatação');
     expect(prompt).toContain('Regra geral: seja objetivo.');
-    expect(prompt).toContain('### Diretrizes Específicas do Canal (Voz / Telefonia)');
+    expect(prompt).toContain(
+      '### Diretrizes Específicas do Canal (Voz / Telefonia)',
+    );
     expect(prompt).toContain(
       'Em voz: nunca use emojis e responda em até 2 frases curtas.',
     );
@@ -203,7 +206,9 @@ describe('buildAgentPromptFromBlocks', () => {
       },
     );
 
-    expect(prompt).toContain('## Regras de Output & Formatação\nRegra geral: seja sempre cortês.');
+    expect(prompt).toContain(
+      '## Regras de Output & Formatação\nRegra geral: seja sempre cortês.',
+    );
     expect(prompt).not.toContain('Diretriz de voz.');
   });
 
@@ -223,8 +228,9 @@ describe('buildAgentPromptFromBlocks', () => {
       },
     );
 
-    expect(prompt).toContain('### Diretrizes Específicas do Canal (API / Integração)');
+    expect(prompt).toContain(
+      '### Diretrizes Específicas do Canal (API / Integração)',
+    );
     expect(prompt).toContain('Em chat/api: use markdown completo e tabelas.');
   });
 });
-

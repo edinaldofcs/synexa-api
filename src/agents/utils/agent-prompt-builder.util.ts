@@ -37,7 +37,8 @@ export function normalizeChannelKey(channel?: string): string {
   }
   if (['whatsapp', 'wpp', 'evolution', 'zap'].includes(c)) return 'whatsapp';
   if (['sms'].includes(c)) return 'sms';
-  if (['webchat', 'chat', 'widget', 'navegador', 'web'].includes(c)) return 'webchat';
+  if (['webchat', 'chat', 'widget', 'navegador', 'web'].includes(c))
+    return 'webchat';
   if (['api', 'integracao', 'webhook'].includes(c)) return 'api';
   return c;
 }
@@ -152,9 +153,15 @@ export function buildAgentPromptFromBlocks(
           if (rawChannelContent) {
             channelValue =
               typeof rawChannelContent === 'string'
-                ? resolveConditionalString(rawChannelContent.trim(), mergedState)
+                ? resolveConditionalString(
+                    rawChannelContent.trim(),
+                    mergedState,
+                  )
                 : Array.isArray(rawChannelContent)
-                  ? resolveConditionalBlocks(rawChannelContent, mergedState).trim()
+                  ? resolveConditionalBlocks(
+                      rawChannelContent,
+                      mergedState,
+                    ).trim()
                   : '';
           }
         }

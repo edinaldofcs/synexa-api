@@ -277,4 +277,107 @@ describe('InboundDataMapperService', () => {
     expect(result.status_atendimento).toBe('iniciado');
     expect(result.cpf).toBe('123.456.789-09');
   });
+
+  it('extrai os últimos 2 dígitos do CPF com last_chars limpando pontuação (prevenção de PII)', () => {
+    const rawData = {
+      cpf_formatado: '123.456.789-09',
+      cpf_puro: '98765432199',
+    };
+
+    const config: InboundMappingConfig = {
+      enabled: true,
+      rules: [
+        {
+          source_channel: 'all',
+          source_field: 'cpf_formatado',
+          target_variable: 'cpf_ultimos_digitos',
+          transform: 'last_chars',
+          char_count: 2,
+          only_digits: true,
+        },
+        {
+          source_channel: 'all',
+          source_field: 'cpf_puro',
+          target_variable: 'cpf_puro_ultimos_digitos',
+          transform: 'last_chars',
+          char_count: 2,
+          only_digits: true,
+        },
+      ],
+    };
+
+    const result = service.mapInboundData(rawData, config, 'voice');
+    expect(result.cpf_ultimos_digitos).toBe('09');
+    expect(result.cpf_puro_ultimos_digitos).toBe('99');
+  });
+
+  it('permite mapear o mesmo campo para o documento completo e para os últimos dígitos simultaneamente', () => {
+    const rawData = {
+      cpf_cliente: '123.456.789-09',
+    };
+
+    const config: InboundMappingConfig = {
+      enabled: true,
+      rules: [
+        {
+          source_channel: 'all',
+          source_field: 'cpf_cliente',
+          target_variable: 'cpf_completo',
+          transform: 'cpf_cnpj',
+        },
+        {
+          source_channel: 'all',
+          source_field: 'cpf_cliente',
+          target_variable: 'cpf_final',
+          transform: 'last_chars',
+          char_count: 2,
+          only_digits: true,
+        },
+      ],
+    };
+
+    const result = service.mapInboundData(rawData, config, 'voice');
+    expect(result.cpf_completo).toBe('123.456.789-09');
+    expect(result.cpf_final).toBe('09');
+  });
+
+  it('aplica first_chars, mask_cpf e substring corretamente', () => {
+    const rawData = {
+      cpf: '12345678909',
+      codigo: 'PEDIDO-998877',
+    };
+
+    const config: InboundMappingConfig = {
+      enabled: true,
+      rules: [
+        {
+          source_channel: 'all',
+          source_field: 'cpf',
+          target_variable: 'cpf_iniciais',
+          transform: 'first_chars',
+          char_count: 3,
+        },
+        {
+          source_channel: 'all',
+          source_field: 'cpf',
+          target_variable: 'cpf_mascarado',
+          transform: 'mask_cpf',
+          char_count: 2,
+        },
+        {
+          source_channel: 'all',
+          source_field: 'codigo',
+          target_variable: 'numero_pedido',
+          transform: 'substring',
+          slice_start: 7,
+          slice_length: 6,
+        },
+      ],
+    };
+
+    const result = service.mapInboundData(rawData, config, 'all');
+    expect(result.cpf_iniciais).toBe('123');
+    expect(result.cpf_mascarado).toBe('***.***.***-09');
+    expect(result.numero_pedido).toBe('998877');
+  });
 });
