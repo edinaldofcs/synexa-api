@@ -83,15 +83,30 @@ function agentPartToGeminiPart(part: MessagePart): any {
 function agentHistoryToGemini(
   history: AgentMessage[],
 ): { role: string; parts: any[] }[] {
-  return history.map((msg) => ({
-    role:
+  const formatted: { role: string; parts: any[] }[] = [];
+  let firstUserFound = false;
+
+  for (const msg of history) {
+    const role =
       msg.role === 'assistant'
         ? 'model'
         : msg.role === 'system'
           ? 'user'
-          : msg.role,
-    parts: msg.parts.map(agentPartToGeminiPart),
-  }));
+          : msg.role;
+
+    if (role === 'user') {
+      firstUserFound = true;
+    }
+
+    if (firstUserFound) {
+      formatted.push({
+        role,
+        parts: msg.parts.map(agentPartToGeminiPart),
+      });
+    }
+  }
+
+  return formatted;
 }
 
 const SYSTEM_SUFFIX =
