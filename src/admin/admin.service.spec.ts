@@ -239,3 +239,35 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
     expect(tx.$transaction).not.toHaveBeenCalled();
   });
 });
+
+describe('AdminService - createUser', () => {
+  it('rejeita com ConflictException se e-mail já está vinculado a outra empresa', async () => {
+    const prisma = {
+      companies: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'comp-1', status: 'active' }),
+      },
+      users: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user-existing',
+          email: 'admin@empresa-antiga.com',
+          company_id: 'comp-OTHER',
+        }),
+      },
+    };
+    const service = new AdminService(prisma as never, {} as never);
+
+    await expect(
+      service.createUser(
+        { id: 'admin-1', role: 'platform_admin' },
+        {
+          email: 'admin@empresa-antiga.com',
+          company_id: 'comp-1',
+          name: 'Novo Admin',
+        },
+      ),
+    ).rejects.toThrow(
+      'Este e-mail já está cadastrado para outra empresa no sistema.',
+    );
+  });
+});
+

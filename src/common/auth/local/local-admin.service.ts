@@ -1,6 +1,8 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
+  HttpException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -33,6 +35,11 @@ export class LocalAdminService {
       });
 
       if (existingUser) {
+        if (existingUser.company_id !== company_id) {
+          throw new ConflictException(
+            'Este e-mail já está cadastrado para outra empresa no sistema. Por favor, utilize outro e-mail.',
+          );
+        }
         return { success: true, user: existingUser, existed: true };
       }
 
@@ -52,6 +59,7 @@ export class LocalAdminService {
 
       return { success: true, user };
     } catch (err: unknown) {
+      if (err instanceof HttpException) throw err;
       const error = err as Error;
       this.logger.error('Create User Error:', error);
       throw new InternalServerErrorException('Internal server error');

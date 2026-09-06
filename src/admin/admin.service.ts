@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -346,6 +348,23 @@ export class AdminService {
       throw new InternalServerErrorException('Internal server error');
     }
 
+    const { email, password, name } = data;
+
+    if (!email) throw new BadRequestException('Email is required');
+
+    // 1. Verifica se já existe um usuário com este e-mail no banco local
+    const existingByEmail = await this.prisma.users.findUnique({
+      where: { email },
+    });
+    if (existingByEmail) {
+      if (existingByEmail.company_id !== companyId) {
+        throw new ConflictException(
+          'Este e-mail já está cadastrado para outra empresa no sistema. Por favor, utilize outro e-mail.',
+        );
+      }
+      return { success: true, user: existingByEmail, existed: true };
+    }
+
     if (this.isDevelopment) {
       return this.localAdminService.createUser({
         email: data.email,
@@ -355,10 +374,6 @@ export class AdminService {
         name: data.name,
       });
     }
-
-    const { email, password, name } = data;
-
-    if (!email) throw new BadRequestException('Email is required');
 
     try {
       let userId: string;
@@ -372,7 +387,8 @@ export class AdminService {
         });
 
       if (authError) {
-        if (authError.message.includes('already registered')) {
+        const errorMsg = (authError.message || '').toLowerCase();
+        if (errorMsg.includes('already') && errorMsg.includes('registered')) {
           userId = await this.findExistingSupabaseUserId(email);
         } else {
           throw authError;
@@ -388,6 +404,11 @@ export class AdminService {
       });
 
       if (existingProfile) {
+        if (existingProfile.company_id !== companyId) {
+          throw new ConflictException(
+            'Este e-mail já está cadastrado para outra empresa no sistema. Por favor, utilize outro e-mail.',
+          );
+        }
         return { success: true, user: existingProfile, existed: true };
       }
 
@@ -397,12 +418,20 @@ export class AdminService {
           company_id: companyId as string,
           role,
           name: name || '',
+          email,
         },
       });
 
       return { success: true, user };
     } catch (err: unknown) {
+      if (err instanceof HttpException) throw err;
       this.logInternalError('Create User Error', err);
+      const msg = ((err as Error)?.message || '').toLowerCase();
+      if (msg.includes('already') && msg.includes('registered')) {
+        throw new ConflictException(
+          'Este e-mail já está cadastrado no sistema. Por favor, utilize outro e-mail.',
+        );
+      }
       throw new InternalServerErrorException('Internal server error');
     }
   }
@@ -564,16 +593,23 @@ export class AdminService {
   }
 
   private async findExistingSupabaseUserId(email: string): Promise<string> {
-    const listResult = await this.adminClient.auth.admin.listUsers();
+    const listResult = await this.adminClient.auth.admin.listUsers({
+      perPage: 1000,
+    } as any);
     if (listResult.error) throw listResult.error;
 
     const usersList = listResult.data.users as Array<{
       id: string;
       email?: string;
     }>;
-    const existingUser = usersList.find((u) => u.email === email);
-    if (!existingUser)
-      throw new Error('User reported existing but not found in list');
+    const existingUser = usersList.find(
+      (u) => u.email?.toLowerCase().trim() === email.toLowerCase().trim(),
+    );
+    if (!existingUser) {
+      throw new ConflictException(
+        'Este e-mail já está cadastrado no sistema de autenticação. Por favor, utilize outro e-mail.',
+      );
+    }
     return existingUser.id;
   }
 
