@@ -271,3 +271,73 @@ describe('AdminService - createUser', () => {
   });
 });
 
+describe('AdminService - updateUser', () => {
+  it('rejeita se company_admin tentar transferir usuário entre empresas com ForbiddenException', async () => {
+    const prisma = {
+      users: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          company_id: 'comp-A',
+          role: 'operator',
+        }),
+      },
+    };
+    const service = new AdminService(prisma as never, {} as never);
+
+    await expect(
+      service.updateUser(
+        { id: 'admin-1', role: 'company_admin', company_id: 'comp-A' },
+        'user-1',
+        { company_id: 'comp-B' },
+      ),
+    ).rejects.toThrow(
+      'Apenas platform_admin pode transferir usuários entre empresas',
+    );
+  });
+
+  it('permite platform_admin transferir usuário entre empresas ativas', async () => {
+    const prisma = {
+      users: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          company_id: 'comp-A',
+          role: 'operator',
+        }),
+        update: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          company_id: 'comp-B',
+          role: 'operator',
+        }),
+      },
+      companies: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'comp-B',
+          status: 'active',
+        }),
+      },
+    };
+    const sessionService = {
+      destroyAllForUser: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new AdminService(
+      prisma as never,
+      {} as never,
+      sessionService as never,
+    );
+
+    const result = await service.updateUser(
+      { id: 'super-1', role: 'platform_admin' },
+      'user-1',
+      { company_id: 'comp-B' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(prisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'user-1' },
+        data: expect.objectContaining({ company_id: 'comp-B' }),
+      }),
+    );
+    expect(sessionService.destroyAllForUser).toHaveBeenCalledWith('user-1');
+  });
+});

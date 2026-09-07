@@ -443,6 +443,7 @@ export class AdminService {
       email?: string;
       name?: string;
       role?: string;
+      company_id?: string;
       is_active?: boolean;
       password?: string;
     },
@@ -454,6 +455,20 @@ export class AdminService {
       throw new ForbiddenException(
         'Somente platform_admin pode conceder esse papel',
       );
+    }
+
+    if (dto.company_id && dto.company_id !== target.company_id) {
+      if (!isPlatformAdmin(actor.role)) {
+        throw new ForbiddenException(
+          'Apenas platform_admin pode transferir usuários entre empresas',
+        );
+      }
+      const newCompany = await this.prisma.companies.findUnique({
+        where: { id: dto.company_id },
+      });
+      if (!newCompany || newCompany.status !== 'active') {
+        throw new BadRequestException('Empresa destino inválida ou suspensa');
+      }
     }
 
     if (dto.password && this.isDevelopment) {
@@ -470,14 +485,21 @@ export class AdminService {
     if (dto.email !== undefined) data.email = dto.email;
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.role !== undefined) data.role = dto.role;
+    if (dto.company_id !== undefined && isPlatformAdmin(actor.role)) {
+      data.company_id = dto.company_id;
+    }
     data.updated_at = new Date();
 
     const user = await this.prisma.users.update({
       where: { id },
-
       data: data as any,
       select: this.userPublicSelect(),
     });
+
+    if (dto.company_id && dto.company_id !== target.company_id) {
+      await this.sessionService?.destroyAllForUser(id);
+    }
+
 
     if (!this.isDevelopment) {
       await this.syncSupabaseMetadata(id, dto).catch((err: Error) => {
