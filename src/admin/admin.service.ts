@@ -500,7 +500,6 @@ export class AdminService {
       await this.sessionService?.destroyAllForUser(id);
     }
 
-
     if (!this.isDevelopment) {
       await this.syncSupabaseMetadata(id, dto).catch((err: Error) => {
         this.logger.warn(

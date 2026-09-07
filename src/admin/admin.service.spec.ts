@@ -244,7 +244,9 @@ describe('AdminService - createUser', () => {
   it('rejeita com ConflictException se e-mail já está vinculado a outra empresa', async () => {
     const prisma = {
       companies: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'comp-1', status: 'active' }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'comp-1', status: 'active' }),
       },
       users: {
         findUnique: jest.fn().mockResolvedValue({

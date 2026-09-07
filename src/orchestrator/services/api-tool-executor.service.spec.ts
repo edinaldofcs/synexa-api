@@ -327,6 +327,19 @@ describe('ApiToolExecutorService - chaining tenant scope & cycle guard', () => {
       expect(typeof extracted.fallback_string).toBe('string');
       expect(extracted.fallback_string).toBe('false');
     });
+
+    it('extrai estritamente campos configurados em extract_data sem expor outros campos do raw', () => {
+      const extractMap = {
+        dias_atraso: 'divida.dias_atraso',
+      };
+      const extracted = (service as any).applyExtractData(
+        rawPayload,
+        extractMap,
+      );
+      expect(extracted).toEqual({ dias_atraso: 25 });
+      expect(extracted.valor_atualizado).toBeUndefined();
+      expect(extracted.cliente).toBeUndefined();
+    });
   });
 });
 

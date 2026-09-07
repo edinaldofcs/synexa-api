@@ -38,4 +38,3 @@ export class AdminUpdateUserDto {
   })
   password?: string;
 }
-

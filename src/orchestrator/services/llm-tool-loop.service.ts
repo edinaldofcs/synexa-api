@@ -385,13 +385,38 @@ export class LlmToolLoopService {
           toolCalls.push(debug);
           const result = debug.result as Record<string, any> | undefined;
 
-          const hasFailure = Boolean(result?.error || result?.ok === false);
+          // Se a tool possui dados extraídos (result.data), repassa estritamente
+          // os dados extraídos para o LLM, impedindo que o payload bruto ('raw')
+          // vaze campos confidenciais ou não mapeados para o modelo.
+          let contentForLlm: unknown = result;
+          if (
+            result &&
+            typeof result === 'object' &&
+            'data' in result &&
+            result.data !== undefined
+          ) {
+            if (typeof result.data === 'object' && result.data !== null) {
+              contentForLlm = {
+                ok: result.ok !== false,
+                status: result.status,
+                ...result.data,
+              };
+            } else {
+              contentForLlm = {
+                ok: result.ok !== false,
+                status: result.status,
+                resultado: result.data,
+              };
+            }
+          }
 
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
-            content: truncateToolResult(result),
+            content: truncateToolResult(contentForLlm),
           });
+
+          const hasFailure = Boolean(result?.error || result?.ok === false);
 
           if (hasFailure) {
             this.logger.warn(

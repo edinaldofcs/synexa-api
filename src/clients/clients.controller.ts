@@ -74,7 +74,12 @@ export class ClientsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: { company_id: string; id: string; role?: string },
   ) {
-    return this.clientsService.getLlmConfig(id, user.company_id, user.id, user.role);
+    return this.clientsService.getLlmConfig(
+      id,
+      user.company_id,
+      user.id,
+      user.role,
+    );
   }
 
   @Put('clients/:id/llm-config')
