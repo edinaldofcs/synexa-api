@@ -42,6 +42,16 @@ export class ClientsService {
     companyId: string,
     role?: string,
   ) {
+    if (role === 'platform_admin') {
+      const rows = await this.prisma.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT id FROM painel_clients WHERE id = ${clientId}::uuid LIMIT 1`,
+      );
+      if (!rows || rows.length === 0) {
+        throw new NotFoundException(`Client with ID ${clientId} not found`);
+      }
+      return;
+    }
+
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
       select: { company_id: true },
@@ -49,7 +59,7 @@ export class ClientsService {
     if (!client) {
       throw new NotFoundException(`Client with ID ${clientId} not found`);
     }
-    if (role !== 'platform_admin' && client.company_id !== companyId) {
+    if (client.company_id !== companyId) {
       throw new NotFoundException(`Client with ID ${clientId} not found`);
     }
   }
@@ -172,6 +182,11 @@ export class ClientsService {
 
   async findAllGlobal() {
     const clients = await this.prisma.painel_clients.findMany({
+      where: {
+        companies: {
+          status: 'active',
+        },
+      },
       include: {
         companies: {
           select: { id: true, name: true },
@@ -187,7 +202,7 @@ export class ClientsService {
           },
         },
       },
-      orderBy: { id: 'asc' },
+      orderBy: [{ companies: { name: 'asc' } }, { company_name: 'asc' }],
     });
 
     return clients.map((c) => {
@@ -254,10 +269,11 @@ export class ClientsService {
       const provider = (
         telephony_provider?.trim() || 'audiosocket'
       ).toLowerCase();
+      const effectiveCompanyId = client.company_id || companyId;
 
       try {
         const existing = await this.prisma.telephony_endpoints.findFirst({
-          where: { client_id: id, company_id: companyId },
+          where: { client_id: id, company_id: effectiveCompanyId },
         });
 
         if (ext) {
@@ -271,7 +287,7 @@ export class ClientsService {
             await this.telephonyResolver.invalidate(existing.did_number);
           }
 
-          await this.assertDidOwnership(ext, provider, companyId);
+          await this.assertDidOwnership(ext, provider, effectiveCompanyId);
           await this.prisma.telephony_endpoints.upsert({
             where: {
               did_number_provider: {
@@ -280,7 +296,7 @@ export class ClientsService {
               },
             },
             create: {
-              company_id: companyId,
+              company_id: effectiveCompanyId,
               client_id: id,
               provider,
               did_number: ext,
@@ -289,7 +305,7 @@ export class ClientsService {
               enabled: true,
             },
             update: {
-              company_id: companyId,
+              company_id: effectiveCompanyId,
               client_id: id,
               label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
               enabled: true,
@@ -489,9 +505,11 @@ export class ClientsService {
       }
     }
 
+    const effectiveCompanyId = client.company_id || companyId;
+
     // Registra trilha de auditoria não-bloqueante
     void this.credentialAuditService.logAction({
-      companyId,
+      companyId: effectiveCompanyId,
       clientId,
       userId,
       provider: 'all',
@@ -610,6 +628,7 @@ export class ClientsService {
         ? { ...(client.metadata as Record<string, unknown>) }
         : {};
 
+    const effectiveCompanyId = client.company_id || companyId;
     const existingProviders =
       (metadata.llm_providers as Record<string, any>) || {};
     const normalized = this.normalizeLlmProviders(body?.providers);
@@ -654,7 +673,7 @@ export class ClientsService {
               },
             });
             void this.credentialAuditService.logAction({
-              companyId,
+              companyId: effectiveCompanyId,
               clientId,
               userId,
               provider: pKey,
@@ -689,7 +708,7 @@ export class ClientsService {
             updated_at: new Date(),
           },
           create: {
-            company_id: companyId,
+            company_id: effectiveCompanyId,
             client_id: clientId,
             provider: pKey,
             api_key_enc: finalEncKey,
@@ -701,7 +720,7 @@ export class ClientsService {
         });
 
         void this.credentialAuditService.logAction({
-          companyId,
+          companyId: effectiveCompanyId,
           clientId,
           userId,
           provider: pKey,
@@ -724,7 +743,7 @@ export class ClientsService {
         });
 
         void this.credentialAuditService.logAction({
-          companyId,
+          companyId: effectiveCompanyId,
           clientId,
           userId,
           provider: pKey,

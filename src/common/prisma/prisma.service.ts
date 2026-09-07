@@ -63,7 +63,12 @@ export function applyTenantInjection(
   operation: string,
   args: any,
   companyId: string | undefined,
+  role?: string,
 ): any {
+  if (role === 'platform_admin') {
+    return args;
+  }
+
   if (!companyId || !model || !TENANT_SUPPORTED_MODELS.includes(model)) {
     return args;
   }
@@ -104,7 +109,13 @@ export class PrismaService
       $allModels: {
         async $allOperations({ model, operation, args, query }) {
           const store = tenantLocalStorage.getStore();
-          applyTenantInjection(model, operation, args, store?.companyId);
+          applyTenantInjection(
+            model,
+            operation,
+            args,
+            store?.companyId,
+            store?.role,
+          );
           return query(args);
         },
       },

@@ -101,4 +101,17 @@ describe('applyTenantInjection', () => {
       company_id: COMPANY_ID,
     });
   });
+
+  it('bypasses tenant injection for platform_admin', () => {
+    const args: any = { where: { status: 'active' } };
+    applyTenantInjection(
+      'painel_clients',
+      'findMany',
+      args,
+      COMPANY_ID,
+      'platform_admin',
+    );
+    expect(args.where.company_id).toBeUndefined();
+    expect(args.where.status).toBe('active');
+  });
 });
