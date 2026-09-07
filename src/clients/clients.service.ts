@@ -37,12 +37,19 @@ export class ClientsService {
     private readonly telephonyResolver: TelephonyEndpointResolverService,
   ) {}
 
-  private async validateClientAccess(clientId: string, companyId: string) {
+  private async validateClientAccess(
+    clientId: string,
+    companyId: string,
+    role?: string,
+  ) {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
       select: { company_id: true },
     });
-    if (!client || client.company_id !== companyId) {
+    if (!client) {
+      throw new NotFoundException(`Client with ID ${clientId} not found`);
+    }
+    if (role !== 'platform_admin' && client.company_id !== companyId) {
       throw new NotFoundException(`Client with ID ${clientId} not found`);
     }
   }
@@ -163,7 +170,40 @@ export class ClientsService {
     });
   }
 
-  async findOne(id: string, companyId?: string) {
+  async findAllGlobal() {
+    const clients = await this.prisma.painel_clients.findMany({
+      include: {
+        companies: {
+          select: { id: true, name: true },
+        },
+        telephony_endpoints: {
+          select: {
+            id: true,
+            did_number: true,
+            provider: true,
+            agent_step: true,
+            label: true,
+            enabled: true,
+          },
+        },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    return clients.map((c) => {
+      const primaryEndpoint = c.telephony_endpoints?.[0];
+      const baseName = c.company_name || c.agent_name || 'Operação';
+      const companyLabel = c.companies?.name ? ` (${c.companies.name})` : '';
+      return {
+        ...c,
+        company_name: `${baseName}${companyLabel}`,
+        sip_extension: primaryEndpoint?.did_number || null,
+        telephony_provider: primaryEndpoint?.provider || null,
+      };
+    });
+  }
+
+  async findOne(id: string, companyId?: string, role?: string) {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id },
       include: {
@@ -180,7 +220,7 @@ export class ClientsService {
       },
     });
     if (!client) throw new NotFoundException(`Client with ID ${id} not found`);
-    if (companyId) {
+    if (companyId && role !== 'platform_admin') {
       if (client.company_id !== companyId) {
         throw new NotFoundException(`Client with ID ${id} not found`);
       }
@@ -197,8 +237,9 @@ export class ClientsService {
     id: string,
     updateClientDto: UpdateClientDto,
     companyId: string,
+    role?: string,
   ) {
-    await this.validateClientAccess(id, companyId);
+    await this.validateClientAccess(id, companyId, role);
 
     const { sip_extension, telephony_provider, ...restDto } = updateClientDto;
 
@@ -271,11 +312,11 @@ export class ClientsService {
     }
 
     if (client) void this.metadataService.refresh(client.id);
-    return this.findOne(id, companyId);
+    return this.findOne(id, companyId, role);
   }
 
-  async remove(id: string, companyId: string) {
-    await this.validateClientAccess(id, companyId);
+  async remove(id: string, companyId: string, role?: string) {
+    await this.validateClientAccess(id, companyId, role);
     return this.clientsRepository.remove(id);
   }
 
@@ -386,8 +427,13 @@ export class ClientsService {
     return newClient;
   }
 
-  async getLlmConfig(clientId: string, companyId: string, userId: string) {
-    await this.validateClientAccess(clientId, companyId);
+  async getLlmConfig(
+    clientId: string,
+    companyId: string,
+    userId: string,
+    role?: string,
+  ) {
+    await this.validateClientAccess(clientId, companyId, role);
 
     // 1. Busca credenciais da tabela dedicada provider_credentials
     const dbCredentials = await this.prisma.provider_credentials.findMany({
@@ -555,8 +601,9 @@ export class ClientsService {
     userId: string,
     ipAddress?: string,
     userAgent?: string,
+    role?: string,
   ) {
-    await this.validateClientAccess(clientId, companyId);
+    await this.validateClientAccess(clientId, companyId, role);
     const client = await this.clientsRepository.findOne(clientId);
     const metadata =
       typeof client.metadata === 'object' && client.metadata !== null

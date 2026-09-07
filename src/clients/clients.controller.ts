@@ -21,16 +21,19 @@ export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
 
   @Get('clients')
-  list(@CurrentUser() user: { company_id: string }) {
+  list(@CurrentUser() user: { company_id: string; role?: string }) {
+    if (user?.role === 'platform_admin') {
+      return this.clientsService.findAllGlobal();
+    }
     return this.clientsService.findAll(user.company_id);
   }
 
   @Get('clients/:id')
   get(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: { company_id: string },
+    @CurrentUser() user: { company_id: string; role?: string },
   ) {
-    return this.clientsService.findOne(id, user.company_id);
+    return this.clientsService.findOne(id, user.company_id, user.role);
   }
 
   @Post('clients')
@@ -45,17 +48,17 @@ export class ClientsController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateClientDto,
-    @CurrentUser() user: { company_id: string },
+    @CurrentUser() user: { company_id: string; role?: string },
   ) {
-    return this.clientsService.update(id, dto, user.company_id);
+    return this.clientsService.update(id, dto, user.company_id, user.role);
   }
 
   @Delete('clients/:id')
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: { company_id: string },
+    @CurrentUser() user: { company_id: string; role?: string },
   ) {
-    return this.clientsService.remove(id, user.company_id);
+    return this.clientsService.remove(id, user.company_id, user.role);
   }
 
   @Post('clients/:id/duplicate')
@@ -69,16 +72,16 @@ export class ClientsController {
   @Get('clients/:id/llm-config')
   getLlmConfig(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: { company_id: string; id: string },
+    @CurrentUser() user: { company_id: string; id: string; role?: string },
   ) {
-    return this.clientsService.getLlmConfig(id, user.company_id, user.id);
+    return this.clientsService.getLlmConfig(id, user.company_id, user.id, user.role);
   }
 
   @Put('clients/:id/llm-config')
   saveLlmConfig(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: LlmConfigDto,
-    @CurrentUser() user: { company_id: string; id: string },
+    @CurrentUser() user: { company_id: string; id: string; role?: string },
     @Req() req: any,
   ) {
     const rawIp =
@@ -94,6 +97,7 @@ export class ClientsController {
       user.id,
       rawIp,
       userAgent,
+      user.role,
     );
   }
 }
