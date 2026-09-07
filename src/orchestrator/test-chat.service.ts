@@ -159,7 +159,10 @@ export class TestChatService {
         where: { id: dto.clientId },
         select: { company_id: true },
       });
-      if (!client || client.company_id !== user.company_id) {
+      if (
+        !client ||
+        (user.role !== 'platform_admin' && client.company_id !== user.company_id)
+      ) {
         throw new ForbiddenException('Client not found or access denied');
       }
     }
@@ -226,7 +229,11 @@ export class TestChatService {
       client = await this.loadPainelClient(clientId);
       // S02: com usuario autenticado, client inexistente ou de outra company
       // recebem a MESMA mensagem (sem enumerar existencia de clients).
-      if (user && (!client || client.company_id !== user.company_id)) {
+      if (
+        user &&
+        user.role !== 'platform_admin' &&
+        (!client || client.company_id !== user.company_id)
+      ) {
         throw new ForbiddenException('Client not found or access denied');
       }
       if (!client) throw new Error('Cliente nao encontrado');
