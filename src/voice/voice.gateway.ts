@@ -382,6 +382,35 @@ export class VoiceGateway
             // Configurações salvas do cliente (buscadas em paralelo à seleção
             // do agente durante a abertura)
             const clientDb = await clientDbPromise;
+            const clientMeta =
+              (clientDb?.metadata as Record<string, unknown>) || {};
+
+            // Extrai variáveis padrão da sessão configuradas no cliente (inbound_variable_mapping)
+            // Paridade com a telefonia Asterisk/SIP (VoiceCallSession)
+            const defaultSessionVars: Record<string, any> = {};
+            const inboundMeta = (clientMeta.inbound_variable_mapping ||
+              clientMeta.inbound_mapping) as any;
+            if (inboundMeta?.default_variables) {
+              if (Array.isArray(inboundMeta.default_variables)) {
+                for (const item of inboundMeta.default_variables) {
+                  if (item?.key) {
+                    const cleanK = String(item.key)
+                      .replace(/[[\]{}]/g, '')
+                      .trim();
+                    defaultSessionVars[cleanK] = item.value;
+                    defaultSessionVars[item.key] = item.value;
+                  }
+                }
+              } else if (typeof inboundMeta.default_variables === 'object') {
+                for (const [k, v] of Object.entries(
+                  inboundMeta.default_variables,
+                )) {
+                  const cleanK = String(k).replace(/[[\]{}]/g, '').trim();
+                  defaultSessionVars[cleanK] = v;
+                  defaultSessionVars[k] = v;
+                }
+              }
+            }
 
             session.beginSession({
               companyId: authenticatedUser.company_id,
@@ -400,6 +429,7 @@ export class VoiceGateway
                   'Assistente',
                 nome_empresa: clientDb?.company_name || 'Synexa',
                 company_name: clientDb?.company_name || 'Synexa',
+                ...defaultSessionVars,
                 ...(msg.variables && typeof msg.variables === 'object'
                   ? msg.variables
                   : {}),
@@ -409,9 +439,6 @@ export class VoiceGateway
                   : {}),
               },
             });
-
-            const clientMeta =
-              (clientDb?.metadata as Record<string, unknown>) || {};
             const voiceEngine =
               ((msg.engine ||
                 clientMeta.voice_engine ||

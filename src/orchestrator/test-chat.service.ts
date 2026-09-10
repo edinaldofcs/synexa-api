@@ -248,19 +248,25 @@ export class TestChatService {
         empresa: (client as any).company_name || 'Synexa',
       };
 
-      const inboundMeta = metadata.inbound_variable_mapping;
+      const defaultSessionVars: Record<string, any> = {};
+      const inboundMeta =
+        metadata.inbound_variable_mapping || metadata.inbound_mapping;
       if (inboundMeta?.default_variables) {
         if (Array.isArray(inboundMeta.default_variables)) {
           for (const item of inboundMeta.default_variables) {
             if (item?.key) {
-              const cleanK = item.key.replace(/[[\]{}]/g, '').trim();
+              const cleanK = String(item.key).replace(/[[\]{}]/g, '').trim();
+              defaultSessionVars[cleanK] = item.value;
+              defaultSessionVars[item.key] = item.value;
               contextVariables[cleanK] = item.value;
               contextVariables[item.key] = item.value;
             }
           }
         } else if (typeof inboundMeta.default_variables === 'object') {
           for (const [k, v] of Object.entries(inboundMeta.default_variables)) {
-            const cleanK = k.replace(/[[\]{}]/g, '').trim();
+            const cleanK = String(k).replace(/[[\]{}]/g, '').trim();
+            defaultSessionVars[cleanK] = v;
+            defaultSessionVars[k] = v;
             contextVariables[cleanK] = v;
             contextVariables[k] = v;
           }
@@ -317,6 +323,17 @@ export class TestChatService {
           ...contextVariables,
           ...this.filterCleanBusinessVariables(persistedContext),
         };
+        // Garante que variáveis padrão do cliente (ex: nome_cliente) nunca
+        // sejam perdidas se o contexto persistido anterior tiver valor vazio
+        for (const [k, v] of Object.entries(defaultSessionVars)) {
+          if (
+            contextVariables[k] === undefined ||
+            contextVariables[k] === null ||
+            contextVariables[k] === ''
+          ) {
+            contextVariables[k] = v;
+          }
+        }
         Object.assign(contextVariables, this.withMessageAliases(message));
 
         const hadPendingAgent = Boolean(state.pending_agent_id);
