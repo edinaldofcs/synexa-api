@@ -13,6 +13,7 @@ import { MockVoiceProvider } from './providers/mock-voice.provider';
 import {
   GeminiLiveVoiceProvider,
   resolveLiveModel,
+  resolveLiveVoice,
 } from './providers/gemini-live-voice.provider';
 import { CascadeVoiceProvider } from './providers/cascade-voice.provider';
 import { IVoiceProvider } from './providers/voice-provider.interface';
@@ -444,11 +445,12 @@ export class VoiceGateway
                 'cb2694c3-715f-4da9-99f3-1c974fff2928';
             } else {
               session.model = resolveLiveModel(rawModel);
-              session.voiceName =
+              session.voiceName = resolveLiveVoice(
                 selectedAgent?.voice_name ||
-                msg.voice ||
-                clientDb?.voice_name ||
-                this.voiceService.getDefaultVoice();
+                  msg.voice ||
+                  clientDb?.voice_name ||
+                  this.voiceService.getDefaultVoice(),
+              );
             }
 
             // Cria a conversa omnichannel no banco
@@ -1197,6 +1199,7 @@ export class VoiceGateway
                 );
               } else {
                 session.model = resolveLiveModel(session.model);
+                session.voiceName = resolveLiveVoice(session.voiceName);
                 provider = new GeminiLiveVoiceProvider();
               }
 
@@ -1438,8 +1441,9 @@ export class VoiceGateway
                 session.model = resolveLiveModel(
                   targetAgent.model || this.voiceService.getDefaultModel(),
                 );
-                session.voiceName =
-                  targetAgent.voice_name || this.voiceService.getDefaultVoice();
+                session.voiceName = resolveLiveVoice(
+                  targetAgent.voice_name || this.voiceService.getDefaultVoice(),
+                );
               }
               session.state = pruneSessionState({
                 ...session.state,

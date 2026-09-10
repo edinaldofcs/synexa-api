@@ -61,6 +61,27 @@ export function resolveLiveModel(requested?: string | null): string {
   return DEFAULT_LIVE_MODEL;
 }
 
+export const VALID_GEMINI_LIVE_VOICES = new Set([
+  'Aoede',
+  'Charon',
+  'Fenrir',
+  'Kore',
+  'Puck',
+  'Leda',
+  'Orus',
+  'Zephyr',
+]);
+
+export function resolveLiveVoice(voice?: string | null): string {
+  if (!voice) return 'Aoede';
+  const trimmed = voice.trim();
+  if (VALID_GEMINI_LIVE_VOICES.has(trimmed)) return trimmed;
+  for (const v of VALID_GEMINI_LIVE_VOICES) {
+    if (v.toLowerCase() === trimmed.toLowerCase()) return v;
+  }
+  return 'Aoede';
+}
+
 const EXPENSIVE_VOICES_MAP: Record<string, number> = {
   Flare: 1632, // Nota: Flare consome 1632 tokens de audio fixos por turno vs ~241 de outras vozes
 };
@@ -97,7 +118,12 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
         `⚠️ [GeminiLive] Modelo "${options.model}" nao suporta bidiGenerateContent (Live); usando "${model}".`,
       );
     }
-    const voice = options.voiceName || 'Kore';
+    const voice = resolveLiveVoice(options.voiceName);
+    if (options.voiceName && voice !== options.voiceName) {
+      this.logger.warn(
+        `⚠️ [GeminiLive] Voz "${options.voiceName}" nao e suportada pela API Google Live; usando voz segura "${voice}".`,
+      );
+    }
     const handshakeTimeout = options.handshakeTimeoutMs ?? 15000;
 
     if (!options.apiKey) {
