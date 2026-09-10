@@ -11,13 +11,17 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ConversationsService } from './conversations.service';
+import { TabulationService } from './services/tabulation.service';
 import type { HandoffRequestDto } from './dto/find-or-create.dto';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { extractTenantContext } from '../common/utils/tenant-access.helper';
 
 @Controller('conversations')
 export class ConversationsController {
-  constructor(private readonly conversationsService: ConversationsService) {}
+  constructor(
+    private readonly conversationsService: ConversationsService,
+    private readonly tabulationService: TabulationService,
+  ) {}
 
   @Get()
   list(
@@ -27,6 +31,7 @@ export class ConversationsController {
     @Query('assigned_to') assignedTo?: string,
     @Query('unassigned') unassigned?: string,
     @Query('status') status?: string,
+    @Query('track_id') trackId?: string,
   ) {
     const ctx = extractTenantContext(user);
     return this.conversationsService.listByClient({
@@ -36,6 +41,7 @@ export class ConversationsController {
       assigned_to: assignedTo,
       unassigned: unassigned === 'true',
       status,
+      track_id: trackId,
     });
   }
 
@@ -201,5 +207,41 @@ export class ConversationsController {
   ) {
     const ctx = extractTenantContext(user);
     return this.conversationsService.streamRecording(id, ctx.companyId, res);
+  }
+
+  @Post(':id/tabulate')
+  manualTabulate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body('track_id', ParseUUIDPipe) trackId: string,
+    @Body('notes') notes: string,
+    @CurrentUser() user: any,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.tabulationService.manualTabulate(
+      id,
+      trackId,
+      notes,
+      user?.id,
+      ctx.companyId,
+    );
+  }
+
+  @Post(':id/re-tabulate')
+  reTabulate(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tabulationService.tabulateConversation(id);
+  }
+
+  @Patch('clients/:clientId/tabulation-config')
+  updateTabulationConfig(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Body('inactivity_minutes') inactivityMinutes: number,
+    @CurrentUser() user: any,
+  ) {
+    const ctx = extractTenantContext(user);
+    return this.conversationsService.updateTabulationConfig(
+      clientId,
+      Number(inactivityMinutes) || 30,
+      ctx.companyId,
+    );
   }
 }

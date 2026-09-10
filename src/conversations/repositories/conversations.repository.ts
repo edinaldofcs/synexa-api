@@ -79,6 +79,7 @@ export class ConversationsRepository {
         end_users: true,
         channel_connections: true,
         conversation_state: true,
+        painel_tracks: true,
         messages: {
           orderBy: { created_at: 'asc' },
           take: 50,

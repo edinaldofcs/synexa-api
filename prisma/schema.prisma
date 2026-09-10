@@ -74,6 +74,11 @@ model conversations {
   closed_at               DateTime? @db.Timestamptz(6)
   ai_context              Json?     @db.JsonB
   metadata                Json?     @db.JsonB
+  track_id                String?   @db.Uuid
+  tabulation_notes        String?
+  tabulated_at            DateTime? @db.Timestamptz(6)
+  tabulated_by            String?
+  tabulation_history      Json?     @default("[]") @db.JsonB
   created_at              DateTime? @default(now()) @db.Timestamptz(6)
 
   companies           companies           @relation(fields: [company_id], references: [id], onDelete: Cascade)
@@ -81,6 +86,7 @@ model conversations {
   channel_connections channel_connections? @relation(fields: [channel_connection_id], references: [id])
   end_users           end_users?          @relation(fields: [end_user_id], references: [id])
   users               users?              @relation(fields: [assigned_to], references: [id])
+  painel_tracks       painel_tracks?      @relation(fields: [track_id], references: [id], onDelete: SetNull)
 
   messages            messages[]
   conversation_state  conversation_state[]
@@ -92,6 +98,8 @@ model conversations {
 
   @@index([company_id])
   @@index([client_id])
+  @@index([track_id])
+  @@index([client_id, status, tabulated_at, last_message_at])
   @@index([channel_connection_id])
   @@index([end_user_id])
   @@index([status])
@@ -217,6 +225,7 @@ model painel_clients {
   logo_icon    String?
   // Processamento da IA de texto: TRUE = BullMQ (durável); FALSE = execução inline na API
   queue_enabled Boolean @default(true)
+  tabulation_inactivity_minutes Int @default(30)
 
   companies           companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_agents       painel_agents[]
@@ -353,6 +362,7 @@ model painel_tracks {
 
   painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
   painel_agents  painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
+  conversations  conversations[]
 
   @@unique([client_id, code])
   @@index([client_id])

@@ -6,6 +6,9 @@ import { ConversationsRepository } from './repositories/conversations.repository
 import { OperatorPresenceService } from './operator-presence.service';
 import { HandoffDistributorService } from './handoff-distributor.service';
 
+import { TabulationService } from './services/tabulation.service';
+import { TabulationSchedulerService } from './services/tabulation-scheduler.service';
+
 @Module({
   imports: [CommonModule],
   controllers: [ConversationsController],
@@ -14,11 +17,14 @@ import { HandoffDistributorService } from './handoff-distributor.service';
     ConversationsRepository,
     OperatorPresenceService,
     HandoffDistributorService,
+    TabulationService,
+    TabulationSchedulerService,
   ],
   exports: [
     ConversationsService,
     OperatorPresenceService,
     HandoffDistributorService,
+    TabulationService,
   ],
 })
 export class ConversationsModule {}

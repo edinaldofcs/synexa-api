@@ -398,8 +398,9 @@ export class ConversationsService {
     assigned_to?: string;
     unassigned?: boolean;
     status?: string;
+    track_id?: string;
   }) {
-    const { clientId, companyId, mode, assigned_to, unassigned, status } =
+    const { clientId, companyId, mode, assigned_to, unassigned, status, track_id } =
       options || {};
 
     // Verifica e redistribui atendimentos órfãos de operadores offline > 5min
@@ -428,6 +429,7 @@ export class ConversationsService {
     if (companyId) where.company_id = companyId;
     if (status) where.status = status;
     if (mode) where.mode = mode;
+    if (track_id) where.track_id = track_id;
 
     if (unassigned) {
       where.assigned_to = null;
@@ -455,6 +457,39 @@ export class ConversationsService {
           orderBy: { created_at: 'desc' },
           select: { content: true, created_at: true, sender_type: true },
         },
+        painel_tracks: {
+          select: {
+            id: true,
+            code: true,
+            label: true,
+            category: true,
+            icon: true,
+            color: true,
+          },
+        },
+      },
+    });
+  }
+
+  async updateTabulationConfig(
+    clientId: string,
+    inactivityMinutes: number,
+    companyId: string,
+  ) {
+    const client = await this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+    });
+    if (!client || client.company_id !== companyId) {
+      throw new NotFoundException('Cliente não encontrado');
+    }
+    return this.prisma.painel_clients.update({
+      where: { id: clientId },
+      data: {
+        tabulation_inactivity_minutes: Math.max(5, Math.min(1440, inactivityMinutes)),
+      },
+      select: {
+        id: true,
+        tabulation_inactivity_minutes: true,
       },
     });
   }
