@@ -9,7 +9,9 @@ import { RedisService } from '../../common/redis/redis.service';
 import { TabulationService } from './tabulation.service';
 
 @Injectable()
-export class TabulationSchedulerService implements OnModuleInit, OnModuleDestroy {
+export class TabulationSchedulerService
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(TabulationSchedulerService.name);
   private timer: NodeJS.Timeout | null = null;
   private isRunning = false;
@@ -49,7 +51,9 @@ export class TabulationSchedulerService implements OnModuleInit, OnModuleDestroy
     const lockKey = 'tabulation:scheduler:lock';
     const acquired = await this.redis.acquireLock(lockKey, 50);
     if (!acquired) {
-      this.logger.debug('Ciclo de tabulação ignorado: lock já adquirido por outra instância.');
+      this.logger.debug(
+        'Ciclo de tabulação ignorado: lock já adquirido por outra instância.',
+      );
       return;
     }
 
@@ -57,7 +61,10 @@ export class TabulationSchedulerService implements OnModuleInit, OnModuleDestroy
     try {
       await this.processPendingConversations();
     } catch (err) {
-      this.logger.error(`Erro ao executar ciclo de tabulação: ${(err as Error).message}`, (err as Error).stack);
+      this.logger.error(
+        `Erro ao executar ciclo de tabulação: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
     } finally {
       this.isRunning = false;
       await this.redis.releaseLock(lockKey).catch(() => {});
@@ -145,13 +152,17 @@ export class TabulationSchedulerService implements OnModuleInit, OnModuleDestroy
       return;
     }
 
-    this.logger.log(`Encontradas ${eligibleIds.length} conversas elegíveis para tabulação.`);
+    this.logger.log(
+      `Encontradas ${eligibleIds.length} conversas elegíveis para tabulação.`,
+    );
 
     for (const convId of eligibleIds) {
       try {
         await this.tabulationService.tabulateConversation(convId);
       } catch (err) {
-        this.logger.error(`Falha ao tabular conversa ${convId}: ${(err as Error).message}`);
+        this.logger.error(
+          `Falha ao tabular conversa ${convId}: ${(err as Error).message}`,
+        );
       }
     }
   }

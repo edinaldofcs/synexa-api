@@ -334,7 +334,8 @@ export class SileroVadService implements OnModuleInit {
 
     try {
       if (!ortModule) {
-        ortModule = await import('onnxruntime-node');
+        const moduleName = 'onnxruntime-node';
+        ortModule = await import(moduleName);
       }
       this.inferenceSession = await ortModule.InferenceSession.create(
         resolvedPath,

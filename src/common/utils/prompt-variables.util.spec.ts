@@ -138,5 +138,74 @@ describe('prompt-variables.util', () => {
       const result = resolvePromptTemplateString(template, {}, fixedDate);
       expect(result).toBe('Campo desconhecido: {{campo_inexistente}}.');
     });
+
+    it('fatia variáveis pegando os primeiros X caracteres ([:x] e [0:x])', () => {
+      const template =
+        'Primeiros 3: {{cpf[:3]}} | Primeiros 5 com zero: {{cpf[0:5]}}';
+      const variables = { cpf: '12345678900' };
+
+      const result = resolvePromptTemplateString(template, variables);
+      expect(result).toBe('Primeiros 3: 123 | Primeiros 5 com zero: 12345');
+    });
+
+    it('fatia variáveis pegando os últimos X caracteres ([-x:])', () => {
+      const template = 'Final do cartão: {{cartao[-4:]}}';
+      const variables = { cartao: '4111222233334444' };
+
+      const result = resolvePromptTemplateString(template, variables);
+      expect(result).toBe('Final do cartão: 4444');
+    });
+
+    it('fatia variáveis em um intervalo específico ([x:y])', () => {
+      const template = 'Meio do código: {{codigo[2:6]}}';
+      const variables = { codigo: 'ABCDEFGH' };
+
+      const result = resolvePromptTemplateString(template, variables);
+      expect(result).toBe('Meio do código: CDEF');
+    });
+
+    it('fatia variáveis a partir de um caractere até o fim ([x:])', () => {
+      const template = 'Telefone sem DDD: {{telefone[2:]}}';
+      const variables = { telefone: '11999998888' };
+
+      const result = resolvePromptTemplateString(template, variables);
+      expect(result).toBe('Telefone sem DDD: 999998888');
+    });
+
+    it('extrai caracteres individuais por índice ([0] e [-1])', () => {
+      const template = 'Primeiro: {{tipo[0]}} | Último: {{tipo[-1]}}';
+      const variables = { tipo: 'PREMIUM' };
+
+      const result = resolvePromptTemplateString(template, variables);
+      expect(result).toBe('Primeiro: P | Último: M');
+    });
+
+    it('suporta fatiamento em variáveis dinâmicas do sistema', () => {
+      const template = 'Dia: {{hoje[:2]}} | Ano: {{hoje[-4:]}}';
+      const result = resolvePromptTemplateString(template, {}, fixedDate);
+      expect(result).toBe('Dia: 21 | Ano: 2026');
+    });
+
+    it('suporta fatiamento através de aliases comuns', () => {
+      const template = 'Cliente abreviado: {{cliente[:6]}}';
+      const variables = { nome_cliente: 'Carlos Eduardo' };
+
+      const result = resolvePromptTemplateString(template, variables);
+      expect(result).toBe('Cliente abreviado: Carlos');
+    });
+
+    it('preserva variáveis desconhecidas mesmo com instrução de slice', () => {
+      const template = 'Dado: {{dado_inexistente[:4]}}';
+      const result = resolvePromptTemplateString(template, {});
+      expect(result).toBe('Dado: {{dado_inexistente[:4]}}');
+    });
+
+    it('suporta fatiamento na sintaxe de compatibilidade legado [[...]]', () => {
+      const template = 'CPF: [[cpf[:3]]] e Final: [[cartao[-4:]]]';
+      const variables = { cpf: '12345678900', cartao: '4111222233334444' };
+
+      const result = resolvePromptTemplateString(template, variables);
+      expect(result).toBe('CPF: 123 e Final: 4444');
+    });
   });
 });

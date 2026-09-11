@@ -400,8 +400,15 @@ export class ConversationsService {
     status?: string;
     track_id?: string;
   }) {
-    const { clientId, companyId, mode, assigned_to, unassigned, status, track_id } =
-      options || {};
+    const {
+      clientId,
+      companyId,
+      mode,
+      assigned_to,
+      unassigned,
+      status,
+      track_id,
+    } = options || {};
 
     // Verifica e redistribui atendimentos órfãos de operadores offline > 5min
     // (throttle: no máximo 1 varredura por minuto por empresa)
@@ -485,7 +492,10 @@ export class ConversationsService {
     return this.prisma.painel_clients.update({
       where: { id: clientId },
       data: {
-        tabulation_inactivity_minutes: Math.max(5, Math.min(1440, inactivityMinutes)),
+        tabulation_inactivity_minutes: Math.max(
+          5,
+          Math.min(1440, inactivityMinutes),
+        ),
       },
       select: {
         id: true,

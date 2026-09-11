@@ -31,7 +31,9 @@ export class TabulationService {
           return cred.api_key_enc;
         }
       } catch (e) {
-        this.logger.warn(`Erro ao buscar provider_credentials para cliente ${clientId}: ${(e as Error).message}`);
+        this.logger.warn(
+          `Erro ao buscar provider_credentials para cliente ${clientId}: ${(e as Error).message}`,
+        );
       }
     }
     return (
@@ -60,7 +62,9 @@ export class TabulationService {
     });
 
     if (!conv || !conv.client_id) {
-      throw new NotFoundException(`Conversa ${conversationId} não encontrada ou sem cliente vinculado.`);
+      throw new NotFoundException(
+        `Conversa ${conversationId} não encontrada ou sem cliente vinculado.`,
+      );
     }
 
     const tracks = await this.prisma.painel_tracks.findMany({
@@ -69,13 +73,21 @@ export class TabulationService {
     });
 
     if (tracks.length === 0) {
-      this.logger.warn(`Cliente ${conv.client_id} não possui trilhas/tabulações ativas cadastradas.`);
-      return { success: false, notes: 'Sem tabulações cadastradas', tabulated_by: 'none' };
+      this.logger.warn(
+        `Cliente ${conv.client_id} não possui trilhas/tabulações ativas cadastradas.`,
+      );
+      return {
+        success: false,
+        notes: 'Sem tabulações cadastradas',
+        tabulated_by: 'none',
+      };
     }
 
     const messages = conv.messages || [];
     if (messages.length === 0) {
-      this.logger.debug(`Conversa ${conversationId} não tem mensagens para tabular.`);
+      this.logger.debug(
+        `Conversa ${conversationId} não tem mensagens para tabular.`,
+      );
       return { success: false, notes: 'Conversa vazia', tabulated_by: 'none' };
     }
 
@@ -83,7 +95,8 @@ export class TabulationService {
     const userMessages = messages.filter(
       (m) => m.sender_type === 'user' || m.sender_type === 'customer',
     );
-    const lastUserMessage = userMessages[userMessages.length - 1]?.content || '';
+    const lastUserMessage =
+      userMessages[userMessages.length - 1]?.content || '';
 
     // Montar histórico textual completo da conversa
     const formattedTranscript = messages
@@ -101,9 +114,10 @@ export class TabulationService {
     // Montar catálogo de opções de tabulação
     const optionsSummary = tracks
       .map((t) => {
-        const examplesStr = Array.isArray(t.examples) && t.examples.length > 0
-          ? ` (Exemplos: ${t.examples.slice(0, 4).join(', ')})`
-          : '';
+        const examplesStr =
+          Array.isArray(t.examples) && t.examples.length > 0
+            ? ` (Exemplos: ${t.examples.slice(0, 4).join(', ')})`
+            : '';
         return `- Código: "${t.code}" | Categoria: "${t.category || 'Geral'}" | Nome: "${t.label}"\n  Descrição: ${t.description}${examplesStr}`;
       })
       .join('\n\n');
@@ -156,13 +170,21 @@ ${formattedTranscript}
 
     // Fallback heurístico caso a chamada da IA não esteja disponível ou falhe
     if (!result || !result.code) {
-      result = this.fallbackKeywordMatching(lastUserMessage, formattedTranscript, tracks);
+      result = this.fallbackKeywordMatching(
+        lastUserMessage,
+        formattedTranscript,
+        tracks,
+      );
     }
 
     // Encontrar a track correspondente
     const matchedTrack =
-      tracks.find((t) => t.code.toLowerCase() === result?.code?.toLowerCase()) ||
-      tracks.find((t) => t.label.toLowerCase() === result?.code?.toLowerCase()) ||
+      tracks.find(
+        (t) => t.code.toLowerCase() === result?.code?.toLowerCase(),
+      ) ||
+      tracks.find(
+        (t) => t.label.toLowerCase() === result?.code?.toLowerCase(),
+      ) ||
       tracks[0];
 
     // Preservar histórico anterior se for uma retabulação
@@ -187,7 +209,8 @@ ${formattedTranscript}
       where: { id: conversationId },
       data: {
         track_id: matchedTrack.id,
-        tabulation_notes: result.notes || `Tabulado automaticamente como ${matchedTrack.label}`,
+        tabulation_notes:
+          result.notes || `Tabulado automaticamente como ${matchedTrack.label}`,
         tabulated_at: new Date(),
         tabulated_by: 'ai',
         tabulation_history: updatedHistory,
@@ -270,7 +293,13 @@ ${formattedTranscript}
   private fallbackKeywordMatching(
     lastUserMsg: string,
     fullTranscript: string,
-    tracks: Array<{ id: string; code: string; label: string; description: string; examples?: any }>,
+    tracks: Array<{
+      id: string;
+      code: string;
+      label: string;
+      description: string;
+      examples?: any;
+    }>,
   ): TabulationResult {
     const textTarget = (lastUserMsg + ' ' + fullTranscript).toLowerCase();
 

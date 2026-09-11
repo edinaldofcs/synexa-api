@@ -405,7 +405,9 @@ export class VoiceGateway
                 for (const [k, v] of Object.entries(
                   inboundMeta.default_variables,
                 )) {
-                  const cleanK = String(k).replace(/[[\]{}]/g, '').trim();
+                  const cleanK = String(k)
+                    .replace(/[[\]{}]/g, '')
+                    .trim();
                   defaultSessionVars[cleanK] = v;
                   defaultSessionVars[k] = v;
                 }

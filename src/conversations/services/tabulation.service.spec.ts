@@ -53,9 +53,15 @@ describe('TabulationService', () => {
       tabulated_at: null,
       tabulation_history: [],
       messages: [
-        { sender_type: 'customer', content: 'Olá, preciso da segunda via da minha fatura' },
+        {
+          sender_type: 'customer',
+          content: 'Olá, preciso da segunda via da minha fatura',
+        },
         { sender_type: 'ai', content: 'Claro, aqui está o código de barras' },
-        { sender_type: 'customer', content: 'Muito obrigado, era isso que eu precisava' },
+        {
+          sender_type: 'customer',
+          content: 'Muito obrigado, era isso que eu precisava',
+        },
       ],
     });
 
@@ -114,7 +120,10 @@ describe('TabulationService', () => {
         { sender_type: 'customer', content: 'Meu sistema deu erro no login' },
         { sender_type: 'ai', content: 'Senha resetada com sucesso' },
         // Nova interação mais recente:
-        { sender_type: 'customer', content: 'Agora quero contratar o plano Pro' },
+        {
+          sender_type: 'customer',
+          content: 'Agora quero contratar o plano Pro',
+        },
         { sender_type: 'ai', content: 'Excelente, segue a proposta comercial' },
       ],
     });

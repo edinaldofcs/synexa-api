@@ -161,7 +161,8 @@ export class TestChatService {
       });
       if (
         !client ||
-        (user.role !== 'platform_admin' && client.company_id !== user.company_id)
+        (user.role !== 'platform_admin' &&
+          client.company_id !== user.company_id)
       ) {
         throw new ForbiddenException('Client not found or access denied');
       }
@@ -255,7 +256,9 @@ export class TestChatService {
         if (Array.isArray(inboundMeta.default_variables)) {
           for (const item of inboundMeta.default_variables) {
             if (item?.key) {
-              const cleanK = String(item.key).replace(/[[\]{}]/g, '').trim();
+              const cleanK = String(item.key)
+                .replace(/[[\]{}]/g, '')
+                .trim();
               defaultSessionVars[cleanK] = item.value;
               defaultSessionVars[item.key] = item.value;
               contextVariables[cleanK] = item.value;
@@ -264,7 +267,9 @@ export class TestChatService {
           }
         } else if (typeof inboundMeta.default_variables === 'object') {
           for (const [k, v] of Object.entries(inboundMeta.default_variables)) {
-            const cleanK = String(k).replace(/[[\]{}]/g, '').trim();
+            const cleanK = String(k)
+              .replace(/[[\]{}]/g, '')
+              .trim();
             defaultSessionVars[cleanK] = v;
             defaultSessionVars[k] = v;
             contextVariables[cleanK] = v;

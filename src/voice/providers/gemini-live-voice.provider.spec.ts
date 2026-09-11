@@ -73,7 +73,9 @@ describe('resolveLiveVoice', () => {
   });
 
   it('cai para Aoede quando receber UUID da Cartesia, formato Wavenet ou valor nulo', () => {
-    expect(resolveLiveVoice('cb2694c3-715f-4da9-99f3-1c974fff2928')).toBe('Aoede');
+    expect(resolveLiveVoice('cb2694c3-715f-4da9-99f3-1c974fff2928')).toBe(
+      'Aoede',
+    );
     expect(resolveLiveVoice('pt-BR-Wavenet-A')).toBe('Aoede');
     expect(resolveLiveVoice('')).toBe('Aoede');
     expect(resolveLiveVoice(undefined)).toBe('Aoede');
