@@ -21,6 +21,15 @@ import { SileroVadService } from './silero-vad.service';
 
 export type VoiceSessionFactoryDeps = VoiceCallSessionConfig;
 
+export interface SessionSlotCheck {
+  allowed: boolean;
+  reason?: 'GLOBAL_LIMIT_EXCEEDED' | 'BOT_LIMIT_EXCEEDED';
+  currentGlobal: number;
+  maxGlobal: number;
+  currentBot?: number;
+  maxBot?: number | null;
+}
+
 /**
  * Cria `VoiceCallSession` preenchendo toda a configuração derivada do banco
  * (agente, gate, chave da IA por tenant). É o único ponto de instanciação
@@ -30,6 +39,7 @@ export type VoiceSessionFactoryDeps = VoiceCallSessionConfig;
 @Injectable()
 export class VoiceSessionFactory {
   private activeSessions = 0;
+  private readonly botActiveSessions = new Map<string, number>();
   private readonly maxSessions: number;
 
   constructor(
@@ -46,15 +56,85 @@ export class VoiceSessionFactory {
     this.maxSessions = this.configService.get<number>('VOICE_MAX_SESSIONS', 50);
   }
 
-  /** Semáforo global de sessões de voz (web + telefonia) — env VOICE_MAX_SESSIONS. */
-  public tryAcquireSession(): boolean {
-    if (this.activeSessions >= this.maxSessions) return false;
+  /**
+   * Avalia se uma nova sessão pode ser aceita sem incrementar contadores.
+   * Suporta teto global (`VOICE_MAX_SESSIONS`) e teto individual por bot (`maxConcurrentCalls`).
+   */
+  public checkAcquireSession(
+    clientId?: string,
+    maxConcurrentCalls?: number | null,
+  ): SessionSlotCheck {
+    if (this.activeSessions >= this.maxSessions) {
+      return {
+        allowed: false,
+        reason: 'GLOBAL_LIMIT_EXCEEDED',
+        currentGlobal: this.activeSessions,
+        maxGlobal: this.maxSessions,
+      };
+    }
+
+    if (clientId && typeof maxConcurrentCalls === 'number' && maxConcurrentCalls > 0) {
+      const currentBot = this.botActiveSessions.get(clientId) || 0;
+      if (currentBot >= maxConcurrentCalls) {
+        return {
+          allowed: false,
+          reason: 'BOT_LIMIT_EXCEEDED',
+          currentGlobal: this.activeSessions,
+          maxGlobal: this.maxSessions,
+          currentBot,
+          maxBot: maxConcurrentCalls,
+        };
+      }
+    }
+
+    return {
+      allowed: true,
+      currentGlobal: this.activeSessions,
+      maxGlobal: this.maxSessions,
+      currentBot: clientId ? (this.botActiveSessions.get(clientId) || 0) : undefined,
+      maxBot: maxConcurrentCalls,
+    };
+  }
+
+  /**
+   * Tenta adquirir slot de sessão global e por bot (se clientId e maxConcurrentCalls fornecidos).
+   * Incrementa contadores atomicamente em caso de sucesso.
+   */
+  public tryAcquireSession(
+    clientId?: string,
+    maxConcurrentCalls?: number | null,
+  ): boolean {
+    const check = this.checkAcquireSession(clientId, maxConcurrentCalls);
+    if (!check.allowed) return false;
+
     this.activeSessions++;
+    if (clientId) {
+      const currentBot = this.botActiveSessions.get(clientId) || 0;
+      this.botActiveSessions.set(clientId, currentBot + 1);
+    }
     return true;
   }
 
-  public releaseSession(): void {
+  /** Libera o slot da sessão global e decrementa o contador do bot, se aplicável. */
+  public releaseSession(clientId?: string): void {
     this.activeSessions = Math.max(0, this.activeSessions - 1);
+    if (clientId) {
+      const current = this.botActiveSessions.get(clientId) || 0;
+      const next = Math.max(0, current - 1);
+      if (next === 0) {
+        this.botActiveSessions.delete(clientId);
+      } else {
+        this.botActiveSessions.set(clientId, next);
+      }
+    }
+  }
+
+  /** Retorna quantidade de sessões ativas (global ou por bot). */
+  public getActiveSessionsCount(clientId?: string): number {
+    if (clientId) {
+      return this.botActiveSessions.get(clientId) || 0;
+    }
+    return this.activeSessions;
   }
 
   public async create(
@@ -149,11 +229,20 @@ export class VoiceSessionFactory {
       channel: overrides?.channel || 'voice_sip',
     };
 
-    if (!this.tryAcquireSession()) {
+    const maxConcurrentCalls = (client as any)?.max_concurrent_calls;
+    const check = this.checkAcquireSession(clientId, maxConcurrentCalls);
+    if (!check.allowed) {
+      if (check.reason === 'BOT_LIMIT_EXCEEDED') {
+        throw new Error(
+          `Limite de chamadas simultâneas atingido para este bot (máximo: ${maxConcurrentCalls})`,
+        );
+      }
       throw new Error(
         `Limite de sessões de voz simultâneas atingido (VOICE_MAX_SESSIONS=${this.maxSessions})`,
       );
     }
+
+    this.tryAcquireSession(clientId, maxConcurrentCalls);
 
     const session = new VoiceCallSession({
       telephonyAdapter: adapter,
@@ -164,7 +253,7 @@ export class VoiceSessionFactory {
       voiceToolsService: this.voiceToolsService,
       config: {
         ...config,
-        onSessionEnd: () => this.releaseSession(),
+        onSessionEnd: () => this.releaseSession(clientId),
       },
     });
 

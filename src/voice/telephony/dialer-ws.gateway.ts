@@ -200,6 +200,19 @@ export class DialerWsIngress
         return;
       }
 
+      const maxConcurrent = (route.client as any)?.max_concurrent_calls;
+      const slotCheck = this.voiceSessionFactory.checkAcquireSession(
+        route.client_id,
+        maxConcurrent,
+      );
+      if (!slotCheck.allowed) {
+        this.logger.warn(
+          `[DialerWS] Chamada recusada: ${slotCheck.reason} (cliente=${route.client_id}, max=${maxConcurrent})`,
+        );
+        adapter.close?.();
+        return;
+      }
+
       const { session } = await this.voiceSessionFactory.create(
         adapter,
         route,

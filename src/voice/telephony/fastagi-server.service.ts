@@ -285,6 +285,19 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      const maxConcurrent = (route.client as any)?.max_concurrent_calls;
+      const slotCheck = this.voiceSessionFactory.checkAcquireSession(
+        route.client_id,
+        maxConcurrent,
+      );
+      if (!slotCheck.allowed) {
+        this.logger.warn(
+          `[FastAGI] Chamada recusada: ${slotCheck.reason} (cliente=${route.client_id}, max=${maxConcurrent})`,
+        );
+        adapter.hangup('limit_exceeded');
+        return;
+      }
+
       // 3. Pipeline único de IA via factory
       const channelId = (adapter.metadata.channelId as string) || undefined;
       const created = await this.voiceSessionFactory.create(adapter, route, {

@@ -82,6 +82,10 @@ export class UpdateClientDto {
   @IsOptional()
   metadata?: Record<string, unknown> | null;
 
+  @Allow()
+  @IsOptional()
+  max_concurrent_calls?: number | null;
+
   // FALSE = IA de texto roda inline no processo da API (sem fila BullMQ)
   @IsOptional()
   @IsBoolean()

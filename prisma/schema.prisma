@@ -264,6 +264,7 @@ model painel_clients {
   gemini_thinking_level       String?
   context_compression_enabled Boolean?        @default(false)
   context_compression_target_tokens Int?
+  max_concurrent_calls        Int?            @default(10)
   metadata            Json?           @default("{}") @db.JsonB
 
   @@index([company_id])

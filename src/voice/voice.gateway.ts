@@ -189,22 +189,38 @@ export class VoiceGateway
       sendToClient({ type: 'telemetry', telemetry: payload });
     };
 
-    const acquireVoiceSlot = (): boolean => {
-      if (session.holdsSessionSlot) return true;
-      if (!this.voiceSessionFactory.tryAcquireSession()) {
+    const acquireVoiceSlot = (
+      clientId?: string,
+      maxLimit?: number | null,
+    ): {
+      acquired: boolean;
+      reason?: 'GLOBAL_LIMIT_EXCEEDED' | 'BOT_LIMIT_EXCEEDED';
+      maxBot?: number | null;
+    } => {
+      if (session.holdsSessionSlot) return { acquired: true };
+      const check = this.voiceSessionFactory.checkAcquireSession(
+        clientId,
+        maxLimit,
+      );
+      if (!check.allowed) {
         this.logger.warn(
-          '[VoiceGateway] Limite global de sessões de voz atingido; recusando nova sessão',
+          `[VoiceGateway] Sessão de voz recusada: ${check.reason} (clientId=${clientId ?? 'n/d'}, maxBot=${maxLimit ?? 'ilimitado'}, global=${check.currentGlobal}/${check.maxGlobal})`,
         );
-        return false;
+        return {
+          acquired: false,
+          reason: check.reason,
+          maxBot: maxLimit,
+        };
       }
+      this.voiceSessionFactory.tryAcquireSession(clientId, maxLimit);
       session.holdsSessionSlot = true;
-      return true;
+      return { acquired: true };
     };
 
     const releaseVoiceSlot = () => {
       if (!session.holdsSessionSlot) return;
       session.holdsSessionSlot = false;
-      this.voiceSessionFactory.releaseSession();
+      this.voiceSessionFactory.releaseSession(session.clientId);
     };
 
     let statePersistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1174,14 +1190,31 @@ export class VoiceGateway
                 return;
               }
 
-              if (!acquireVoiceSlot()) {
-                sendToClient({
-                  type: 'error',
-                  code: 'VOICE_MAX_SESSIONS',
-                  message:
-                    'Limite de sessões de voz simultâneas atingido. Tente novamente em instantes.',
-                });
-                clientWs.close(1013, 'Too many voice sessions');
+              const slot = acquireVoiceSlot(
+                session.clientId,
+                clientDb?.max_concurrent_calls,
+              );
+              if (!slot.acquired) {
+                if (slot.reason === 'BOT_LIMIT_EXCEEDED') {
+                  sendToClient({
+                    type: 'error',
+                    code: 'BOT_CALL_LIMIT_EXCEEDED',
+                    message: `Limite de chamadas ativas atingido para este bot (máximo: ${slot.maxBot}). Tente novamente em instantes.`,
+                  });
+                } else {
+                  sendToClient({
+                    type: 'error',
+                    code: 'VOICE_MAX_SESSIONS',
+                    message:
+                      'Limite de sessões de voz simultâneas atingido no servidor. Tente novamente em instantes.',
+                  });
+                }
+                clientWs.close(
+                  1013,
+                  slot.reason === 'BOT_LIMIT_EXCEEDED'
+                    ? 'Bot call limit exceeded'
+                    : 'Too many voice sessions',
+                );
                 return;
               }
 
@@ -1615,7 +1648,7 @@ export class VoiceGateway
     if (session) {
       if (session.holdsSessionSlot) {
         session.holdsSessionSlot = false;
-        this.voiceSessionFactory.releaseSession();
+        this.voiceSessionFactory.releaseSession(session.clientId);
       }
       session.liveProvider?.close();
       this.sessions.delete(clientWs);

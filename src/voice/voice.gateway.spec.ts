@@ -16,7 +16,14 @@ class FakeClientSocket extends EventEmitter {
   }
 }
 
-function makeGateway(config: Record<string, unknown> = {}, redis?: any) {
+import { VoiceSessionFactory } from './services/voice-session.factory';
+
+function makeGateway(
+  config: Record<string, unknown> = {},
+  redis?: any,
+  voiceSessionFactory?: any,
+  prismaService?: any,
+) {
   const voiceAuthService = {
     authenticateSession: jest
       .fn()
@@ -34,17 +41,58 @@ function makeGateway(config: Record<string, unknown> = {}, redis?: any) {
       (key: string, defaultValue?: any) => config[key] ?? defaultValue,
     ),
   };
+  const voiceService = {
+    getDefaultModel: jest.fn().mockReturnValue('gemini-2.5-flash-lite'),
+    getDefaultVoice: jest.fn().mockReturnValue('Aoede'),
+  };
+  const keyResolver = {
+    resolveApiKey: jest.fn().mockResolvedValue(''),
+  };
+  const audioGateService = {
+    createSession: jest.fn().mockReturnValue({
+      processPcm16Chunk: jest.fn(),
+      reset: jest.fn(),
+      notifyAiSpeakingChanged: jest.fn(),
+    }),
+  };
+  const cartesiaTtsService = {
+    synthesizeStream: jest.fn(),
+    createSession: jest.fn().mockReturnValue({
+      sendText: jest.fn(),
+      cancelContext: jest.fn(),
+      close: jest.fn(),
+    }),
+  };
+  const groqWhisperSttService = {
+    transcribeChunk: jest.fn(),
+  };
+  const sileroVadService = {
+    createSession: jest.fn().mockReturnValue({
+      processChunk: jest.fn(),
+      reset: jest.fn(),
+      destroy: jest.fn(),
+    }),
+  };
+
+  const voiceToolsService = {
+    getAgentTools: jest.fn().mockResolvedValue([]),
+    getAgentSubagents: jest.fn().mockResolvedValue([]),
+  };
+  const nativeToolsService = {
+    getDeclarations: jest.fn().mockReturnValue([]),
+  };
+
   const gateway = new VoiceGateway(
-    {} as any,
+    voiceService as any,
     voiceAuthService as any,
     {} as any,
-    {} as any,
-    {} as any,
+    audioGateService as any,
+    voiceSessionFactory ?? ({} as any),
     configService as any,
+    prismaService ?? ({} as any),
+    voiceToolsService as any,
     {} as any,
-    {} as any,
-    {} as any,
-    {} as any,
+    nativeToolsService as any,
     {
       flushAiBuffer: jest.fn(),
       persistSessionTelemetry: jest.fn(),
@@ -52,10 +100,10 @@ function makeGateway(config: Record<string, unknown> = {}, redis?: any) {
       buildTelemetryPayload: jest.fn().mockReturnValue(null),
     } as any,
     redisService as any,
-    {} as any,
-    {} as any,
-    {} as any,
-    {} as any,
+    cartesiaTtsService as any,
+    groqWhisperSttService as any,
+    sileroVadService as any,
+    keyResolver as any,
   );
   return {
     gateway,
@@ -137,5 +185,120 @@ describe('VoiceGateway security', () => {
     expect(expire).toHaveBeenCalledWith('voice:preauth:10.1.2.3', 60);
     expect(client.close).not.toHaveBeenCalled();
     client.close(1000);
+  });
+
+  it('bloqueia a 11ª conexão WebSocket simultânea para um bot com limite 10 com BOT_CALL_LIMIT_EXCEEDED', async () => {
+    const factory = new VoiceSessionFactory(
+      {} as any,
+      { get: jest.fn(() => 50) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const prisma = {
+      painel_clients: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'bot-10',
+          max_concurrent_calls: 10,
+          metadata: {},
+        }),
+      },
+      painel_agents: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'agent-1',
+          client_id: 'bot-10',
+          is_active: true,
+          is_initial: true,
+          interaction_mode: 'both',
+        }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      conversations: {
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+
+    const { gateway, voiceAuthService } = makeGateway(
+      { GEMINI_API_KEY: 'mock-key', ENVIRONMENT: 'development' },
+      undefined,
+      factory,
+      prisma,
+    );
+
+    voiceAuthService.authenticateSession = jest
+      .fn()
+      .mockResolvedValue({ company_id: 'comp-1' });
+    voiceAuthService.resolveClientId = jest.fn().mockResolvedValue('bot-10');
+
+    const clients: FakeClientSocket[] = [];
+
+    // Conecta 10 clientes simultâneos
+    for (let i = 0; i < 10; i++) {
+      const client = new FakeClientSocket();
+      clients.push(client);
+      gateway.handleConnection(client as any);
+      client.emit(
+        'message',
+        Buffer.from(JSON.stringify({ type: 'start', clientId: 'bot-10' })),
+      );
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Os 10 clientes devem ter sido aceitos (sem fechamento de socket)
+    for (const c of clients) {
+      expect(c.close).not.toHaveBeenCalled();
+    }
+    expect(factory.getActiveSessionsCount('bot-10')).toBe(10);
+
+    // Conecta o 11º cliente
+    const client11 = new FakeClientSocket();
+    gateway.handleConnection(client11 as any);
+    client11.emit(
+      'message',
+      Buffer.from(JSON.stringify({ type: 'start', clientId: 'bot-10' })),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // O 11º cliente deve ser BLOQUEADO com erro BOT_CALL_LIMIT_EXCEEDED e fechamento 1013
+    expect(client11.sent.map((p) => JSON.parse(p))).toContainEqual({
+      type: 'error',
+      code: 'BOT_CALL_LIMIT_EXCEEDED',
+      message:
+        'Limite de chamadas ativas atingido para este bot (máximo: 10). Tente novamente em instantes.',
+    });
+    expect(client11.close).toHaveBeenCalledWith(
+      1013,
+      'Bot call limit exceeded',
+    );
+
+    // Desconecta um dos 10 clientes
+    clients[0].emit('close', 1000);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(factory.getActiveSessionsCount('bot-10')).toBe(9);
+
+    // Conecta um 12º cliente agora que uma vaga foi liberada
+    const client12 = new FakeClientSocket();
+    gateway.handleConnection(client12 as any);
+    client12.emit(
+      'message',
+      Buffer.from(JSON.stringify({ type: 'start', clientId: 'bot-10' })),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // O 12º cliente é aceito com sucesso
+    expect(client12.close).not.toHaveBeenCalled();
+    expect(factory.getActiveSessionsCount('bot-10')).toBe(10);
+
+    // Teardown: fecha todas as conexões
+    for (const c of clients) {
+      c.close(1000);
+    }
+    client11.close(1000);
+    client12.close(1000);
   });
 });

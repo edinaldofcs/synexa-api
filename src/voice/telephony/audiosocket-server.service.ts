@@ -228,6 +228,19 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      const maxConcurrent = (route.client as any)?.max_concurrent_calls;
+      const slotCheck = this.voiceSessionFactory.checkAcquireSession(
+        route.client_id,
+        maxConcurrent,
+      );
+      if (!slotCheck.allowed) {
+        this.logger.warn(
+          `[AudioSocket] Chamada recusada: ${slotCheck.reason} (cliente=${route.client_id}, max=${maxConcurrent})`,
+        );
+        adapter.hangup('limit_exceeded');
+        return;
+      }
+
       const created = await this.voiceSessionFactory.create(adapter, route, {
         onAiHangupRequest: async () => {
           await this.amiService.hangupChannel(asteriskChannel || channelId);
