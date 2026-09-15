@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
+import { InteractionsService } from '../../interactions/interactions.service';
 import type { VoiceClientSession } from '../sessions/voice-client-session';
 
 export interface VoiceTelemetryPayload {
@@ -20,7 +21,7 @@ export interface VoiceTelemetryPayload {
 /**
  * Persistência da sessão de voz do navegador: mensagens (buffer do turno da
  * IA com throttle), transcripts do usuário, estado da conversa e telemetria
- * consolidada (agent_runs + voice_session_telemetry).
+ * consolidada (agent_runs + voice_session_telemetry + painel_interactions).
  */
 @Injectable()
 export class VoiceTelemetryService {
@@ -33,6 +34,7 @@ export class VoiceTelemetryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: ModelPricingService,
+    private readonly interactionsService: InteractionsService,
   ) {}
 
   // ── Buffer do turno da IA ───────────────────────────────────────
@@ -275,6 +277,36 @@ export class VoiceTelemetryService {
         this.logger.log(
           `📊 [VoiceTelemetry] Sessão registrada: ${durationSeconds}s | Gate: +${stats.forwardedSec}s / -${stats.suppressedSec}s silêncio | Custo: $${rawCost}`,
         );
+      }
+
+      // 4. Sincroniza interação canônica em painel_interactions
+      if (session.conversationId && session.companyId && session.clientId) {
+        await this.interactionsService.syncSessionInteraction({
+          sessionId: session.conversationId,
+          companyId: session.companyId,
+          clientId: session.clientId,
+          agentId: session.agentId || null,
+          agentName: (session.state?.nome_agente as string) || null,
+          channel: 'voice_webrtc',
+          direction: 'inbound',
+          state: session.state as Record<string, unknown>,
+          durationSeconds,
+          billableSeconds: durationSeconds,
+          bargeInCount: session.interruptedCount,
+          totalTokens: session.totalTokens,
+          promptTokens: session.inputTokens,
+          completionTokens: session.outputTokens,
+          estimatedCostUsd: rawCost,
+          llmModel: session.model,
+          llmProvider:
+            session.voiceEngine === 'hybrid'
+              ? 'cartesia-cascade'
+              : 'gemini-live',
+          hangupCause: session.pendingAiHangup ? 'ai_completed' : undefined,
+          startedAt: new Date(session.startTime),
+          endedAt: new Date(),
+          status: 'completed',
+        });
       }
     } catch (err: any) {
       this.logger.error(`Erro ao persistir telemetria de voz: ${err.message}`);

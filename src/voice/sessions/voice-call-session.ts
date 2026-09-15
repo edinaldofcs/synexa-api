@@ -22,6 +22,7 @@ import {
   buildGreetingTurn,
   resolveMaxCallDurationSec,
 } from '../services/voice-runtime.util';
+import { extractFunnelFromState } from '../../interactions/utils/funnel-mapping.util';
 
 export interface VoiceGateRuntimeConfig {
   enabled?: boolean;
@@ -952,18 +953,48 @@ export class VoiceCallSession {
         // Sincroniza interação unificada (painel_interactions)
         if (this.config.clientId && this.config.companyId) {
           try {
+            const now = new Date();
+            const startedAt = new Date(this.startTime);
+            const funnel = extractFunnelFromState(this.sessionState, now);
+
             await this.prisma.painel_interactions.upsert({
               where: { session_id: this.conversationId },
               create: {
                 company_id: this.config.companyId,
                 client_id: this.config.clientId,
                 agent_id: this.config.agentId || null,
+                agent_name: (this.sessionState?.nome_agente as string) || null,
                 session_id: this.conversationId,
-                channel: this.config.channel || 'voice_webrtc',
+                channel: this.config.channel || 'voice_sip',
                 direction: 'inbound',
                 interaction_mode: 'voice',
+                client_identifier: funnel.client_identifier,
+                client_name: funnel.client_name,
                 has_human_answer: true,
-                human_answered_at: new Date(this.startTime),
+                human_answered_at: startedAt,
+                is_right_party: funnel.is_right_party,
+                right_party_at: funnel.right_party_at,
+                is_debt_presented: funnel.is_debt_presented,
+                debt_presented_at: funnel.debt_presented_at,
+                debt_amount:
+                  funnel.debt_amount !== null
+                    ? (funnel.debt_amount as any)
+                    : null,
+                is_agreement_reached: funnel.is_agreement_reached,
+                agreement_at: funnel.agreement_at,
+                agreement_id: funnel.agreement_id,
+                agreement_amount:
+                  funnel.agreement_amount !== null
+                    ? (funnel.agreement_amount as any)
+                    : null,
+                is_promise_to_pay: funnel.is_promise_to_pay,
+                promise_to_pay_at: funnel.promise_to_pay_at,
+                promise_due_date: funnel.promise_due_date,
+                promise_amount:
+                  funnel.promise_amount !== null
+                    ? (funnel.promise_amount as any)
+                    : null,
+                disposition: funnel.disposition,
                 barge_in_count: this.interruptedCount,
                 duration_seconds: durationSeconds,
                 billable_seconds: durationSeconds,
@@ -972,12 +1003,39 @@ export class VoiceCallSession {
                 completion_tokens: this.outputTokens,
                 estimated_cost_usd: rawCost as any,
                 llm_model: this.config.model || 'gemini-2.0-flash-exp',
-                started_at: new Date(this.startTime),
-                ended_at: new Date(),
+                hangup_cause: this.hangupCause || null,
+                context_variables: (this.sessionState || {}) as any,
+                started_at: startedAt,
+                ended_at: now,
                 status: 'completed',
               },
               update: {
+                client_identifier: funnel.client_identifier || undefined,
+                client_name: funnel.client_name || undefined,
                 has_human_answer: true,
+                is_right_party: funnel.is_right_party,
+                right_party_at: funnel.right_party_at || undefined,
+                is_debt_presented: funnel.is_debt_presented,
+                debt_presented_at: funnel.debt_presented_at || undefined,
+                debt_amount:
+                  funnel.debt_amount !== null
+                    ? (funnel.debt_amount as any)
+                    : undefined,
+                is_agreement_reached: funnel.is_agreement_reached,
+                agreement_at: funnel.agreement_at || undefined,
+                agreement_id: funnel.agreement_id || undefined,
+                agreement_amount:
+                  funnel.agreement_amount !== null
+                    ? (funnel.agreement_amount as any)
+                    : undefined,
+                is_promise_to_pay: funnel.is_promise_to_pay,
+                promise_to_pay_at: funnel.promise_to_pay_at || undefined,
+                promise_due_date: funnel.promise_due_date || undefined,
+                promise_amount:
+                  funnel.promise_amount !== null
+                    ? (funnel.promise_amount as any)
+                    : undefined,
+                disposition: funnel.disposition,
                 barge_in_count: this.interruptedCount,
                 duration_seconds: durationSeconds,
                 billable_seconds: durationSeconds,
@@ -985,7 +1043,9 @@ export class VoiceCallSession {
                 prompt_tokens: this.inputTokens,
                 completion_tokens: this.outputTokens,
                 estimated_cost_usd: rawCost as any,
-                ended_at: new Date(),
+                hangup_cause: this.hangupCause || undefined,
+                context_variables: (this.sessionState || {}) as any,
+                ended_at: now,
                 status: 'completed',
               },
             });

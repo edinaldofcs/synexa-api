@@ -21,6 +21,7 @@ import { ModelPricingService } from '../orchestrator/services/model-pricing.serv
 import { VoiceToolsService } from './voice-tools.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { AnalyticsModule } from '../analytics/analytics.module';
+import { InteractionsModule } from '../interactions/interactions.module';
 import { SessionService } from '../common/auth/session.service';
 import { CartesiaTtsService } from './services/cartesia-tts.service';
 import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
@@ -35,6 +36,7 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
   imports: [
     CommonModule,
     AnalyticsModule,
+    InteractionsModule,
     ...(voiceStandalone
       ? [ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])]
       : []),

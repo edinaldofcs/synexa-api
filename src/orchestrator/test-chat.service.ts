@@ -36,6 +36,7 @@ import {
   LlmToolLoopService,
   type MemoryMessage,
 } from './services/llm-tool-loop.service';
+import { extractFunnelFromState } from '../interactions/utils/funnel-mapping.util';
 
 const TEST_CHAT_CONTEXT_KEY = 'test_chat_context_variables';
 const PAINEL_MESSAGES_LIMIT = 50;
@@ -1587,36 +1588,18 @@ export class TestChatService {
   }) {
     try {
       const vars = params.contextVariables || {};
-      const isRightParty = !!(
-        vars.cpc === true ||
-        vars.cpc === 'true' ||
-        vars.cpc === 1 ||
-        vars.is_right_party === true ||
-        vars.cliente_cpf ||
-        vars.cpf ||
-        vars.cliente_nome
-      );
-      const debtAmount = vars.valor_divida ? Number(vars.valor_divida) : null;
-      const isDebtPresented = !!(
-        vars.cpca === true ||
-        vars.cpca === 'true' ||
-        vars.divida_apresentada === true ||
-        (debtAmount !== null && debtAmount > 0)
-      );
-      const isAgreementReached = !!(
-        vars.acordo === true ||
-        vars.acordo === 'true' ||
-        vars.acordo_confirmado ||
-        vars.acordo_id
-      );
-      const isPromiseToPay = !!(vars.promessa_pagamento || vars.data_promessa);
+      const now = new Date();
+      const funnel = extractFunnelFromState(vars, now);
+      if (params.userMessage && funnel.disposition === 'IN_PROGRESS') {
+        funnel.disposition = 'HUMAN_ANSWERED';
+      }
 
-      let disposition = 'IN_PROGRESS';
-      if (isAgreementReached) disposition = 'AGREEMENT_CLOSED';
-      else if (isPromiseToPay) disposition = 'PTP';
-      else if (isDebtPresented) disposition = 'DEBT_PRESENTED';
-      else if (isRightParty) disposition = 'RPC_NO_DEAL';
-      else if (params.userMessage) disposition = 'HUMAN_ANSWERED';
+      const isRightParty = funnel.is_right_party;
+      const debtAmount = funnel.debt_amount;
+      const isDebtPresented = funnel.is_debt_presented;
+      const isAgreementReached = funnel.is_agreement_reached;
+      const isPromiseToPay = funnel.is_promise_to_pay;
+      const disposition = funnel.disposition;
 
       const existing = await this.prisma.painel_interactions.findUnique({
         where: { session_id: params.sessionId },
@@ -1627,7 +1610,6 @@ export class TestChatService {
         : [];
 
       const newMsgs = [...currentMessages];
-      const now = new Date();
 
       if (params.userMessage) {
         newMsgs.push({
