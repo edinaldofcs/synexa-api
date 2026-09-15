@@ -101,6 +101,10 @@ export class VoiceCallSession {
   private greetingSent = false;
   /** Watchdog do tempo limite da chamada (max_call_duration_sec) */
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Sinaliza que a IA solicitou encerramento e aguarda o término da fala da despedida */
+  private pendingAiHangup = false;
+  private hangupExecuted = false;
+  private hangupWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
@@ -314,10 +318,21 @@ export class VoiceCallSession {
         toolsDeclarations.push({
           name: 'finalizar_chamada',
           description:
-            'Encerra a chamada telefônica atual de forma educada. Use apenas quando a conversa estiver concluída.',
+            'Encerra a chamada telefônica atual com o cliente de forma educada e cordial. ' +
+            'Use apenas quando a conversa estiver concluída e não houver mais nada a tratar.\n' +
+            'REGRAS OBRIGATÓRIAS:\n' +
+            '1. Você DEVE se despedir do cliente antes de desligar a chamada.\n' +
+            '2. Informe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente (ex: "Muito obrigado pelo contato, tenha um excelente dia e até logo!").\n' +
+            '3. A chamada só será desconectada após a fala da sua despedida ser concluída.',
           parameters: {
             type: 'OBJECT',
-            properties: {},
+            properties: {
+              mensagem_despedida: {
+                type: 'STRING',
+                description:
+                  'Frase verbal de despedida final dita ao cliente antes do encerramento da ligação.',
+              },
+            },
           },
         });
       }
@@ -393,6 +408,12 @@ export class VoiceCallSession {
           this.isAiSpeaking = false;
           this.gateSession?.notifyAiSpeakingChanged(false);
           void this.flushTranscriptBuffers();
+
+          if (this.pendingAiHangup) {
+            setTimeout(() => {
+              void this.executeGracefulTelephonyHangup('turn_complete');
+            }, 1500);
+          }
         },
         onToolCall: async (functionCalls) => {
           // O protocolo BidiGenerateContent do Gemini Live paralisa a síntese
@@ -426,23 +447,49 @@ export class VoiceCallSession {
               functionCalls.map(async (call) => {
                 try {
                   if (call.name === 'finalizar_chamada') {
+                    const despedida =
+                      (call.args?.mensagem_despedida as string) || '';
                     this.logger.log(
-                      `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}`,
+                      `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}. Aguardando despedida verbal.`,
                     );
                     this.hangupCause = 'ai_requested';
-                    try {
-                      await this.config.onAiHangupRequest?.();
-                    } catch (err: any) {
-                      this.logger.warn(
-                        `Falha ao solicitar hangup do canal: ${err.message}`,
-                      );
+                    this.pendingAiHangup = true;
+
+                    // Fallback ativo: se houver frase de despedida e a IA não iniciar fala em 2.2s
+                    if (despedida) {
+                      setTimeout(() => {
+                        if (
+                          this.pendingAiHangup &&
+                          !this.isAiSpeaking &&
+                          !this.hangupExecuted &&
+                          !this.isEnded
+                        ) {
+                          this.liveProvider.sendText(despedida);
+                        }
+                      }, 2200);
                     }
-                    // Fallback: encerra a sessão de IA mesmo sem confirmação do canal
-                    setTimeout(() => void this.end('ai_requested'), 2500);
+
+                    // Watchdog de segurança para não prender o canal da operadora/Asterisk
+                    if (this.hangupWatchdogTimer) {
+                      clearTimeout(this.hangupWatchdogTimer);
+                    }
+                    this.hangupWatchdogTimer = setTimeout(() => {
+                      if (this.pendingAiHangup && !this.hangupExecuted) {
+                        void this.executeGracefulTelephonyHangup(
+                          'watchdog_timeout',
+                        );
+                      }
+                    }, 8500);
+
                     return {
                       id: call.id,
                       name: call.name,
-                      response: { ok: true },
+                      response: {
+                        ok: true,
+                        message: despedida
+                          ? 'Despedida recebida. Fale sua frase de despedida ao cliente agora. A ligação será desligada ao término da sua fala.'
+                          : 'A ligação será encerrada após a sua fala de despedida. Despeça-se agora do cliente com cortesia.',
+                      },
                     };
                   }
 
@@ -635,6 +682,35 @@ export class VoiceCallSession {
   }
 
   /**
+   * Encerramento gracioso da telefonia: acionado após a conclusão da despedida verbal da IA.
+   */
+  private async executeGracefulTelephonyHangup(
+    origin = 'turn_complete',
+  ): Promise<void> {
+    if (this.hangupExecuted || this.isEnded) return;
+    this.hangupExecuted = true;
+    this.pendingAiHangup = false;
+    if (this.hangupWatchdogTimer) {
+      clearTimeout(this.hangupWatchdogTimer);
+      this.hangupWatchdogTimer = null;
+    }
+    this.logger.log(
+      `📞 [VoiceCallSession] Despedida da IA concluída (${origin}). Desligando canal telefônico da chamada ${this.id}.`,
+    );
+    try {
+      await this.config.onAiHangupRequest?.();
+    } catch (err: any) {
+      this.logger.warn(`Falha ao solicitar hangup do canal: ${err.message}`);
+    }
+    try {
+      await this.telephonyAdapter.hangup('ai_requested');
+    } catch (err: any) {
+      this.logger.warn(`Falha no hangup direto do canal: ${err.message}`);
+    }
+    setTimeout(() => void this.end('ai_requested'), 800);
+  }
+
+  /**
    * Tempo limite atingido: solicita o hangup do canal (como
    * `finalizar_chamada`) e encerra a sessão mesmo sem confirmação.
    */
@@ -787,6 +863,10 @@ export class VoiceCallSession {
     if (this.maxDurationTimer) {
       clearTimeout(this.maxDurationTimer);
       this.maxDurationTimer = null;
+    }
+    if (this.hangupWatchdogTimer) {
+      clearTimeout(this.hangupWatchdogTimer);
+      this.hangupWatchdogTimer = null;
     }
     if (reason) this.hangupCause = String(reason);
     this.releaseSessionSlot();

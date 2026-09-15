@@ -251,6 +251,10 @@ export class VoiceGateway
         clearTimeout(maxDurationTimer);
         maxDurationTimer = null;
       }
+      if (session.hangupWatchdogTimer) {
+        clearTimeout(session.hangupWatchdogTimer);
+        session.hangupWatchdogTimer = null;
+      }
       sendTelemetry();
       if (statePersistTimer) {
         clearTimeout(statePersistTimer);
@@ -264,6 +268,31 @@ export class VoiceGateway
       }
       await this.telemetryService.persistSessionTelemetry(session);
       releaseVoiceSlot();
+    };
+
+    const executeGracefulHangup = (origin: string = 'turn_complete') => {
+      if (session.hangupExecuted || voiceSessionClosed) return;
+      session.hangupExecuted = true;
+      session.pendingAiHangup = false;
+      if (session.hangupWatchdogTimer) {
+        clearTimeout(session.hangupWatchdogTimer);
+        session.hangupWatchdogTimer = null;
+      }
+      sendDebug(
+        'session',
+        `📞 Despedida da IA concluída (${origin}). Encerrando chamada.`,
+        undefined,
+        'success',
+      );
+      sendToClient({ type: 'call_ended', reason: 'ai_requested' });
+      setTimeout(() => {
+        void closeVoiceSession();
+        try {
+          clientWs.close(1000, 'AI requested hangup completed');
+        } catch {
+          // socket já fechado
+        }
+      }, 400);
     };
 
     clientWs.on('message', async (raw: any) => {
@@ -719,28 +748,59 @@ export class VoiceGateway
                 });
 
                 // Encerramento da chamada solicitado pela IA (canal web):
-                // responde a tool call e encerra a sessão graciosamente.
+                // responde a tool call e aguarda a conclusão da fala de despedida antes de desconectar.
                 if (call.name === 'finalizar_chamada') {
+                  const despedida = (call.args?.mensagem_despedida as string) || '';
+                  session.pendingAiHangup = true;
                   sendDebug(
                     'session',
-                    '📞 IA encerrou a chamada (finalizar_chamada).',
-                    undefined,
-                    'success',
+                    '📞 IA solicitou encerramento da chamada (finalizar_chamada). Aguardando despedida verbal.',
+                    { mensagem_despedida: despedida },
+                    'info',
                   );
-                  sendToClient({ type: 'call_ended', reason: 'ai_requested' });
                   responses.push({
                     id: call.id,
                     name: call.name,
-                    response: { ok: true, message: 'Chamada encerrada.' },
+                    response: {
+                      ok: true,
+                      message: despedida
+                        ? `Despedida recebida. Fale sua frase de despedida ao cliente agora. A chamada será desligada logo após você terminar de falar.`
+                        : `A chamada será encerrada após a sua fala de despedida. Despeça-se agora do cliente com gentileza e cordialidade.`,
+                    },
                   });
                   responseProvider.sendToolResponse(responses);
-                  setTimeout(() => {
-                    try {
-                      clientWs.close(1000, 'AI requested hangup');
-                    } catch {
-                      // socket já fechado
+
+                  // Fallback ativo: se a IA informou mensagem_despedida mas não iniciou fala em 2.2s,
+                  // despacha o texto diretamente para ser falado
+                  if (despedida) {
+                    setTimeout(() => {
+                      if (
+                        session.pendingAiHangup &&
+                        !session.isAiSpeaking &&
+                        !session.aiResponseStarted &&
+                        !session.hangupExecuted
+                      ) {
+                        sendDebug(
+                          'session',
+                          '🤖 Reproduzindo mensagem de despedida informada pela IA.',
+                          { despedida },
+                          'info',
+                        );
+                        responseProvider.sendText(despedida);
+                      }
+                    }, 2200);
+                  }
+
+                  // Watchdog de segurança: se em 8.5s a despedida não completar o turno,
+                  // encerra graciosamente para não prender a conexão
+                  if (session.hangupWatchdogTimer) {
+                    clearTimeout(session.hangupWatchdogTimer);
+                  }
+                  session.hangupWatchdogTimer = setTimeout(() => {
+                    if (session.pendingAiHangup && !session.hangupExecuted) {
+                      executeGracefulHangup('watchdog_timeout');
                     }
-                  }, 300);
+                  }, 8500);
                   return;
                 }
 
@@ -1048,8 +1108,22 @@ export class VoiceGateway
                 voiceToolDeclarations.push({
                   name: 'finalizar_chamada',
                   description:
-                    'Encerra a chamada/atendimento atual de forma educada. Use apenas quando a conversa estiver concluída e não houver mais nada a tratar.',
-                  parameters: { type: 'OBJECT', properties: {} },
+                    'Encerra a chamada/atendimento atual com o cliente de forma educada e cordial. ' +
+                    'Use apenas quando a conversa estiver concluída e não houver mais nada a tratar.\n' +
+                    'REGRAS OBRIGATÓRIAS:\n' +
+                    '1. Você DEVE se despedir do cliente antes de desligar a chamada.\n' +
+                    '2. Informe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente (ex: "Muito obrigado pelo contato, tenha um excelente dia e até logo!").\n' +
+                    '3. A chamada só será desconectada após a fala da sua despedida ser concluída.',
+                  parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                      mensagem_despedida: {
+                        type: 'STRING',
+                        description:
+                          'Frase verbal de despedida final dita ao cliente antes do encerramento da chamada.',
+                      },
+                    },
+                  },
                 });
               }
               // Dedup por nome: declarações repetidas (ex.: subagents com o
@@ -1445,6 +1519,14 @@ export class VoiceGateway
                     'success',
                   );
                   sendToClient({ type: 'turn_complete' });
+
+                  // Se a IA solicitou encerramento (finalizar_chamada), aguarda o respiro
+                  // dos buffers acústicos do cliente (1200ms) e executa o desligamento limpo
+                  if (session.pendingAiHangup) {
+                    setTimeout(() => {
+                      executeGracefulHangup('turn_complete');
+                    }, 1200);
+                  }
                 },
                 onToolCall: async (functionCalls) => {
                   await handleToolCalls(functionCalls, generation, provider);

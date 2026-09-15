@@ -301,4 +301,100 @@ describe('VoiceGateway security', () => {
     client11.close(1000);
     client12.close(1000);
   });
+
+  it('não encerra imediatamente quando a IA solicita finalizar_chamada, aguardando a conclusão da fala da despedida', async () => {
+    const client = new FakeClientSocket();
+    const factory = new VoiceSessionFactory(
+      {} as any,
+      { get: jest.fn(() => 50) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const prisma = {
+      painel_clients: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'bot-1',
+          max_concurrent_calls: 10,
+          metadata: {},
+        }),
+      },
+      painel_agents: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'agent-1',
+          client_id: 'bot-1',
+          is_active: true,
+          is_initial: true,
+          interaction_mode: 'both',
+        }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      conversations: {
+        create: jest.fn().mockResolvedValue({ id: 'conv-1' }),
+      },
+    };
+
+    const { gateway, voiceAuthService } = makeGateway(
+      { GEMINI_API_KEY: 'mock-key', ENVIRONMENT: 'development' },
+      undefined,
+      factory,
+      prisma,
+    );
+
+    voiceAuthService.authenticateSession = jest
+      .fn()
+      .mockResolvedValue({ company_id: 'comp-1' });
+    voiceAuthService.resolveClientId = jest.fn().mockResolvedValue('bot-1');
+
+    gateway.handleConnection(client as any);
+    client.emit(
+      'message',
+      Buffer.from(JSON.stringify({ type: 'start', clientId: 'bot-1' })),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const session = (gateway as any).sessions.get(client);
+    expect(session).toBeDefined();
+
+    const provider = session.liveProvider;
+    expect(provider).toBeDefined();
+
+    // Simula a IA solicitando a tool finalizar_chamada com mensagem_despedida
+    await (provider.options as any).onToolCall([
+      {
+        id: 'call-hangup-1',
+        name: 'finalizar_chamada',
+        args: { mensagem_despedida: 'Muito obrigado, tenha um ótimo dia!' },
+      },
+    ]);
+
+    // O socket NÃO deve ter sido fechado imediatamente e call_ended NÃO deve ter sido emitido ainda
+    expect(client.close).not.toHaveBeenCalled();
+    const sentMessages = client.sent.map((p: string) => JSON.parse(p));
+    expect(sentMessages.find((m: any) => m.type === 'call_ended')).toBeUndefined();
+    expect(session.pendingAiHangup).toBe(true);
+
+    // Agora simula o término da fala da IA (onTurnComplete)
+    (provider.options as any).onTurnComplete();
+
+    // Aguarda a margem de segurança acústica (1200ms + 400ms)
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+
+    // Agora sim a chamada foi encerrada graciosamente após a despedida
+    const updatedMessages = client.sent.map((p: string) => JSON.parse(p));
+    expect(updatedMessages.find((m: any) => m.type === 'call_ended')).toEqual({
+      type: 'call_ended',
+      reason: 'ai_requested',
+    });
+    expect(client.close).toHaveBeenCalledWith(
+      1000,
+      'AI requested hangup completed',
+    );
+  });
 });
+

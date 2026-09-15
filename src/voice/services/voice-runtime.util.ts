@@ -38,6 +38,12 @@ export interface VoiceSystemPromptOptions {
   variables: Record<string, unknown>;
 }
 
+export const VOICE_HANGUP_PROMPT_INSTRUCTION =
+  '\n\n[DIRETRIZ OBRIGATÓRIA DE ENCERRAMENTO DE CHAMADA]\n' +
+  'Ao concluir o atendimento ou se o cliente quiser encerrar a ligação, NUNCA desligue em silêncio ou abruptamente. ' +
+  'Você DEVE SEMPRE se despedir com gentileza, simpatia e educação (ex: "Muito obrigado pelo contato, tenha um excelente dia e até logo!"). ' +
+  'Ao acionar a ferramenta finalizar_chamada, passe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente.';
+
 /**
  * Resolve o system prompt de voz (persona blocks + interpolação de
  * variáveis) — pipeline único para telefonia e navegador.
@@ -51,7 +57,8 @@ export function buildVoiceSystemPrompt(
       ? buildAgentPromptFromBlocks(options.agent, agentVars)
       : options.fallbackPrompt) || '';
 
-  return resolvePromptTemplateString(basePrompt, options.variables);
+  const resolved = resolvePromptTemplateString(basePrompt, options.variables);
+  return `${resolved}${VOICE_HANGUP_PROMPT_INSTRUCTION}`;
 }
 
 export interface MergeApiReturnOptions {

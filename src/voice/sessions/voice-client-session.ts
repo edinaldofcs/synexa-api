@@ -49,6 +49,10 @@ export class VoiceClientSession {
   providerGeneration = 0;
   /** Acumulador do turno atual da IA para persistir a fala como mensagem única */
   aiMessageBuffer: VoiceAiMessageBuffer | null = null;
+  /** Sinaliza que a IA solicitou encerramento e aguarda o término da despedida */
+  pendingAiHangup = false;
+  hangupExecuted = false;
+  hangupWatchdogTimer: NodeJS.Timeout | null = null;
 
   constructor(clientWs: WebSocket) {
     this.clientWs = clientWs;

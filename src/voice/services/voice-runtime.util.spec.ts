@@ -5,6 +5,8 @@ import {
   resolveMaxCallDurationSec,
   buildGreetingTurn,
   VOICE_GREETING_TURN,
+  buildVoiceSystemPrompt,
+  VOICE_HANGUP_PROMPT_INSTRUCTION,
 } from './voice-runtime.util';
 
 describe('mergeApiReturnIntoState', () => {
@@ -204,5 +206,18 @@ describe('buildGreetingTurn (turno de saudacao)', () => {
       { nome_cliente: 'Joao' },
     );
     expect(turn).toContain('"Ola Joao!"');
+  });
+});
+
+describe('buildVoiceSystemPrompt', () => {
+  it('injeta a diretriz obrigatoria de encerramento de chamada ao final do prompt', () => {
+    const prompt = buildVoiceSystemPrompt({
+      fallbackPrompt: 'Voce e um atendente.',
+      variables: {},
+    });
+    expect(prompt).toContain('Voce e um atendente.');
+    expect(prompt).toContain(VOICE_HANGUP_PROMPT_INSTRUCTION);
+    expect(prompt).toContain('finalizar_chamada');
+    expect(prompt).toContain('mensagem_despedida');
   });
 });
