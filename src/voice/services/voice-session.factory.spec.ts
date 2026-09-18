@@ -103,7 +103,9 @@ describe('VoiceSessionFactory - semaforo global de sessoes', () => {
 
       await expect(
         factory.create({ id: 'ch-2' } as any, route as any),
-      ).rejects.toThrow('Limite de chamadas simultâneas atingido para este bot');
+      ).rejects.toThrow(
+        'Limite de chamadas simultâneas atingido para este bot',
+      );
     });
 
     it('simula 15 ligações simultâneas para um bot com limite 10: aceita 10 e bloqueia as 5 excedentes', () => {

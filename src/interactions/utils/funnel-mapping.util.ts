@@ -1,7 +1,7 @@
 /**
  * Helper utilitário para extração padronizada de métricas de funil de cobrança
  * e interlocutores a partir do estado de sessão (variáveis de contexto e retornos de API).
- * 
+ *
  * Unifica a lógica para todos os canais do Synexa:
  * - Voz WebRTC (Navegador)
  * - Voz SIP/Asterisk (Telefonia)
@@ -45,7 +45,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'identification',
     stageLabel: 'Identificação do Cliente',
     type: 'string',
-    description: 'Documento ou telefone único do cliente. Alimenta client_identifier e ativa CPC.',
+    description:
+      'Documento ou telefone único do cliente. Alimenta client_identifier e ativa CPC.',
     biMetric: 'Clientes únicos contatados e ativação de CPC',
     aliases: ['cpf', 'telefone', 'phone', 'client_identifier'],
   },
@@ -55,7 +56,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'identification',
     stageLabel: 'Identificação do Cliente',
     type: 'string',
-    description: 'Nome completo ou primeiro nome do cliente para personalização e relatórios.',
+    description:
+      'Nome completo ou primeiro nome do cliente para personalização e relatórios.',
     biMetric: 'Identificação nominal do interlocutor',
     aliases: ['nome_cliente', 'nome', 'client_name'],
   },
@@ -65,7 +67,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'cpc',
     stageLabel: 'Pessoa Certa (CPC)',
     type: 'boolean',
-    description: 'Flag booleana (true) indicando que o contato foi estabelecido com o titular.',
+    description:
+      'Flag booleana (true) indicando que o contato foi estabelecido com o titular.',
     biMetric: 'Total CPC e Taxa de CPC (%)',
     aliases: ['pessoa_certa'],
   },
@@ -75,7 +78,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'cpca',
     stageLabel: 'Apresentação da Dívida (CPCA)',
     type: 'number',
-    description: 'Valor monetário original ou pendente do débito. Ativa automaticamente CPCA no BI.',
+    description:
+      'Valor monetário original ou pendente do débito. Ativa automaticamente CPCA no BI.',
     biMetric: 'Total CPCA e Volume de dívida trabalhado',
     aliases: ['divida_valor', 'valor_divida', 'saldo_devedor', 'debt_amount'],
   },
@@ -85,7 +89,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'cpca',
     stageLabel: 'Apresentação da Dívida (CPCA)',
     type: 'boolean',
-    description: 'Flag booleana (true) confirmando que a dívida/proposta foi apresentada.',
+    description:
+      'Flag booleana (true) confirmando que a dívida/proposta foi apresentada.',
     biMetric: 'Taxa de Apresentação de Dívida (CPCA)',
     aliases: ['divida_apresentada'],
   },
@@ -105,7 +110,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'agreement',
     stageLabel: 'Acordo Fechado',
     type: 'boolean',
-    description: 'Flag booleana (true) confirmando fechamento de acordo na sessão.',
+    description:
+      'Flag booleana (true) confirmando fechamento de acordo na sessão.',
     biMetric: 'Taxa de Conversão de Acordo (%)',
     aliases: ['acordo_confirmado'],
   },
@@ -115,7 +121,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'agreement',
     stageLabel: 'Acordo Fechado',
     type: 'number',
-    description: 'Valor final acordado para pagamento (volume financeiro recuperado em R$).',
+    description:
+      'Valor final acordado para pagamento (volume financeiro recuperado em R$).',
     biMetric: 'Valor Total Negociado (Recuperação de Crédito)',
     aliases: ['valor_acordo', 'agreement_amount'],
   },
@@ -125,7 +132,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'ptp',
     stageLabel: 'Promessa de Pagamento (PTP)',
     type: 'boolean',
-    description: 'Flag booleana (true) indicando intenção ou compromisso de pagamento.',
+    description:
+      'Flag booleana (true) indicando intenção ou compromisso de pagamento.',
     biMetric: 'Volume e Taxa de PTP',
     aliases: [],
   },
@@ -155,7 +163,8 @@ export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
     stage: 'handover',
     stageLabel: 'Transbordo / Alô Humano',
     type: 'boolean',
-    description: 'Flag indicando transbordo para operador humano ou atendimento humano.',
+    description:
+      'Flag indicando transbordo para operador humano ou atendimento humano.',
     biMetric: 'Taxa de Automação vs. Transbordo Humano',
     aliases: ['has_human_answer'],
   },
@@ -246,17 +255,15 @@ export function extractFunnelFromState(
   );
 
   const rawPromiseAmount =
-    vars.promessa_valor ??
-    vars.valor_promessa ??
-    vars.promise_amount ??
-    null;
+    vars.promessa_valor ?? vars.valor_promessa ?? vars.promise_amount ?? null;
   const promiseAmount =
     rawPromiseAmount !== null && !isNaN(Number(rawPromiseAmount))
       ? Number(rawPromiseAmount)
       : agreementAmount;
 
   let promiseDueDate: Date | null = null;
-  const rawDate = vars.data_promessa || vars.data_pagamento || vars.promise_date;
+  const rawDate =
+    vars.data_promessa || vars.data_pagamento || vars.promise_date;
   if (rawDate) {
     const parsed = new Date(rawDate);
     if (!isNaN(parsed.getTime())) {
@@ -274,7 +281,10 @@ export function extractFunnelFromState(
     disposition = 'CPCA_DEBT_PRESENTED';
   } else if (isRightParty) {
     disposition = 'CPC_NO_DEAL';
-  } else if (vars.atendimento_humano === true || vars.has_human_answer === true) {
+  } else if (
+    vars.atendimento_humano === true ||
+    vars.has_human_answer === true
+  ) {
     disposition = 'HUMAN_ANSWERED';
   }
 

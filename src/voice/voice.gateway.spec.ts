@@ -376,7 +376,9 @@ describe('VoiceGateway security', () => {
     // O socket NÃO deve ter sido fechado imediatamente e call_ended NÃO deve ter sido emitido ainda
     expect(client.close).not.toHaveBeenCalled();
     const sentMessages = client.sent.map((p: string) => JSON.parse(p));
-    expect(sentMessages.find((m: any) => m.type === 'call_ended')).toBeUndefined();
+    expect(
+      sentMessages.find((m: any) => m.type === 'call_ended'),
+    ).toBeUndefined();
     expect(session.pendingAiHangup).toBe(true);
 
     // Agora simula o término da fala da IA (onTurnComplete)
@@ -397,4 +399,3 @@ describe('VoiceGateway security', () => {
     );
   });
 });
-

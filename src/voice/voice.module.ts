@@ -26,6 +26,10 @@ import { SessionService } from '../common/auth/session.service';
 import { CartesiaTtsService } from './services/cartesia-tts.service';
 import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
 import { SileroVadService } from './services/silero-vad.service';
+import { CartesiaTtsSynthesizer } from './services/synthesizers/cartesia-tts.synthesizer';
+import { GoogleTtsSynthesizer } from './services/synthesizers/google-tts.synthesizer';
+import { TtsSynthesizerFactory } from './services/synthesizers/tts-synthesizer.factory';
+import { VoiceGreetingCacheService } from './services/voice-greeting-cache.service';
 
 // No standalone (SERVICE_ROLE=voice) o VoiceModule nao passa pelo AppModule,
 // que registra o ThrottlerGuard global — aqui registramos o Throttler apenas
@@ -64,6 +68,10 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     CartesiaTtsService,
     GroqWhisperSttService,
     SileroVadService,
+    CartesiaTtsSynthesizer,
+    GoogleTtsSynthesizer,
+    TtsSynthesizerFactory,
+    VoiceGreetingCacheService,
     ...(voiceStandalone
       ? [
           {
@@ -89,6 +97,8 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     CartesiaTtsService,
     GroqWhisperSttService,
     SileroVadService,
+    TtsSynthesizerFactory,
+    VoiceGreetingCacheService,
   ],
 })
 export class VoiceModule {}

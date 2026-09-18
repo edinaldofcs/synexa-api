@@ -119,6 +119,14 @@ export function aiSpeaksFirstEnabled(agent: unknown): boolean {
 }
 
 /**
+ * `transitions.capabilities.voice_greeting_cache_enabled` — opcional (default falso/opt-in).
+ * Ative no AgentForm para acelerar a abertura com 0ms e economia de custo no Redis.
+ */
+export function voiceGreetingCacheEnabled(agent: unknown): boolean {
+  return readCapability(agent, 'voice_greeting_cache_enabled') === true;
+}
+
+/**
  * Lê um valor de `transitions.capabilities` de forma defensiva (o campo
  * `transitions` é JsonB livre no banco).
  */
@@ -142,6 +150,109 @@ export function resolveVoiceGreeting(agent: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Sanitiza o nome do cliente para uso em saudações de voz, extraindo o primeiro nome
+ * de forma humanizada e removendo pronomes de tratamento, títulos e ruídos.
+ * Exemplo: "EDINALDO DA SILVA SANTOS" -> "Edinaldo"
+ * Exemplo: "Sr. Carlos Eduardo" -> "Carlos"
+ * Exemplo: "maria clara" -> "Maria Clara" (para nomes compostos populares)
+ */
+export function sanitizeCustomerName(rawName?: unknown): string {
+  if (typeof rawName !== 'string') return '';
+  let cleaned = rawName
+    .replace(/^(sr|sra|sr\.|sra\.|dr|dra|dr\.|dra\.|senhor|senhora)\s+/i, '')
+    .trim();
+
+  // Remove caracteres numéricos ou especiais de identificação (ex: "Edinaldo (123)" -> "Edinaldo")
+  cleaned = cleaned.replace(/[0-9#@%&*_+=[\]{}()/\\|<>;:^~]/g, ' ').trim();
+  if (!cleaned) return '';
+
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+
+  const capitalize = (s: string) =>
+    s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
+  const first = capitalize(parts[0]);
+  if (parts.length > 1) {
+    const second = capitalize(parts[1]);
+    const compoundPrefixes = ['Maria', 'Joao', 'João', 'Ana', 'Jose', 'José'];
+    if (compoundPrefixes.includes(first) && second.length > 2) {
+      return `${first} ${second}`;
+    }
+  }
+
+  return first;
+}
+
+/**
+ * Extrai todas as variações de saudações configuradas no agente.
+ * Suporta array em `transitions.capabilities.greeting_variations` ou
+ * múltiplas frases separadas por quebra de linha com `---` em `greeting_message`.
+ */
+export function resolveVoiceGreetingVariations(agent: unknown): string[] {
+  const variationsRaw = readCapability(agent, 'greeting_variations');
+  if (Array.isArray(variationsRaw)) {
+    const list = variationsRaw
+      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      .map((v) => v.trim());
+    if (list.length > 0) return list;
+  }
+
+  const single = resolveVoiceGreeting(agent);
+  if (!single) return [];
+
+  if (single.includes('\n---\n') || single.includes('\r\n---\r\n')) {
+    return single
+      .split(/\r?\n---\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  return [single];
+}
+
+/**
+ * Seleciona uma das variações de saudação de forma balanceada/determinística via seed
+ * ou pseudo-aleatória quando seed não for fornecido.
+ */
+export function selectVoiceGreetingVariation(
+  agent: unknown,
+  seed?: number | string,
+): string | null {
+  const variations = resolveVoiceGreetingVariations(agent);
+  if (variations.length === 0) return null;
+  if (variations.length === 1) return variations[0];
+
+  let index = 0;
+  if (typeof seed === 'number' && Number.isFinite(seed)) {
+    index = Math.abs(Math.floor(seed)) % variations.length;
+  } else if (typeof seed === 'string' && seed.length > 0) {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      hash = (hash << 5) - hash + seed.charCodeAt(i);
+      hash |= 0;
+    }
+    index = Math.abs(hash) % variations.length;
+  } else {
+    index = Math.floor(Math.random() * variations.length);
+  }
+
+  return variations[index];
+}
+
+/**
+ * Gera um hash determinístico curto para o template de saudação, usado na chave Redis.
+ */
+export function createGreetingTemplateHash(template: string): string {
+  const normalized = (template || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = (hash * 33) ^ normalized.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 /** Teto duro do watchdog (2 horas) — protege contra valores absurdos. */

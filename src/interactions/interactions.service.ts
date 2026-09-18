@@ -262,7 +262,9 @@ export class InteractionsService {
           session_id: params.sessionId,
           channel: params.channel,
           direction: params.direction || 'inbound',
-          interaction_mode: params.channel.startsWith('voice') ? 'voice' : 'both',
+          interaction_mode: params.channel.startsWith('voice')
+            ? 'voice'
+            : 'both',
           client_identifier: funnel.client_identifier,
           client_name: funnel.client_name,
           has_human_answer: true,
@@ -289,7 +291,8 @@ export class InteractionsService {
               : null,
           disposition: funnel.disposition,
           duration_seconds: params.durationSeconds || 0,
-          billable_seconds: params.billableSeconds || params.durationSeconds || 0,
+          billable_seconds:
+            params.billableSeconds || params.durationSeconds || 0,
           barge_in_count: params.bargeInCount || 0,
           total_tokens: params.totalTokens || 0,
           prompt_tokens: params.promptTokens || 0,
@@ -318,7 +321,9 @@ export class InteractionsService {
           is_debt_presented: funnel.is_debt_presented,
           debt_presented_at: funnel.debt_presented_at || undefined,
           debt_amount:
-            funnel.debt_amount !== null ? (funnel.debt_amount as any) : undefined,
+            funnel.debt_amount !== null
+              ? (funnel.debt_amount as any)
+              : undefined,
           is_agreement_reached: funnel.is_agreement_reached,
           agreement_at: funnel.agreement_at || undefined,
           agreement_id: funnel.agreement_id || undefined,

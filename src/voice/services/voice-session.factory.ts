@@ -18,6 +18,7 @@ import { resolveAudioGateConfig } from './voice-runtime.util';
 import { CartesiaTtsService } from './cartesia-tts.service';
 import { GroqWhisperSttService } from './groq-whisper-stt.service';
 import { SileroVadService } from './silero-vad.service';
+import { VoiceGreetingCacheService } from './voice-greeting-cache.service';
 
 export type VoiceSessionFactoryDeps = VoiceCallSessionConfig;
 
@@ -52,6 +53,7 @@ export class VoiceSessionFactory {
     private readonly cartesiaTtsService: CartesiaTtsService,
     private readonly groqWhisperSttService: GroqWhisperSttService,
     private readonly sileroVadService: SileroVadService,
+    private readonly greetingCacheService?: VoiceGreetingCacheService,
   ) {
     this.maxSessions = this.configService.get<number>('VOICE_MAX_SESSIONS', 50);
   }
@@ -73,7 +75,11 @@ export class VoiceSessionFactory {
       };
     }
 
-    if (clientId && typeof maxConcurrentCalls === 'number' && maxConcurrentCalls > 0) {
+    if (
+      clientId &&
+      typeof maxConcurrentCalls === 'number' &&
+      maxConcurrentCalls > 0
+    ) {
       const currentBot = this.botActiveSessions.get(clientId) || 0;
       if (currentBot >= maxConcurrentCalls) {
         return {
@@ -91,7 +97,9 @@ export class VoiceSessionFactory {
       allowed: true,
       currentGlobal: this.activeSessions,
       maxGlobal: this.maxSessions,
-      currentBot: clientId ? (this.botActiveSessions.get(clientId) || 0) : undefined,
+      currentBot: clientId
+        ? this.botActiveSessions.get(clientId) || 0
+        : undefined,
       maxBot: maxConcurrentCalls,
     };
   }
@@ -251,6 +259,7 @@ export class VoiceSessionFactory {
       pricingService: this.pricingService,
       prisma: this.prisma,
       voiceToolsService: this.voiceToolsService,
+      greetingCacheService: this.greetingCacheService,
       config: {
         ...config,
         onSessionEnd: () => this.releaseSession(clientId),

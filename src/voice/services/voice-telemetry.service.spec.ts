@@ -16,17 +16,22 @@ describe('VoiceTelemetryService', () => {
       conversations: { update: jest.fn().mockResolvedValue({}) },
       agent_runs: { create: jest.fn().mockResolvedValue({}) },
       voice_session_telemetry: { create: jest.fn().mockResolvedValue({}) },
-      messages: { create: jest.fn().mockResolvedValue({ id: 'msg-1' }), update: jest.fn().mockResolvedValue({}) },
+      messages: {
+        create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
       conversation_state: { upsert: jest.fn().mockResolvedValue({}) },
     };
 
     pricingMock = {
       calculateVoiceLiveCost: jest.fn().mockReturnValue(0.015),
-      calculateHybridVoiceCost: jest.fn().mockReturnValue(0.020),
+      calculateHybridVoiceCost: jest.fn().mockReturnValue(0.02),
     };
 
     interactionsMock = {
-      syncSessionInteraction: jest.fn().mockResolvedValue({ id: 'interaction-1' }),
+      syncSessionInteraction: jest
+        .fn()
+        .mockResolvedValue({ id: 'interaction-1' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({

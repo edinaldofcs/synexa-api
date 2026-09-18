@@ -750,7 +750,8 @@ export class VoiceGateway
                 // Encerramento da chamada solicitado pela IA (canal web):
                 // responde a tool call e aguarda a conclusão da fala de despedida antes de desconectar.
                 if (call.name === 'finalizar_chamada') {
-                  const despedida = (call.args?.mensagem_despedida as string) || '';
+                  const despedida =
+                    (call.args?.mensagem_despedida as string) || '';
                   session.pendingAiHangup = true;
                   sendDebug(
                     'session',

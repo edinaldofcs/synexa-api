@@ -7,6 +7,11 @@ import {
   VOICE_GREETING_TURN,
   buildVoiceSystemPrompt,
   VOICE_HANGUP_PROMPT_INSTRUCTION,
+  sanitizeCustomerName,
+  resolveVoiceGreetingVariations,
+  selectVoiceGreetingVariation,
+  createGreetingTemplateHash,
+  voiceGreetingCacheEnabled,
 } from './voice-runtime.util';
 
 describe('mergeApiReturnIntoState', () => {
@@ -219,5 +224,114 @@ describe('buildVoiceSystemPrompt', () => {
     expect(prompt).toContain(VOICE_HANGUP_PROMPT_INSTRUCTION);
     expect(prompt).toContain('finalizar_chamada');
     expect(prompt).toContain('mensagem_despedida');
+  });
+});
+
+describe('sanitizeCustomerName', () => {
+  it('extrai primeiro nome formatado e remove titulos e sobrenomes', () => {
+    expect(sanitizeCustomerName('EDINALDO DA SILVA')).toBe('Edinaldo');
+    expect(sanitizeCustomerName('Sr. Carlos Eduardo')).toBe('Carlos');
+    expect(sanitizeCustomerName('dra. juliana lima')).toBe('Juliana');
+  });
+
+  it('preserva nomes compostos comuns (Maria Eduarda, Joao Pedro, etc.)', () => {
+    expect(sanitizeCustomerName('MARIA EDUARDA SANTOS')).toBe('Maria Eduarda');
+    expect(sanitizeCustomerName('joão victor pereira')).toBe('João Victor');
+    expect(sanitizeCustomerName('ana carolina')).toBe('Ana Carolina');
+  });
+
+  it('remove caracteres especiais e numericos', () => {
+    expect(sanitizeCustomerName('Edinaldo (12345)')).toBe('Edinaldo');
+    expect(sanitizeCustomerName('#Maria_Clara*')).toBe('Maria Clara');
+  });
+
+  it('retorna string vazia para entradas invalidas ou vazias', () => {
+    expect(sanitizeCustomerName(null)).toBe('');
+    expect(sanitizeCustomerName(undefined)).toBe('');
+    expect(sanitizeCustomerName('   ')).toBe('');
+    expect(sanitizeCustomerName(12345)).toBe('');
+  });
+});
+
+describe('resolveVoiceGreetingVariations e selectVoiceGreetingVariation', () => {
+  it('extrai variacoes separadas por quebra de linha com delimitador ---', () => {
+    const agent = {
+      transitions: {
+        capabilities: {
+          greeting_message:
+            'Olá {{nome}}!\n---\nOi {{nome}}, tudo bem?\n---\nAlô {{nome}}!',
+        },
+      },
+    };
+
+    const variations = resolveVoiceGreetingVariations(agent);
+    expect(variations).toHaveLength(3);
+    expect(variations[0]).toBe('Olá {{nome}}!');
+    expect(variations[1]).toBe('Oi {{nome}}, tudo bem?');
+    expect(variations[2]).toBe('Alô {{nome}}!');
+  });
+
+  it('extrai variacoes quando configuradas em array greeting_variations', () => {
+    const agent = {
+      transitions: {
+        capabilities: {
+          greeting_variations: ['Opção 1', 'Opção 2'],
+        },
+      },
+    };
+
+    const variations = resolveVoiceGreetingVariations(agent);
+    expect(variations).toEqual(['Opção 1', 'Opção 2']);
+  });
+
+  it('seleciona de forma deterministica com base no seed', () => {
+    const agent = {
+      transitions: {
+        capabilities: {
+          greeting_variations: ['Voz A', 'Voz B', 'Voz C'],
+        },
+      },
+    };
+
+    expect(selectVoiceGreetingVariation(agent, 0)).toBe('Voz A');
+    expect(selectVoiceGreetingVariation(agent, 1)).toBe('Voz B');
+    expect(selectVoiceGreetingVariation(agent, 2)).toBe('Voz C');
+    expect(selectVoiceGreetingVariation(agent, 3)).toBe('Voz A');
+  });
+});
+
+describe('createGreetingTemplateHash', () => {
+  it('gera hash estavel independente de espacos extras e maiusculas', () => {
+    const hash1 = createGreetingTemplateHash('Olá, falo com {{nome}}?');
+    const hash2 = createGreetingTemplateHash('  olá,   falo com {{nome}}?  ');
+    expect(hash1).toBe(hash2);
+    expect(typeof hash1).toBe('string');
+    expect(hash1.length).toBe(8);
+  });
+});
+
+describe('voiceGreetingCacheEnabled', () => {
+  it('retorna false por padrao quando omitido', () => {
+    expect(voiceGreetingCacheEnabled(null)).toBe(false);
+    expect(voiceGreetingCacheEnabled({})).toBe(false);
+    expect(
+      voiceGreetingCacheEnabled({
+        transitions: { capabilities: {} },
+      }),
+    ).toBe(false);
+  });
+
+  it('retorna true somente quando explicitamente configurado como true', () => {
+    expect(
+      voiceGreetingCacheEnabled({
+        transitions: { capabilities: { voice_greeting_cache_enabled: true } },
+      }),
+    ).toBe(true);
+
+    expect(
+      voiceGreetingCacheEnabled({
+        transitions: { capabilities: { voice_greeting_cache_enabled: false } },
+      }),
+    ).toBe(false);
   });
 });

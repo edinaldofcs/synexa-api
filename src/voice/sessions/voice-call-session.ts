@@ -21,7 +21,11 @@ import {
   aiSpeaksFirstEnabled,
   buildGreetingTurn,
   resolveMaxCallDurationSec,
+  selectVoiceGreetingVariation,
+  voiceGreetingCacheEnabled,
 } from '../services/voice-runtime.util';
+
+import { VoiceGreetingCacheService } from '../services/voice-greeting-cache.service';
 import { extractFunnelFromState } from '../../interactions/utils/funnel-mapping.util';
 
 export interface VoiceGateRuntimeConfig {
@@ -114,6 +118,7 @@ export class VoiceCallSession {
     pricingService: ModelPricingService;
     prisma: PrismaService;
     voiceToolsService?: VoiceToolsService;
+    greetingCacheService?: VoiceGreetingCacheService;
     config: VoiceCallSessionConfig;
   }) {
     this.telephonyAdapter = options.telephonyAdapter;
@@ -122,9 +127,12 @@ export class VoiceCallSession {
     this.pricingService = options.pricingService;
     this.prisma = options.prisma;
     this.voiceToolsService = options.voiceToolsService;
+    this.greetingCacheService = options.greetingCacheService;
     this.config = options.config;
     this.id = this.telephonyAdapter.id;
   }
+
+  private readonly greetingCacheService?: VoiceGreetingCacheService;
 
   /**
    * Inicia a sessão completa de voz e IA.
@@ -650,17 +658,95 @@ export class VoiceCallSession {
    * A IA fala primeiro: quando setup + transporte estiverem prontos, envia
    * um turno de usuário com a instrução de saudação. Respeita a capability
    * `ai_speaks_first` do agente (default ligado) e usa a mensagem inicial
-   * configurada (`greeting_message`) quando existir.
+   * configurada (`greeting_message` ou variações) quando existir.
+   *
+   * Se houver áudio cacheado no Redis, o buffer PCM é enviado em 0ms direto
+   * para o transporte de telefonia, enquanto a IA sincroniza o contexto
+   * nos bastidores.
    */
-  private maybeSendGreeting(): void {
+  private async maybeSendGreeting(): Promise<void> {
     if (this.greetingSent) return;
     if (!this.setupCompleted || !this.transportStarted) return;
     const agent = this.config.selectedAgent as unknown;
     if (!aiSpeaksFirstEnabled(agent)) return;
     this.greetingSent = true;
+
     this.logger.log(
       `🤖 [VoiceCallSession] IA sauda o cliente primeiro (chamada ${this.id})`,
     );
+
+    // 1. Tenta resolver saudação via VoiceGreetingCacheService se habilitado (opcional)
+    const variation = selectVoiceGreetingVariation(agent, this.id);
+    const cacheEnabled = voiceGreetingCacheEnabled(agent);
+
+    if (variation && cacheEnabled && this.greetingCacheService) {
+      try {
+        const isHybrid = this.config.voiceEngine === 'hybrid';
+        const provider = isHybrid ? 'cartesia' : 'google';
+        const apiKey = isHybrid
+          ? this.config.cartesiaApiKey || process.env.CARTESIA_API_KEY || ''
+          : this.config.apiKey || process.env.GEMINI_API_KEY || '';
+
+        const voiceId =
+          this.config.voiceName ||
+          (isHybrid ? 'cb2694c3-715f-4da9-99f3-1c974fff2928' : 'Aoede');
+
+        const customerName =
+          (this.sessionState.nome as string) ||
+          (this.sessionState.nome_cliente as string) ||
+          (this.sessionState.primeiro_nome as string) ||
+          undefined;
+
+        if (apiKey) {
+          const res =
+            await this.greetingCacheService.resolveOrSynthesizeGreeting({
+              companyId: this.config.companyId,
+              agentId: this.config.agentId,
+              provider,
+              voiceId,
+              template: variation,
+              customerName,
+              variables: this.sessionState,
+              apiKey,
+            });
+
+          if (res.audioBuffer && res.audioBuffer.length > 0) {
+            this.logger.log(
+              `⚡ [VoiceCallSession] Reproduzindo saudação inicial (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${provider} | Texto: "${res.text}"`,
+            );
+            this.isAiSpeaking = true;
+            this.gateSession?.notifyAiSpeakingChanged(true);
+            this.telephonyAdapter.sendAudio(res.audioBuffer);
+
+            void this.appendAiTranscript(this.config.companyId || '', res.text);
+
+            const syncInstruction =
+              `[EVENTO DO SISTEMA: SAUDAÇÃO JÁ REPRODUZIDA]\n` +
+              `Você acabou de saudar o cliente com a seguinte frase inicial: "${res.text}".\n` +
+              `NÃO repita a saudação nem cumprimente novamente. AGUARDE o cliente responder e continue o atendimento naturalmente a partir da resposta dele.`;
+
+            setTimeout(() => {
+              this.liveProvider.sendText(syncInstruction);
+            }, 80);
+
+            // 24kHz 16-bit mono = 48 bytes/ms
+            const playbackMs = Math.round(res.audioBuffer.length / 48);
+            setTimeout(() => {
+              this.isAiSpeaking = false;
+              this.gateSession?.notifyAiSpeakingChanged(false);
+            }, playbackMs);
+
+            return;
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(
+          `⚠️ [VoiceCallSession] Falha ao resolver saudação acelerada: ${err.message}. Seguindo fallback.`,
+        );
+      }
+    }
+
+    // 2. Fallback padrão: envio direto para a LLM / Live Provider
     const turn = buildGreetingTurn(agent, {
       ...this.sessionState,
     });
