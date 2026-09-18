@@ -1,4 +1,7 @@
-import { extractFunnelFromState } from './funnel-mapping.util';
+import {
+  extractFunnelFromState,
+  CANONICAL_FUNNEL_VARIABLES,
+} from './funnel-mapping.util';
 
 describe('extractFunnelFromState', () => {
   it('deve extrair acordo fechado com todos os dados monetários e identificadores', () => {
@@ -71,5 +74,16 @@ describe('extractFunnelFromState', () => {
     expect(res.agreement_id).toBe('API-ACD-999');
     expect(res.agreement_amount).toBe(350.0);
     expect(res.disposition).toBe('AGREEMENT_CLOSED');
+  });
+
+  it('deve conter catálogo canônico completo com todas as variáveis essenciais', () => {
+    expect(CANONICAL_FUNNEL_VARIABLES.length).toBeGreaterThanOrEqual(10);
+    const keys = CANONICAL_FUNNEL_VARIABLES.map((v) => v.key);
+    expect(keys).toContain('cliente_cpf');
+    expect(keys).toContain('valor_original');
+    expect(keys).toContain('cpc');
+    expect(keys).toContain('acordo_id');
+    expect(keys).toContain('promessa_pagamento');
+    expect(keys).toContain('data_promessa');
   });
 });

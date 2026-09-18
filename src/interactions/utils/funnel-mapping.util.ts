@@ -27,6 +27,140 @@ export interface MappedFunnelData {
   disposition: string;
 }
 
+export interface CanonicalFunnelVariableDefinition {
+  key: string;
+  label: string;
+  stage: 'identification' | 'cpc' | 'cpca' | 'agreement' | 'ptp' | 'handover';
+  stageLabel: string;
+  type: 'string' | 'number' | 'boolean' | 'date';
+  description: string;
+  biMetric: string;
+  aliases: string[];
+}
+
+export const CANONICAL_FUNNEL_VARIABLES: CanonicalFunnelVariableDefinition[] = [
+  {
+    key: 'cliente_cpf',
+    label: 'CPF / Identificador do Cliente',
+    stage: 'identification',
+    stageLabel: 'Identificação do Cliente',
+    type: 'string',
+    description: 'Documento ou telefone único do cliente. Alimenta client_identifier e ativa CPC.',
+    biMetric: 'Clientes únicos contatados e ativação de CPC',
+    aliases: ['cpf', 'telefone', 'phone', 'client_identifier'],
+  },
+  {
+    key: 'cliente_nome',
+    label: 'Nome do Cliente',
+    stage: 'identification',
+    stageLabel: 'Identificação do Cliente',
+    type: 'string',
+    description: 'Nome completo ou primeiro nome do cliente para personalização e relatórios.',
+    biMetric: 'Identificação nominal do interlocutor',
+    aliases: ['nome_cliente', 'nome', 'client_name'],
+  },
+  {
+    key: 'cpc',
+    label: 'Contato com Pessoa Certa (CPC)',
+    stage: 'cpc',
+    stageLabel: 'Pessoa Certa (CPC)',
+    type: 'boolean',
+    description: 'Flag booleana (true) indicando que o contato foi estabelecido com o titular.',
+    biMetric: 'Total CPC e Taxa de CPC (%)',
+    aliases: ['pessoa_certa'],
+  },
+  {
+    key: 'valor_original',
+    label: 'Valor da Dívida (CPCA)',
+    stage: 'cpca',
+    stageLabel: 'Apresentação da Dívida (CPCA)',
+    type: 'number',
+    description: 'Valor monetário original ou pendente do débito. Ativa automaticamente CPCA no BI.',
+    biMetric: 'Total CPCA e Volume de dívida trabalhado',
+    aliases: ['divida_valor', 'valor_divida', 'saldo_devedor', 'debt_amount'],
+  },
+  {
+    key: 'cpca',
+    label: 'Confirmação de CPCA',
+    stage: 'cpca',
+    stageLabel: 'Apresentação da Dívida (CPCA)',
+    type: 'boolean',
+    description: 'Flag booleana (true) confirmando que a dívida/proposta foi apresentada.',
+    biMetric: 'Taxa de Apresentação de Dívida (CPCA)',
+    aliases: ['divida_apresentada'],
+  },
+  {
+    key: 'acordo_id',
+    label: 'ID do Acordo Fechado',
+    stage: 'agreement',
+    stageLabel: 'Acordo Fechado',
+    type: 'string',
+    description: 'Identificador do acordo gerado pela API de cobrança/CRM.',
+    biMetric: 'Total de Acordos e Tabulação AGREEMENT_CLOSED',
+    aliases: ['id_acordo', 'retorno_api.acordo_id'],
+  },
+  {
+    key: 'acordo',
+    label: 'Confirmação de Acordo',
+    stage: 'agreement',
+    stageLabel: 'Acordo Fechado',
+    type: 'boolean',
+    description: 'Flag booleana (true) confirmando fechamento de acordo na sessão.',
+    biMetric: 'Taxa de Conversão de Acordo (%)',
+    aliases: ['acordo_confirmado'],
+  },
+  {
+    key: 'valor_total',
+    label: 'Valor do Acordo Negociado',
+    stage: 'agreement',
+    stageLabel: 'Acordo Fechado',
+    type: 'number',
+    description: 'Valor final acordado para pagamento (volume financeiro recuperado em R$).',
+    biMetric: 'Valor Total Negociado (Recuperação de Crédito)',
+    aliases: ['valor_acordo', 'agreement_amount'],
+  },
+  {
+    key: 'promessa_pagamento',
+    label: 'Promessa de Pagamento (PTP)',
+    stage: 'ptp',
+    stageLabel: 'Promessa de Pagamento (PTP)',
+    type: 'boolean',
+    description: 'Flag booleana (true) indicando intenção ou compromisso de pagamento.',
+    biMetric: 'Volume e Taxa de PTP',
+    aliases: [],
+  },
+  {
+    key: 'data_promessa',
+    label: 'Data de Vencimento da Promessa',
+    stage: 'ptp',
+    stageLabel: 'Promessa de Pagamento (PTP)',
+    type: 'date',
+    description: 'Data acordada para quitação (formato ISO ou DD/MM/AAAA).',
+    biMetric: 'Controle de Vencimentos e Quebra de Acordo',
+    aliases: ['data_pagamento', 'promise_date'],
+  },
+  {
+    key: 'promessa_valor',
+    label: 'Valor da Promessa de Pagamento',
+    stage: 'ptp',
+    stageLabel: 'Promessa de Pagamento (PTP)',
+    type: 'number',
+    description: 'Valor monetário específico prometido pelo cliente.',
+    biMetric: 'Volume financeiro de promessas de pagamento',
+    aliases: ['valor_promessa', 'promise_amount'],
+  },
+  {
+    key: 'atendimento_humano',
+    label: 'Transbordo / Alô Humano',
+    stage: 'handover',
+    stageLabel: 'Transbordo / Alô Humano',
+    type: 'boolean',
+    description: 'Flag indicando transbordo para operador humano ou atendimento humano.',
+    biMetric: 'Taxa de Automação vs. Transbordo Humano',
+    aliases: ['has_human_answer'],
+  },
+];
+
 export function extractFunnelFromState(
   state: Record<string, unknown> = {},
   now: Date = new Date(),
