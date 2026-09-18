@@ -67,6 +67,7 @@ export class VoiceCallSession {
   public readonly id: string;
   public conversationId: string | null = null;
   public isAiSpeaking = false;
+  public isGreetingPlaying = false;
   public interruptedCount = 0;
   public inputTokens = 0;
   public outputTokens = 0;
@@ -405,6 +406,12 @@ export class VoiceCallSession {
           await this.appendUserTranscript(companyId, text);
         },
         onInterrupted: () => {
+          if (this.isGreetingPlaying) {
+            this.logger.debug(
+              '[VoiceCallSession] Interrupção suprimida durante saudação inicial ininterrupta',
+            );
+            return;
+          }
           this.isAiSpeaking = false;
           this.interruptedCount++;
           // Barge-in: descarta o áudio do Gemini ainda enfileirado para que
@@ -715,24 +722,22 @@ export class VoiceCallSession {
               `⚡ [VoiceCallSession] Reproduzindo saudação inicial (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${provider} | Texto: "${res.text}"`,
             );
             this.isAiSpeaking = true;
+            this.isGreetingPlaying = true;
+            this.liveProvider.setInterruptionBlocked?.(true);
             this.gateSession?.notifyAiSpeakingChanged(true);
             this.telephonyAdapter.sendAudio(res.audioBuffer);
 
             void this.appendAiTranscript(this.config.companyId || '', res.text);
 
-            const syncInstruction =
-              `[EVENTO DO SISTEMA: SAUDAÇÃO JÁ REPRODUZIDA]\n` +
-              `Você acabou de saudar o cliente com a seguinte frase inicial: "${res.text}".\n` +
-              `NÃO repita a saudação nem cumprimente novamente. AGUARDE o cliente responder e continue o atendimento naturalmente a partir da resposta dele.`;
+            // Registra a saudação no contexto da IA SEM disparar fala proativa
+            this.liveProvider.seedGreetingTurn?.(res.text);
 
+            // 24kHz 16-bit mono = 48 bytes/ms + margem de reprodução
+            const playbackMs = Math.round(res.audioBuffer.length / 48) + 200;
             setTimeout(() => {
-              this.liveProvider.sendText(syncInstruction);
-            }, 80);
-
-            // 24kHz 16-bit mono = 48 bytes/ms
-            const playbackMs = Math.round(res.audioBuffer.length / 48);
-            setTimeout(() => {
+              this.isGreetingPlaying = false;
               this.isAiSpeaking = false;
+              this.liveProvider.setInterruptionBlocked?.(false);
               this.gateSession?.notifyAiSpeakingChanged(false);
             }, playbackMs);
 

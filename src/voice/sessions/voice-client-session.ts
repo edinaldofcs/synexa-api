@@ -28,6 +28,7 @@ export class VoiceClientSession {
   mockSession?: VoiceMockSession | null = null;
   isReady = false;
   isAiSpeaking = false;
+  isGreetingPlaying = false;
   companyId?: string;
   clientId?: string;
   agentId?: string;

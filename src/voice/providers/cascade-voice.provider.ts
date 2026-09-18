@@ -34,6 +34,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private consecutiveBargeInFrames = 0;
   private hasVoiceInCurrentTurn = false;
   private _firstAudioLogged = false;
+  private isInterruptionBlocked = false;
 
   private conversationHistory: Array<{
     role: 'user' | 'model';
@@ -84,6 +85,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         redemptionFrames: 12, // ~384ms de silêncio para fechar turno
         preRollFrames: 8, // ~256ms de áudio pré-fala
         onSpeechStart: () => {
+          if (this.isInterruptionBlocked) return;
           const isAiAudible =
             this.isSpeaking || Date.now() < this.aiPlaybackUntil;
           if (isAiAudible) {
@@ -139,6 +141,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
     // Cenário 1: A IA está falando no momento ou áudio ainda está tocando no cliente
     if (isAiAudible) {
+      if (this.isInterruptionBlocked) {
+        return;
+      }
       if (!isSpeechChunk) {
         this.consecutiveBargeInFrames = 0;
         return;
@@ -233,6 +238,41 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     void this.executeLlmAndSpeak(text);
   }
 
+  public setInterruptionBlocked(blocked: boolean): void {
+    this.isInterruptionBlocked = blocked;
+    this.logger.debug(
+      `[CascadeVoice] Bloqueio de interrupção definido como: ${blocked}`,
+    );
+    if (!blocked) {
+      // Ao liberar a fala do usuário, descarta qualquer ruído acumulado durante a saudação
+      this.vadSession?.reset();
+      this.inboundAudioBuffers = [];
+      this.preRollBuffers = [];
+      this.consecutiveBargeInFrames = 0;
+      this.hasVoiceInCurrentTurn = false;
+    }
+  }
+
+  public seedGreetingTurn(text: string): void {
+    if (!text || !text.trim()) return;
+    this.logger.log(
+      `🤖 [CascadeVoice] Saudação inicial registrada no histórico (aguardando usuário): "${text.trim()}"`,
+    );
+    // Para respeitar o protocolo da API Gemini (onde contents deve iniciar com role 'user'),
+    // registramos o par inicial: trigger de início do atendimento -> fala da saudação pela IA.
+    // A IA NÃO gera fala proativa adicional e aguarda a fala real do usuário.
+    this.conversationHistory.push(
+      {
+        role: 'user',
+        parts: [{ text: '[INÍCIO DA LIGAÇÃO / ATENDIMENTO INICIADO]' }],
+      },
+      {
+        role: 'model',
+        parts: [{ text: text.trim() }],
+      },
+    );
+  }
+
   public sendToolResponse(
     functionResponses: {
       name: string;
@@ -277,12 +317,19 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     this.consecutiveBargeInFrames = 0;
     this.hasVoiceInCurrentTurn = false;
     this.conversationHistory = [];
+    this.isInterruptionBlocked = false;
     this.options?.onClose?.();
   }
 
   // ── MÉTODOS INTERNOS DO PIPELINE ────────────────────────────────
 
   private async handleSpeechTurnCompleted(speechAudio: Buffer): Promise<void> {
+    if (this.isInterruptionBlocked) {
+      this.logger.debug(
+        '[CascadeVoice] Segmento Silero VAD descartado por bloqueio de interrupção (saudação ininterrupta)',
+      );
+      return;
+    }
     const durationMs = Math.round(speechAudio.length / 32);
     if (durationMs < 200) {
       this.logger.log(
@@ -371,6 +418,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   private handleInterruption(): void {
+    if (this.isInterruptionBlocked) {
+      this.logger.debug(
+        '[CascadeVoice] Interrupção suprimida (saudação inicial ininterrupta em reprodução)',
+      );
+      return;
+    }
     const wasSpeaking = this.isSpeaking || Date.now() < this.aiPlaybackUntil;
     if (wasSpeaking) {
       this.logger.log(

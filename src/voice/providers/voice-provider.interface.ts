@@ -43,6 +43,8 @@ export interface IVoiceProvider {
   sendAudio(base64Pcm16: string, sampleRate?: number): void;
   sendAudioStreamEnd(): void;
   sendText(text: string): void;
+  seedGreetingTurn?(text: string): void;
+  setInterruptionBlocked?(blocked: boolean): void;
   sendToolResponse(
     functionResponses: {
       name: string;

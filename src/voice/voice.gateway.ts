@@ -1506,6 +1506,8 @@ export class VoiceGateway
                               }
 
                               session.isAiSpeaking = true;
+                              session.isGreetingPlaying = true;
+                              provider.setInterruptionBlocked?.(true);
                               session.gateSession?.notifyAiSpeakingChanged(
                                 true,
                               );
@@ -1584,21 +1586,16 @@ export class VoiceGateway
                                   .catch(() => undefined);
                               }
 
-                              const syncInstruction =
-                                `[EVENTO DO SISTEMA: SAUDAÇÃO JÁ REPRODUZIDA]\n` +
-                                `Você acabou de saudar o cliente com a seguinte frase inicial: "${res.text}".\n` +
-                                `NÃO repita a saudação nem cumprimente novamente. AGUARDE o cliente responder e continue o atendimento naturalmente a partir da resposta dele.`;
+                              // Registra a saudação no contexto da IA SEM disparar fala proativa
+                              provider.seedGreetingTurn?.(res.text);
 
+                              const playbackMs =
+                                Math.round(totalBytes / 48) + 200;
                               setTimeout(() => {
                                 if (generation === session.providerGeneration) {
-                                  provider.sendText(syncInstruction);
-                                }
-                              }, 80);
-
-                              const playbackMs = Math.round(totalBytes / 48);
-                              setTimeout(() => {
-                                if (generation === session.providerGeneration) {
+                                  session.isGreetingPlaying = false;
                                   session.isAiSpeaking = false;
+                                  provider.setInterruptionBlocked?.(false);
                                   session.gateSession?.notifyAiSpeakingChanged(
                                     false,
                                   );
@@ -1668,6 +1665,12 @@ export class VoiceGateway
                 },
                 onInterrupted: async () => {
                   if (generation !== session.providerGeneration) return;
+                  if (session.isGreetingPlaying) {
+                    this.logger.debug(
+                      '[VoiceGateway] Interrupção suprimida durante saudação inicial ininterrupta',
+                    );
+                    return;
+                  }
                   session.isAiSpeaking = false;
                   session.interruptedCount++;
                   session.aiResponseStarted = false;

@@ -323,6 +323,31 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     }
   }
 
+  public setInterruptionBlocked(_blocked: boolean): void {
+    // Provedor nativo Gemini Live compat
+  }
+
+  public seedGreetingTurn(text: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN && text) {
+      const payload = {
+        clientContent: {
+          turns: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: `[EVENTO DO SISTEMA: Saudação inicial já reproduzida: "${text}". NÃO fale agora. Aguarde a resposta do usuário.]`,
+                },
+              ],
+            },
+          ],
+          turnComplete: false,
+        },
+      };
+      this.ws.send(JSON.stringify(payload));
+    }
+  }
+
   public sendToolResponse(
     functionResponses: {
       name: string;

@@ -260,5 +260,56 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
       provider.close();
       expect(mockVadSession.reset).toHaveBeenCalled();
     });
+
+    it('seedGreetingTurn registra histórico inicial da IA sem disparar síntese de fala', () => {
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({ apiKey: 'k', systemPrompt: 'p' });
+
+      provider.seedGreetingTurn('Olá, falo com Edinaldo?');
+
+      const history = (provider as any).conversationHistory;
+      expect(history).toHaveLength(2);
+      expect(history[0]).toEqual({
+        role: 'user',
+        parts: [{ text: '[INÍCIO DA LIGAÇÃO / ATENDIMENTO INICIADO]' }],
+      });
+      expect(history[1]).toEqual({
+        role: 'model',
+        parts: [{ text: 'Olá, falo com Edinaldo?' }],
+      });
+      // Garante que o Cartesia TTS NÃO foi acionado
+      expect(mockSession.pushText).not.toHaveBeenCalled();
+    });
+
+    it('setInterruptionBlocked impede interrupção da saudação inicial pelo Silero VAD', () => {
+      const onInterrupted = jest.fn();
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({ apiKey: 'k', systemPrompt: 'p', onInterrupted });
+
+      // Simula saudação tocando com bloqueio ativo
+      (provider as any).isSpeaking = true;
+      provider.setInterruptionBlocked(true);
+
+      // Silero detecta voz ou ruído de barge-in
+      mockVadSession._opts.onSpeechStart();
+
+      // Interrupção DEVE ser ignorada
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect(mockSession.cancelContext).not.toHaveBeenCalled();
+      expect((provider as any).isSpeaking).toBe(true);
+
+      // Ao desbloquear a interrupção (saudação terminou), deve resetar a sessão do VAD
+      provider.setInterruptionBlocked(false);
+      expect(mockVadSession.reset).toHaveBeenCalled();
+    });
   });
 });
+
