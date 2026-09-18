@@ -23,6 +23,7 @@ function makeGateway(
   redis?: any,
   voiceSessionFactory?: any,
   prismaService?: any,
+  greetingCacheService?: any,
 ) {
   const voiceAuthService = {
     authenticateSession: jest
@@ -104,6 +105,7 @@ function makeGateway(
     groqWhisperSttService as any,
     sileroVadService as any,
     keyResolver as any,
+    greetingCacheService,
   );
   return {
     gateway,
@@ -397,5 +399,107 @@ describe('VoiceGateway security', () => {
       1000,
       'AI requested hangup completed',
     );
+  });
+
+  it('reproduz saudacao acelerada via VoiceGreetingCacheService quando voice_greeting_cache_enabled está ativo no agente', async () => {
+    const client = new FakeClientSocket();
+    const factory = new VoiceSessionFactory(
+      {} as any,
+      { get: jest.fn(() => 50) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    const greetingCacheService = {
+      resolveOrSynthesizeGreeting: jest.fn().mockResolvedValue({
+        audioBuffer: Buffer.alloc(9600, 1),
+        text: 'Olá Edinaldo, tudo bem?',
+        fromCache: true,
+        hash: 'hash-mock',
+      }),
+    };
+
+    const prisma = {
+      painel_clients: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'bot-1',
+          max_concurrent_calls: 10,
+          metadata: { voice_engine: 'hybrid' },
+        }),
+      },
+      painel_agents: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'agent-1',
+          client_id: 'bot-1',
+          is_active: true,
+          is_initial: true,
+          interaction_mode: 'both',
+          transitions: {
+            capabilities: {
+              ai_speaks_first: true,
+              voice_greeting_cache_enabled: true,
+              greeting_message: 'Olá Edinaldo, tudo bem?',
+            },
+          },
+        }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      conversations: {
+        create: jest.fn().mockResolvedValue({ id: 'conv-cache-1' }),
+      },
+      messages: {
+        create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
+      },
+    };
+
+    const { gateway, voiceAuthService } = makeGateway(
+      {
+        CARTESIA_API_KEY: 'mock-cartesia',
+        GEMINI_API_KEY: 'mock-gemini',
+        ENVIRONMENT: 'development',
+      },
+      undefined,
+      factory,
+      prisma,
+      greetingCacheService,
+    );
+
+    voiceAuthService.authenticateSession = jest
+      .fn()
+      .mockResolvedValue({ company_id: 'comp-1' });
+    voiceAuthService.resolveClientId = jest.fn().mockResolvedValue('bot-1');
+
+    gateway.handleConnection(client as any);
+    client.emit(
+      'message',
+      Buffer.from(JSON.stringify({ type: 'start', clientId: 'bot-1' })),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(
+      greetingCacheService.resolveOrSynthesizeGreeting,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 'comp-1',
+        agentId: 'agent-1',
+        provider: 'cartesia',
+        template: 'Olá Edinaldo, tudo bem?',
+      }),
+    );
+
+    const sentMessages = client.sent.map((p: string) => JSON.parse(p));
+    // Verifica que o frame de audio e a transcricao foram enviados ao cliente web
+    const audioMsg = sentMessages.find((m: any) => m.type === 'audio');
+    const transcriptMsg = sentMessages.find(
+      (m: any) => m.type === 'ai_transcript',
+    );
+    expect(audioMsg).toBeDefined();
+    expect(transcriptMsg).toBeDefined();
+    expect(transcriptMsg.text).toBe('Olá Edinaldo, tudo bem?');
   });
 });

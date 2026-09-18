@@ -4,8 +4,9 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { VoiceGreetingCacheService } from './services/voice-greeting-cache.service';
 import { WebSocket, WebSocketServer as WsServer } from 'ws';
 import { VoiceService } from './voice.service';
 import { VoiceAuthService } from './voice-auth.service';
@@ -50,6 +51,8 @@ import {
   buildGreetingTurn,
   buildSwitchTurn,
   resolveMaxCallDurationSec,
+  selectVoiceGreetingVariation,
+  voiceGreetingCacheEnabled,
 } from './services/voice-runtime.util';
 import { buildRawAgentPrompt } from '../agents/utils/agent-prompt-builder.util';
 
@@ -105,6 +108,8 @@ export class VoiceGateway
     private readonly groqWhisperSttService: GroqWhisperSttService,
     private readonly sileroVadService: SileroVadService,
     private readonly keyResolver: ProviderKeyResolverService,
+    @Optional()
+    private readonly greetingCacheService?: VoiceGreetingCacheService,
   ) {}
 
   handleConnection(clientWs: AuthenticatedWebSocket) {
@@ -1360,7 +1365,7 @@ export class VoiceGateway
                 tools: voiceToolDeclarations.length
                   ? [{ functionDeclarations: voiceToolDeclarations }]
                   : undefined,
-                onSetupComplete: () => {
+                onSetupComplete: async () => {
                   if (generation !== session.providerGeneration) return;
                   session.isReady = true;
                   sendDebug(
@@ -1438,11 +1443,179 @@ export class VoiceGateway
                         }
                       }, 0);
                     } else if (agent && aiSpeaksFirstEnabled(agent)) {
-                      // A IA fala primeiro: sauda o cliente imediatamente
-                      // após o setup, antes de qualquer áudio do chamador.
-                      // Usa a mensagem inicial configurada no agente quando
-                      // existir (interpolando variáveis da sessão).
                       introTurnSent = true;
+
+                      // 1. Tenta resolver saudação via VoiceGreetingCacheService se habilitado (opcional)
+                      const variation = selectVoiceGreetingVariation(
+                        agent,
+                        session.conversationId || session.agentId || 'web',
+                      );
+                      const cacheEnabled = voiceGreetingCacheEnabled(agent);
+
+                      if (
+                        variation &&
+                        cacheEnabled &&
+                        this.greetingCacheService
+                      ) {
+                        try {
+                          const isHybrid = voiceEngine === 'hybrid';
+                          const ttsProvider = isHybrid ? 'cartesia' : 'google';
+                          const resolvedApiKey = isHybrid
+                            ? cartesiaApiKey ||
+                              this.configService.get('CARTESIA_API_KEY') ||
+                              process.env.CARTESIA_API_KEY ||
+                              ''
+                            : apiKey ||
+                              this.configService.get('GEMINI_API_KEY') ||
+                              process.env.GEMINI_API_KEY ||
+                              '';
+
+                          const voiceId =
+                            session.voiceName ||
+                            (isHybrid
+                              ? 'cb2694c3-715f-4da9-99f3-1c974fff2928'
+                              : 'Aoede');
+
+                          const customerName =
+                            (session.state.nome as string) ||
+                            (session.state.nome_cliente as string) ||
+                            (session.state.primeiro_nome as string) ||
+                            undefined;
+
+                          if (resolvedApiKey) {
+                            const res =
+                              await this.greetingCacheService.resolveOrSynthesizeGreeting(
+                                {
+                                  companyId: session.companyId!,
+                                  agentId: agent.id,
+                                  provider: ttsProvider,
+                                  voiceId,
+                                  template: variation,
+                                  customerName,
+                                  variables: session.state as Record<
+                                    string,
+                                    unknown
+                                  >,
+                                  apiKey: resolvedApiKey,
+                                },
+                              );
+
+                            if (res.audioBuffer && res.audioBuffer.length > 0) {
+                              if (generation !== session.providerGeneration) {
+                                return;
+                              }
+
+                              session.isAiSpeaking = true;
+                              session.gateSession?.notifyAiSpeakingChanged(
+                                true,
+                              );
+
+                              // Transmite primeiro chunk instantaneamente (0ms TTFB)
+                              const chunkSize = 4800; // 100ms de áudio a 24kHz 16-bit mono
+                              const totalBytes = res.audioBuffer.length;
+                              const firstEnd = Math.min(chunkSize, totalBytes);
+                              callAdapter.sendAudio(
+                                res.audioBuffer.subarray(0, firstEnd),
+                              );
+                              let offset = firstEnd;
+
+                              let streamInterval: any = null;
+                              if (offset < totalBytes) {
+                                streamInterval = setInterval(() => {
+                                  if (
+                                    generation !== session.providerGeneration ||
+                                    voiceSessionClosed ||
+                                    !session.isAiSpeaking
+                                  ) {
+                                    if (streamInterval)
+                                      clearInterval(streamInterval);
+                                    return;
+                                  }
+
+                                  if (offset >= totalBytes) {
+                                    if (streamInterval)
+                                      clearInterval(streamInterval);
+                                    return;
+                                  }
+
+                                  const end = Math.min(
+                                    offset + chunkSize,
+                                    totalBytes,
+                                  );
+                                  const slice = res.audioBuffer.subarray(
+                                    offset,
+                                    end,
+                                  );
+                                  offset = end;
+                                  callAdapter.sendAudio(slice);
+                                }, 95);
+                                if (
+                                  streamInterval &&
+                                  typeof streamInterval.unref === 'function'
+                                ) {
+                                  streamInterval.unref();
+                                }
+                              }
+
+                              sendDebug(
+                                'session',
+                                `⚡ Saudação inicial reproduzida (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${ttsProvider} | Texto: "${res.text}"`,
+                                { fromCache: res.fromCache, text: res.text },
+                                'success',
+                              );
+
+                              sendToClient({
+                                type: 'ai_transcript',
+                                text: res.text,
+                              });
+
+                              if (session.companyId && session.conversationId) {
+                                void this.prisma.messages
+                                  .create({
+                                    data: {
+                                      company_id: session.companyId,
+                                      conversation_id: session.conversationId,
+                                      sender_type: 'ai',
+                                      channel: 'voice',
+                                      direction: 'outbound',
+                                      content: res.text,
+                                    },
+                                  })
+                                  .catch(() => undefined);
+                              }
+
+                              const syncInstruction =
+                                `[EVENTO DO SISTEMA: SAUDAÇÃO JÁ REPRODUZIDA]\n` +
+                                `Você acabou de saudar o cliente com a seguinte frase inicial: "${res.text}".\n` +
+                                `NÃO repita a saudação nem cumprimente novamente. AGUARDE o cliente responder e continue o atendimento naturalmente a partir da resposta dele.`;
+
+                              setTimeout(() => {
+                                if (generation === session.providerGeneration) {
+                                  provider.sendText(syncInstruction);
+                                }
+                              }, 80);
+
+                              const playbackMs = Math.round(totalBytes / 48);
+                              setTimeout(() => {
+                                if (generation === session.providerGeneration) {
+                                  session.isAiSpeaking = false;
+                                  session.gateSession?.notifyAiSpeakingChanged(
+                                    false,
+                                  );
+                                }
+                              }, playbackMs);
+
+                              return;
+                            }
+                          }
+                        } catch (err: any) {
+                          this.logger.warn(
+                            `⚠️ [VoiceGateway] Falha ao resolver saudação acelerada: ${err.message}. Seguindo fallback.`,
+                          );
+                        }
+                      }
+
+                      // 2. Fallback padrão: envio direto para a LLM / Live Provider
                       const greetingTurn = buildGreetingTurn(
                         agent,
                         session.state as Record<string, unknown>,
