@@ -366,6 +366,8 @@ describe('VoiceGateway security', () => {
     const provider = session.liveProvider;
     expect(provider).toBeDefined();
 
+    const sendToolResponseSpy = jest.spyOn(provider, 'sendToolResponse');
+
     // Simula a IA solicitando a tool finalizar_chamada com mensagem_despedida
     await (provider.options as any).onToolCall([
       {
@@ -374,6 +376,22 @@ describe('VoiceGateway security', () => {
         args: { mensagem_despedida: 'Muito obrigado, tenha um ótimo dia!' },
       },
     ]);
+
+    // Valida que a toolResponse ordenou verbalizar a frase informada
+    expect(sendToolResponseSpy).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'call-hangup-1',
+          name: 'finalizar_chamada',
+          response: expect.objectContaining({
+            ok: true,
+            message: expect.stringContaining(
+              'Despedida confirmada. Fale verbalmente ao cliente com sua voz e tom natural exatamente a seguinte mensagem de conclusão: "Muito obrigado, tenha um ótimo dia!". A chamada será encerrada logo após você terminar de falar.',
+            ),
+          }),
+        }),
+      ]),
+    );
 
     // O socket NÃO deve ter sido fechado imediatamente e call_ended NÃO deve ter sido emitido ainda
     expect(client.close).not.toHaveBeenCalled();

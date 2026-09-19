@@ -53,6 +53,10 @@ import {
   resolveMaxCallDurationSec,
   selectVoiceGreetingVariation,
   voiceGreetingCacheEnabled,
+  buildVoiceFarewellToolResponse,
+  buildVoiceFarewellFallbackPrompt,
+  VOICE_HANGUP_FALLBACK_DELAY_MS,
+  VOICE_HANGUP_WATCHDOG_TIMEOUT_MS,
 } from './services/voice-runtime.util';
 import { buildRawAgentPrompt } from '../agents/utils/agent-prompt-builder.util';
 
@@ -769,15 +773,13 @@ export class VoiceGateway
                     name: call.name,
                     response: {
                       ok: true,
-                      message: despedida
-                        ? `Despedida recebida. Fale sua frase de despedida ao cliente agora. A chamada será desligada logo após você terminar de falar.`
-                        : `A chamada será encerrada após a sua fala de despedida. Despeça-se agora do cliente com gentileza e cordialidade.`,
+                      message: buildVoiceFarewellToolResponse(despedida, 'web'),
                     },
                   });
                   responseProvider.sendToolResponse(responses);
 
-                  // Fallback ativo: se a IA informou mensagem_despedida mas não iniciou fala em 2.2s,
-                  // despacha o texto diretamente para ser falado
+                  // Fallback ativo: se a IA informou mensagem_despedida mas não iniciou fala dentro da tolerância,
+                  // despacha o comando diretivo de sistema para que a IA fale a mensagem sem inverter papéis
                   if (despedida) {
                     setTimeout(() => {
                       if (
@@ -792,12 +794,14 @@ export class VoiceGateway
                           { despedida },
                           'info',
                         );
-                        responseProvider.sendText(despedida);
+                        const fallbackPrompt =
+                          buildVoiceFarewellFallbackPrompt(despedida);
+                        responseProvider.sendText(fallbackPrompt);
                       }
-                    }, 2200);
+                    }, VOICE_HANGUP_FALLBACK_DELAY_MS);
                   }
 
-                  // Watchdog de segurança: se em 8.5s a despedida não completar o turno,
+                  // Watchdog de segurança: se em 16s a despedida não completar o turno,
                   // encerra graciosamente para não prender a conexão
                   if (session.hangupWatchdogTimer) {
                     clearTimeout(session.hangupWatchdogTimer);
@@ -806,7 +810,7 @@ export class VoiceGateway
                     if (session.pendingAiHangup && !session.hangupExecuted) {
                       executeGracefulHangup('watchdog_timeout');
                     }
-                  }, 8500);
+                  }, VOICE_HANGUP_WATCHDOG_TIMEOUT_MS);
                   return;
                 }
 
@@ -1118,7 +1122,7 @@ export class VoiceGateway
                     'Use apenas quando a conversa estiver concluída e não houver mais nada a tratar.\n' +
                     'REGRAS OBRIGATÓRIAS:\n' +
                     '1. Você DEVE se despedir do cliente antes de desligar a chamada.\n' +
-                    '2. Informe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente (ex: "Muito obrigado pelo contato, tenha um excelente dia e até logo!").\n' +
+                    '2. Informe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente (ex: "Seu acordo deu certo! Enviei as informações para seu celular. Muito obrigado pelo contato, tenha um excelente dia e até logo!").\n' +
                     '3. A chamada só será desconectada após a fala da sua despedida ser concluída.',
                   parameters: {
                     type: 'OBJECT',

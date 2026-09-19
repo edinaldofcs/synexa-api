@@ -23,6 +23,10 @@ import {
   resolveMaxCallDurationSec,
   selectVoiceGreetingVariation,
   voiceGreetingCacheEnabled,
+  buildVoiceFarewellToolResponse,
+  buildVoiceFarewellFallbackPrompt,
+  VOICE_HANGUP_FALLBACK_DELAY_MS,
+  VOICE_HANGUP_WATCHDOG_TIMEOUT_MS,
 } from '../services/voice-runtime.util';
 
 import { VoiceGreetingCacheService } from '../services/voice-greeting-cache.service';
@@ -332,7 +336,7 @@ export class VoiceCallSession {
             'Use apenas quando a conversa estiver concluída e não houver mais nada a tratar.\n' +
             'REGRAS OBRIGATÓRIAS:\n' +
             '1. Você DEVE se despedir do cliente antes de desligar a chamada.\n' +
-            '2. Informe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente (ex: "Muito obrigado pelo contato, tenha um excelente dia e até logo!").\n' +
+            '2. Informe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente (ex: "Seu acordo deu certo! Enviei as informações para seu celular. Muito obrigado pelo contato, tenha um excelente dia e até logo!").\n' +
             '3. A chamada só será desconectada após a fala da sua despedida ser concluída.',
           parameters: {
             type: 'OBJECT',
@@ -471,7 +475,7 @@ export class VoiceCallSession {
                     this.hangupCause = 'ai_requested';
                     this.pendingAiHangup = true;
 
-                    // Fallback ativo: se houver frase de despedida e a IA não iniciar fala em 2.2s
+                    // Fallback ativo: se houver frase de despedida e a IA não iniciar fala dentro da tolerância
                     if (despedida) {
                       setTimeout(() => {
                         if (
@@ -480,12 +484,14 @@ export class VoiceCallSession {
                           !this.hangupExecuted &&
                           !this.isEnded
                         ) {
-                          this.liveProvider.sendText(despedida);
+                          const fallbackPrompt =
+                            buildVoiceFarewellFallbackPrompt(despedida);
+                          this.liveProvider.sendText(fallbackPrompt);
                         }
-                      }, 2200);
+                      }, VOICE_HANGUP_FALLBACK_DELAY_MS);
                     }
 
-                    // Watchdog de segurança para não prender o canal da operadora/Asterisk
+                    // Watchdog de segurança para não prender o canal da operadora/Asterisk (16s)
                     if (this.hangupWatchdogTimer) {
                       clearTimeout(this.hangupWatchdogTimer);
                     }
@@ -495,16 +501,17 @@ export class VoiceCallSession {
                           'watchdog_timeout',
                         );
                       }
-                    }, 8500);
+                    }, VOICE_HANGUP_WATCHDOG_TIMEOUT_MS);
 
                     return {
                       id: call.id,
                       name: call.name,
                       response: {
                         ok: true,
-                        message: despedida
-                          ? 'Despedida recebida. Fale sua frase de despedida ao cliente agora. A ligação será desligada ao término da sua fala.'
-                          : 'A ligação será encerrada após a sua fala de despedida. Despeça-se agora do cliente com cortesia.',
+                        message: buildVoiceFarewellToolResponse(
+                          despedida,
+                          'telefonia',
+                        ),
                       },
                     };
                   }

@@ -12,6 +12,10 @@ import {
   selectVoiceGreetingVariation,
   createGreetingTemplateHash,
   voiceGreetingCacheEnabled,
+  buildVoiceFarewellToolResponse,
+  buildVoiceFarewellFallbackPrompt,
+  VOICE_HANGUP_FALLBACK_DELAY_MS,
+  VOICE_HANGUP_WATCHDOG_TIMEOUT_MS,
 } from './voice-runtime.util';
 
 describe('mergeApiReturnIntoState', () => {
@@ -333,5 +337,68 @@ describe('voiceGreetingCacheEnabled', () => {
         transitions: { capabilities: { voice_greeting_cache_enabled: false } },
       }),
     ).toBe(false);
+  });
+});
+
+describe('buildVoiceFarewellToolResponse', () => {
+  it('gera resposta com instrução direta para reproduzir a frase informada no canal web', () => {
+    const res = buildVoiceFarewellToolResponse(
+      'Seu acordo deu certo! Até logo.',
+      'web',
+    );
+    expect(res).toContain('Despedida confirmada');
+    expect(res).toContain('Seu acordo deu certo! Até logo.');
+    expect(res).toContain(
+      'A chamada será encerrada logo após você terminar de falar.',
+    );
+  });
+
+  it('gera resposta para o canal telefonia com termo apropriado', () => {
+    const res = buildVoiceFarewellToolResponse(
+      'Muito obrigado pelo contato!',
+      'telefonia',
+    );
+    expect(res).toContain(
+      'A ligação será encerrada logo após você terminar de falar.',
+    );
+  });
+
+  it('gera resposta generica quando despedida for vazia', () => {
+    const resWeb = buildVoiceFarewellToolResponse('', 'web');
+    expect(resWeb).toContain(
+      'A chamada será encerrada após a sua fala de despedida',
+    );
+    const resTel = buildVoiceFarewellToolResponse('', 'telefonia');
+    expect(resTel).toContain(
+      'A ligação será encerrada após a sua fala de despedida',
+    );
+  });
+});
+
+describe('buildVoiceFarewellFallbackPrompt', () => {
+  it('envolve a despedida em instrução diretiva do sistema para evitar inversão de papéis', () => {
+    const prompt = buildVoiceFarewellFallbackPrompt(
+      'Seu acordo deu certo! Enviei as informações para seu celular.',
+    );
+    expect(prompt).toContain('[INSTRUÇÃO DO SISTEMA]');
+    expect(prompt).toContain(
+      'O cliente está em silêncio aguardando a conclusão do atendimento.',
+    );
+    expect(prompt).toContain(
+      'Fale em voz alta ao cliente agora exatamente a seguinte mensagem:',
+    );
+    expect(prompt).toContain(
+      'Seu acordo deu certo! Enviei as informações para seu celular.',
+    );
+    expect(prompt).toContain(
+      'Não converse comigo nem invente outro texto, apenas verbalize esta mensagem ao cliente.',
+    );
+  });
+});
+
+describe('constantes de timing de hangup', () => {
+  it('garante que fallback delay e watchdog timeout sejam adequados à latência de voz', () => {
+    expect(VOICE_HANGUP_FALLBACK_DELAY_MS).toBe(4500);
+    expect(VOICE_HANGUP_WATCHDOG_TIMEOUT_MS).toBe(16000);
   });
 });
