@@ -333,6 +333,24 @@ export class ClientsService {
 
   async remove(id: string, companyId: string, role?: string) {
     await this.validateClientAccess(id, companyId, role);
+
+    // Invalida cache de ramal/DID telefônico caso existam endpoints vinculados
+    try {
+      const endpoints = await this.prisma.telephony_endpoints.findMany({
+        where: { client_id: id },
+        select: { did_number: true },
+      });
+      for (const ep of endpoints) {
+        if (ep.did_number) {
+          await this.telephonyResolver.invalidate(ep.did_number);
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `Falha ao invalidar cache telefônico para cliente ${id}: ${err.message}`,
+      );
+    }
+
     return this.clientsRepository.remove(id);
   }
 

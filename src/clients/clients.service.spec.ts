@@ -45,6 +45,7 @@ describe('ClientsService', () => {
     telephony_endpoints: {
       upsert: jest.fn().mockResolvedValue({ id: 'ep-1' }),
       findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue({ id: 'ep-1' }),
     },
     provider_credentials: {
@@ -370,5 +371,53 @@ describe('ClientsService', () => {
         action: 'created',
       }),
     );
+  });
+
+  describe('remove', () => {
+    it('permite a platform_admin deletar cliente mesmo de outra empresa e invalida ramal', async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: 'client-global-1' }]);
+      prisma.telephony_endpoints.findMany.mockResolvedValueOnce([
+        { did_number: '1001' },
+      ]);
+      clientsRepository.remove.mockResolvedValueOnce({ success: true });
+
+      const result = await service.remove(
+        'client-global-1',
+        'outra-company',
+        'platform_admin',
+      );
+
+      expect(result).toEqual({ success: true });
+      expect(telephonyResolver.invalidate).toHaveBeenCalledWith('1001');
+      expect(clientsRepository.remove).toHaveBeenCalledWith('client-global-1');
+    });
+
+    it('permite usuário da própria empresa deletar cliente', async () => {
+      prisma.painel_clients.findUnique.mockResolvedValueOnce({
+        company_id: companyId,
+      });
+      prisma.telephony_endpoints.findMany.mockResolvedValueOnce([]);
+      clientsRepository.remove.mockResolvedValueOnce({ success: true });
+
+      const result = await service.remove(
+        'client-1',
+        companyId,
+        'company_admin',
+      );
+
+      expect(result).toEqual({ success: true });
+      expect(clientsRepository.remove).toHaveBeenCalledWith('client-1');
+    });
+
+    it('impede deleção se cliente pertencer a outra empresa', async () => {
+      prisma.painel_clients.findUnique.mockResolvedValueOnce({
+        company_id: 'empresa-estranha',
+      });
+
+      await expect(
+        service.remove('client-1', companyId, 'company_admin'),
+      ).rejects.toThrow();
+      expect(clientsRepository.remove).not.toHaveBeenCalled();
+    });
   });
 });

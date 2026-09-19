@@ -31,8 +31,59 @@ export class ClientsRepository {
   }
 
   async remove(id: string) {
-    await this.prisma.painel_clients.delete({ where: { id } });
-    return { success: true };
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Limpar eventos de entrada do cliente
+      await tx.inbound_events.deleteMany({
+        where: { client_id: id },
+      });
+
+      // 2. Limpar entregas de webhooks associadas aos endpoints do cliente
+      const endpoints = await tx.webhook_endpoints.findMany({
+        where: { client_id: id },
+        select: { id: true },
+      });
+      if (endpoints.length > 0) {
+        const endpointIds = endpoints.map((ep) => ep.id);
+        await tx.webhook_deliveries.deleteMany({
+          where: { webhook_endpoint_id: { in: endpointIds } },
+        });
+      }
+
+      // 3. Limpar endpoints de webhook do cliente
+      await tx.webhook_endpoints.deleteMany({
+        where: { client_id: id },
+      });
+
+      // 4. Limpar conversas do cliente (mensagens e estados são deletados em cascata)
+      await tx.conversations.deleteMany({
+        where: { client_id: id },
+      });
+
+      // 5. Limpar conexões de canal do cliente
+      await tx.channel_connections.deleteMany({
+        where: { client_id: id },
+      });
+
+      // 6. Limpar identidades de canal vinculadas ao cliente
+      await tx.channel_identities.deleteMany({
+        where: { client_id: id },
+      });
+
+      // 7. Limpar usuários finais (end_users) do cliente
+      await tx.end_users.deleteMany({
+        where: { client_id: id },
+      });
+
+      // 8. Deletar o cliente em painel_clients
+      // As demais tabelas (painel_agents, painel_apis, painel_tracks, media_assets,
+      // telephony_endpoints, provider_credentials, knowledge_*, etc.) possuem
+      // ON DELETE CASCADE configurado no banco de dados.
+      await tx.painel_clients.delete({
+        where: { id },
+      });
+
+      return { success: true };
+    });
   }
 
   async duplicate(payload: Record<string, unknown>) {
