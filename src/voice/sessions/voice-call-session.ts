@@ -24,8 +24,6 @@ import {
   selectVoiceGreetingVariation,
   voiceGreetingCacheEnabled,
   buildVoiceFarewellToolResponse,
-  buildVoiceFarewellFallbackPrompt,
-  VOICE_HANGUP_FALLBACK_DELAY_MS,
   VOICE_HANGUP_WATCHDOG_TIMEOUT_MS,
 } from '../services/voice-runtime.util';
 
@@ -470,26 +468,10 @@ export class VoiceCallSession {
                     const despedida =
                       (call.args?.mensagem_despedida as string) || '';
                     this.logger.log(
-                      `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}. Aguardando despedida verbal.`,
+                      `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}. Aguardando conclusão da fala da IA.`,
                     );
                     this.hangupCause = 'ai_requested';
                     this.pendingAiHangup = true;
-
-                    // Fallback ativo: se houver frase de despedida e a IA não iniciar fala dentro da tolerância
-                    if (despedida) {
-                      setTimeout(() => {
-                        if (
-                          this.pendingAiHangup &&
-                          !this.isAiSpeaking &&
-                          !this.hangupExecuted &&
-                          !this.isEnded
-                        ) {
-                          const fallbackPrompt =
-                            buildVoiceFarewellFallbackPrompt(despedida);
-                          this.liveProvider.sendText(fallbackPrompt);
-                        }
-                      }, VOICE_HANGUP_FALLBACK_DELAY_MS);
-                    }
 
                     // Watchdog de segurança para não prender o canal da operadora/Asterisk (16s)
                     if (this.hangupWatchdogTimer) {
@@ -508,10 +490,7 @@ export class VoiceCallSession {
                       name: call.name,
                       response: {
                         ok: true,
-                        message: buildVoiceFarewellToolResponse(
-                          despedida,
-                          'telefonia',
-                        ),
+                        message: buildVoiceFarewellToolResponse(),
                       },
                     };
                   }

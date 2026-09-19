@@ -377,18 +377,16 @@ describe('VoiceGateway security', () => {
       },
     ]);
 
-    // Valida que a toolResponse ordenou verbalizar a frase informada
+    // Valida que a toolResponse confirmou o encerramento sem forçar repetição de fala
     expect(sendToolResponseSpy).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
           id: 'call-hangup-1',
           name: 'finalizar_chamada',
-          response: expect.objectContaining({
+          response: {
             ok: true,
-            message: expect.stringContaining(
-              'Despedida confirmada. Fale verbalmente ao cliente com sua voz e tom natural exatamente a seguinte mensagem de conclusão: "Muito obrigado, tenha um ótimo dia!". A chamada será encerrada logo após você terminar de falar.',
-            ),
-          }),
+            message: 'Encerramento confirmado.',
+          },
         }),
       ]),
     );

@@ -342,35 +342,13 @@ export function buildSwitchTurn(
   );
 }
 
-/** Delay de tolerância antes de acionar o fallback ativo de despedida (4.5s para acomodar latência de síntese de voz) */
-export const VOICE_HANGUP_FALLBACK_DELAY_MS = 4500;
-
-/** Watchdog máximo de segurança para fala de despedida longa antes de forçar o desligamento (16s) */
+/** Watchdog máximo de segurança para conclusão do turno da IA antes de forçar o desligamento (16s) */
 export const VOICE_HANGUP_WATCHDOG_TIMEOUT_MS = 16000;
 
 /**
- * Resposta oficial da tool `finalizar_chamada` instruindo a IA a verbalizar
- * a mensagem informada pelo parâmetro antes de encerrar.
+ * Resposta oficial da tool `finalizar_chamada`.
+ * Confirma o encerramento para que a IA conclua naturalmente sua fala em andamento sem forçar repetição.
  */
-export function buildVoiceFarewellToolResponse(
-  despedida: string,
-  channel: 'web' | 'telefonia' = 'web',
-): string {
-  const termoChamada = channel === 'telefonia' ? 'ligação' : 'chamada';
-  return despedida
-    ? `Despedida confirmada. Fale verbalmente ao cliente com sua voz e tom natural exatamente a seguinte mensagem de conclusão: "${despedida}". A ${termoChamada} será encerrada logo após você terminar de falar.`
-    : `A ${termoChamada} será encerrada após a sua fala de despedida. Despeça-se agora do cliente com gentileza e cordialidade.`;
-}
-
-/**
- * Formata o comando imperativo de fallback para que o modelo verbalize a mensagem
- * de despedida em voz alta ao cliente, impedindo que o modelo interprete o texto
- * como uma mensagem enviada pelo próprio cliente.
- */
-export function buildVoiceFarewellFallbackPrompt(despedida: string): string {
-  return (
-    `[INSTRUÇÃO DO SISTEMA] O cliente está em silêncio aguardando a conclusão do atendimento. ` +
-    `Fale em voz alta ao cliente agora exatamente a seguinte mensagem: "${despedida}". ` +
-    `Não converse comigo nem invente outro texto, apenas verbalize esta mensagem ao cliente.`
-  );
+export function buildVoiceFarewellToolResponse(): string {
+  return 'Encerramento confirmado.';
 }

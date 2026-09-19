@@ -54,8 +54,6 @@ import {
   selectVoiceGreetingVariation,
   voiceGreetingCacheEnabled,
   buildVoiceFarewellToolResponse,
-  buildVoiceFarewellFallbackPrompt,
-  VOICE_HANGUP_FALLBACK_DELAY_MS,
   VOICE_HANGUP_WATCHDOG_TIMEOUT_MS,
 } from './services/voice-runtime.util';
 import { buildRawAgentPrompt } from '../agents/utils/agent-prompt-builder.util';
@@ -757,14 +755,14 @@ export class VoiceGateway
                 });
 
                 // Encerramento da chamada solicitado pela IA (canal web):
-                // responde a tool call e aguarda a conclusão da fala de despedida antes de desconectar.
+                // responde a tool call e aguarda a fala que a IA faria processar antes de desconectar.
                 if (call.name === 'finalizar_chamada') {
                   const despedida =
                     (call.args?.mensagem_despedida as string) || '';
                   session.pendingAiHangup = true;
                   sendDebug(
                     'session',
-                    '📞 IA solicitou encerramento da chamada (finalizar_chamada). Aguardando despedida verbal.',
+                    '📞 IA solicitou encerramento da chamada (finalizar_chamada). Aguardando conclusão da fala da IA.',
                     { mensagem_despedida: despedida },
                     'info',
                   );
@@ -773,35 +771,12 @@ export class VoiceGateway
                     name: call.name,
                     response: {
                       ok: true,
-                      message: buildVoiceFarewellToolResponse(despedida, 'web'),
+                      message: buildVoiceFarewellToolResponse(),
                     },
                   });
                   responseProvider.sendToolResponse(responses);
 
-                  // Fallback ativo: se a IA informou mensagem_despedida mas não iniciou fala dentro da tolerância,
-                  // despacha o comando diretivo de sistema para que a IA fale a mensagem sem inverter papéis
-                  if (despedida) {
-                    setTimeout(() => {
-                      if (
-                        session.pendingAiHangup &&
-                        !session.isAiSpeaking &&
-                        !session.aiResponseStarted &&
-                        !session.hangupExecuted
-                      ) {
-                        sendDebug(
-                          'session',
-                          '🤖 Reproduzindo mensagem de despedida informada pela IA.',
-                          { despedida },
-                          'info',
-                        );
-                        const fallbackPrompt =
-                          buildVoiceFarewellFallbackPrompt(despedida);
-                        responseProvider.sendText(fallbackPrompt);
-                      }
-                    }, VOICE_HANGUP_FALLBACK_DELAY_MS);
-                  }
-
-                  // Watchdog de segurança: se em 16s a despedida não completar o turno,
+                  // Watchdog de segurança: se em 16s a fala não completar o turno,
                   // encerra graciosamente para não prender a conexão
                   if (session.hangupWatchdogTimer) {
                     clearTimeout(session.hangupWatchdogTimer);
