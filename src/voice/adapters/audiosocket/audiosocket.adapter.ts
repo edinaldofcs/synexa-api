@@ -92,9 +92,12 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
   private channelIdBuffer: Buffer<ArrayBufferLike>;
   private audioCallback: ((pcm16: Buffer) => void) | null = null;
   private callStartCallback: (() => void) | null = null;
-  private callEndCallback: ((reason?: string) => void) | null = null;
+  private callEndCallbacks: Array<(reason?: string) => void> = [];
   private errorCallback: ((err: Error) => void) | null = null;
   private dtmfCallback: ((digit: string) => void) | null = null;
+  private audioMetricsCallback:
+    | ((metrics: { db: number; bytesCount: number }) => void)
+    | null = null;
   private isClosed = false;
   private readBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   /** Pacer compartilhado: cadência 20ms, pre-buffer, silêncio com decay/fade */
@@ -163,7 +166,19 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
   }
 
   public onCallEnd(callback: (reason?: string) => void): void {
-    this.callEndCallback = callback;
+    this.callEndCallbacks.push(callback);
+  }
+
+  private triggerCallEnd(reason?: string): void {
+    for (const cb of this.callEndCallbacks) {
+      try {
+        cb(reason);
+      } catch (err) {
+        this.logger.error(
+          `[AudioSocket] Erro ao disparar callback de callEnd: ${err}`,
+        );
+      }
+    }
   }
 
   public onError(callback: (err: Error) => void): void {
@@ -174,6 +189,12 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
     this.dtmfCallback = callback;
   }
 
+  public onAudioMetrics(
+    callback: (metrics: { db: number; bytesCount: number }) => void,
+  ): void {
+    this.audioMetricsCallback = callback;
+  }
+
   public close(): void {
     this.pacer.dispose();
     if (this.isClosed) return;
@@ -182,7 +203,7 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
       this.socket.end();
       this.socket = null as unknown as net.Socket;
     }
-    this.callEndCallback?.('adapter_closed');
+    this.triggerCallEnd('adapter_closed');
   }
 
   private setupSocket(): void {
@@ -204,7 +225,7 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
       if (!this.isClosed) {
         this.isClosed = true;
         this.pacer.dispose();
-        this.callEndCallback?.('socket_closed');
+        this.triggerCallEnd('socket_closed');
       }
     });
   }
@@ -224,6 +245,19 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
       case AUDIOSOCKET_TYPES.AUDIO:
         if (frame.length > 0) {
           const pcm16k = AudioResampler.telephonyToGemini(frame.payload);
+          if (this.audioMetricsCallback) {
+            let sum = 0;
+            for (let i = 0; i < pcm16k.length; i += 2) {
+              const sample = pcm16k.readInt16LE(i);
+              sum += sample * sample;
+            }
+            const rms = Math.sqrt(sum / (pcm16k.length / 2));
+            const db =
+              rms > 0
+                ? Math.max(-60, Math.round(20 * Math.log10(rms / 32767)))
+                : -60;
+            this.audioMetricsCallback({ db, bytesCount: frame.length });
+          }
           if (this.audioCallback) {
             this.audioCallback(pcm16k);
           } else {
@@ -236,7 +270,7 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
         if (!this.isClosed) {
           this.isClosed = true;
           this.pacer.dispose();
-          this.callEndCallback?.('audiosocket_terminate');
+          this.triggerCallEnd('audiosocket_terminate');
         }
         break;
       case AUDIOSOCKET_TYPES.ERROR:

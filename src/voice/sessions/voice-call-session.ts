@@ -29,6 +29,7 @@ import {
 
 import { VoiceGreetingCacheService } from '../services/voice-greeting-cache.service';
 import { extractFunnelFromState } from '../../interactions/utils/funnel-mapping.util';
+import { evaluateConditionsWithDetails } from '../../orchestrator/utils/condition-evaluator.util';
 
 export interface VoiceGateRuntimeConfig {
   enabled?: boolean;
@@ -61,6 +62,8 @@ export interface VoiceCallSessionConfig {
   onAiHangupRequest?: () => Promise<void> | void;
   /** Libera o slot do semáforo global de sessões de voz */
   onSessionEnd?: () => void;
+  /** Transmite eventos em tempo real da chamada telefônica (tools, encadeamento, transcrição, handover) */
+  onEvent?: (event: { type: string; [key: string]: any }) => void;
 }
 
 export class VoiceCallSession {
@@ -143,7 +146,12 @@ export class VoiceCallSession {
   public async start(): Promise<void> {
     try {
       this.startTime = Date.now();
-      const { selectedAgent, clientId, companyId } = this.config;
+      const {
+        selectedAgent: initialSelectedAgent,
+        clientId,
+        companyId,
+      } = this.config;
+      let selectedAgent = initialSelectedAgent;
 
       // 1. Consolida e Mapeia variáveis recebidas da telefonia (ex: Asterisk AGI / CallFlex)
       let inboundConfig: InboundMappingConfig | undefined;
@@ -393,6 +401,13 @@ export class VoiceCallSession {
             `🎙️ [VoiceCallSession] Provedor de IA conectado para chamada ${this.id}`,
           );
           this.setupCompleted = true;
+          this.config.onEvent?.({
+            type: 'flow_telephony_ready',
+            channelId: this.id,
+            clientId: this.config.clientId,
+            agentId: selectedAgent?.id,
+            agentName: selectedAgent?.service_step || selectedAgent?.name,
+          });
           this.maybeSendGreeting();
         },
         onAudio: (base64Audio) => {
@@ -402,9 +417,23 @@ export class VoiceCallSession {
           this.telephonyAdapter.sendAudio(pcm24k);
         },
         onAiTranscript: async (text) => {
+          this.config.onEvent?.({
+            type: 'flow_telephony_transcript',
+            channelId: this.id,
+            clientId: this.config.clientId,
+            role: 'ai',
+            text,
+          });
           await this.appendAiTranscript(companyId, text);
         },
         onUserTranscript: async (text) => {
+          this.config.onEvent?.({
+            type: 'flow_telephony_transcript',
+            channelId: this.id,
+            clientId: this.config.clientId,
+            role: 'user',
+            text,
+          });
           await this.appendUserTranscript(companyId, text);
         },
         onInterrupted: () => {
@@ -457,6 +486,29 @@ export class VoiceCallSession {
               ),
             );
             return;
+          }
+
+          const agentToolsList =
+            clientId && selectedAgent?.id && this.voiceToolsService
+              ? await this.voiceToolsService
+                  .getAgentTools(clientId, selectedAgent.id)
+                  .catch(() => [])
+              : [];
+
+          for (const call of functionCalls) {
+            const matchedTool = agentToolsList.find(
+              (candidate) => candidate.name === call.name,
+            );
+            this.config.onEvent?.({
+              type: 'flow_telephony_tool_call',
+              channelId: this.id,
+              clientId: this.config.clientId,
+              name: call.name,
+              toolName: matchedTool?.apiName || call.name,
+              apiId: matchedTool?.id,
+              arguments: call.args || {},
+              agentId: selectedAgent?.id,
+            });
           }
 
           let responses: Array<{ id: string; name: string; response: any }>;
@@ -562,15 +614,109 @@ export class VoiceCallSession {
                         : Object.fromEntries(
                             Object.entries(apiResponse).filter(
                               ([key]) =>
-                                !['ok', 'status', 'message', 'error'].includes(
-                                  key,
-                                ),
+                                ![
+                                  'ok',
+                                  'status',
+                                  'message',
+                                  'error',
+                                  '_chainTrail',
+                                ].includes(key),
                             ),
                           );
                     this.sessionState = {
                       ...this.sessionState,
                       ...returnedState,
                     };
+
+                    const matchedTool = agentToolsList.find(
+                      (candidate) => candidate.name === call.name,
+                    );
+
+                    this.config.onEvent?.({
+                      type: 'flow_telephony_tool_response',
+                      channelId: this.id,
+                      clientId: this.config.clientId,
+                      name: call.name,
+                      toolName: matchedTool?.apiName || call.name,
+                      apiId: matchedTool?.id,
+                      response,
+                    });
+
+                    // Notifica encadeamento se houver _chainTrail
+                    if (Array.isArray(apiResponse?._chainTrail)) {
+                      for (const step of apiResponse._chainTrail) {
+                        this.config.onEvent?.({
+                          type: 'flow_telephony_chaining',
+                          channelId: this.id,
+                          clientId: this.config.clientId,
+                          from: step.from,
+                          to: step.to,
+                          fromId: step.fromId,
+                          toId: step.toId,
+                          arguments: step.arguments,
+                          response: step.response,
+                          timestamp: step.timestamp,
+                        });
+                      }
+                    }
+
+                    // Notifica variáveis de sessão enriquecidas
+                    this.config.onEvent?.({
+                      type: 'flow_telephony_variables',
+                      channelId: this.id,
+                      clientId: this.config.clientId,
+                      variables: this.sessionState,
+                    });
+
+                    // Avalia condição de ativação para transição de agente
+                    try {
+                      if (this.config.clientId && this.prisma) {
+                        const otherAgents =
+                          await this.prisma.painel_agents.findMany({
+                            where: {
+                              client_id: this.config.clientId,
+                              id: { not: selectedAgent?.id },
+                              is_active: true,
+                            },
+                            orderBy: { execution_order: 'asc' },
+                          });
+
+                        for (const nextAgent of otherAgents) {
+                          const conditions =
+                            nextAgent.activation_conditions as any;
+                          if (conditions) {
+                            const evalResult = evaluateConditionsWithDetails(
+                              conditions,
+                              this.sessionState,
+                            );
+                            if (evalResult?.matched) {
+                              this.logger.log(
+                                `🔄 [VoiceCallSession] Transição de agente ativada: ${selectedAgent?.service_step} ➔ ${nextAgent.service_step}`,
+                              );
+                              this.config.onEvent?.({
+                                type: 'flow_telephony_agent_switched',
+                                channelId: this.id,
+                                clientId: this.config.clientId,
+                                fromAgent:
+                                  selectedAgent?.service_step ||
+                                  selectedAgent?.id,
+                                fromAgentId: selectedAgent?.id,
+                                toAgent: nextAgent.service_step || nextAgent.id,
+                                toAgentId: nextAgent.id,
+                                reason:
+                                  'Condição de ativação atendida pelo retorno da API',
+                              });
+                              selectedAgent = nextAgent as any;
+                              break;
+                            }
+                          }
+                        }
+                      }
+                    } catch (e: any) {
+                      this.logger.warn(
+                        `Erro ao avaliar transição de agente telefônico: ${e?.message}`,
+                      );
+                    }
                   }
 
                   return { id: call.id, name: call.name, response };

@@ -159,11 +159,21 @@ export class VoiceSessionFactory {
     const companyId = route?.company_id;
 
     const clientMeta = (client?.metadata as Record<string, unknown>) || {};
-    const voiceEngine =
+    const defaultEngine =
+      (agent?.hybrid_audio_enabled ? 'hybrid' : null) ||
+      (this.configService.get<string>('VOICE_PROVIDER') === 'gemini'
+        ? 'live_api'
+        : null) ||
+      'live_api';
+
+    const rawVoiceEngine =
       overrides?.voiceEngine ||
       (agent?.voice_engine as string) ||
       (clientMeta.voice_engine as string) ||
-      'hybrid';
+      defaultEngine;
+
+    const voiceEngine =
+      rawVoiceEngine === 'gemini' ? 'live_api' : rawVoiceEngine;
 
     // Chave da IA por tenant (provider_credentials criptografada)
     const tenantGeminiKey = clientId

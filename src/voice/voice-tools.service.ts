@@ -240,6 +240,16 @@ export class VoiceToolsService {
         consolidatedData = { ...(raw as Record<string, unknown>) };
       }
 
+      const chainTrail: Array<{
+        from: string;
+        fromId: string;
+        to: string;
+        toId: string;
+        arguments: Record<string, unknown>;
+        response: Record<string, unknown>;
+        timestamp: string;
+      }> = [];
+
       // Encadeamento: regras condicionais (_chaining) ou direto (next_api_id/next_tool)
       const legacyNextApiId =
         (headers.next_api_id as string) || (tool as any).next_tool;
@@ -280,6 +290,18 @@ export class VoiceToolsService {
                 nextVisited,
               );
               if (nextResult && nextResult.ok) {
+                if (Array.isArray((nextResult as any)._chainTrail)) {
+                  chainTrail.push(...(nextResult as any)._chainTrail);
+                }
+                chainTrail.unshift({
+                  from: tool.apiName,
+                  fromId: tool.id,
+                  to: nextApi.name,
+                  toId: nextApi.id,
+                  arguments: nextArgs,
+                  response: nextResult as Record<string, unknown>,
+                  timestamp: new Date().toISOString(),
+                });
                 consolidatedData = {
                   ...consolidatedData,
                   ...nextResult,
@@ -293,6 +315,10 @@ export class VoiceToolsService {
             );
           }
         }
+      }
+
+      if (chainTrail.length > 0) {
+        consolidatedData._chainTrail = chainTrail;
       }
 
       if (Object.keys(consolidatedData).length > 0) {

@@ -98,5 +98,17 @@ export class CreateClientDto {
   @IsString()
   @IsOptional()
   @MaxLength(50)
+  test_sip_extension?: string | null;
+
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
   telephony_provider?: string | null;
+
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  audio_format?: string | null;
 }

@@ -65,28 +65,62 @@ export class ClientsService {
   }
 
   /**
-   * Garante que o DID/ramal não pertence a outra empresa (chave única global
-   * did_number_provider). Consulta cross-tenant via raw query pois a extensão
-   * de escopo de tenant mascara registros de outros tenants no findFirst.
+   * Obtém o próximo ramal de teste disponível na faixa 7001..7999
    */
-  private async assertDidOwnership(
+  async getNextAvailableTestExtension(companyId: string): Promise<string> {
+    const rows = await this.prisma.$queryRaw<{ did_number: string }[]>(
+      Prisma.sql`
+        SELECT did_number
+        FROM telephony_endpoints
+        WHERE did_number LIKE '7%'
+      `,
+    );
+    const used = new Set(rows.map((r) => r.did_number));
+    for (let ext = 7001; ext <= 7999; ext++) {
+      const extStr = String(ext);
+      if (!used.has(extStr)) {
+        return extStr;
+      }
+    }
+    return '7001';
+  }
+
+  /**
+   * Garante que o DID/ramal não pertence a outra empresa nem a outro cliente.
+   * did_number_provider é chave única global em telephony_endpoints.
+   */
+  private async assertDidAvailability(
     didNumber: string,
     provider: string,
     companyId: string,
+    currentClientId?: string,
   ) {
-    const rows = await this.prisma.$queryRaw<{ company_id: string }[]>(
+    const rows = await this.prisma.$queryRaw<
+      { company_id: string; client_id: string | null }[]
+    >(
       Prisma.sql`
-        SELECT company_id
+        SELECT company_id, client_id
         FROM telephony_endpoints
         WHERE did_number = ${didNumber} AND provider = ${provider}
         LIMIT 1
       `,
     );
-    const owner = rows?.[0];
-    if (owner && owner.company_id !== companyId) {
-      throw new ConflictException(
-        `Ramal ${didNumber} (${provider}) já está em uso por outra empresa`,
-      );
+    const existing = rows?.[0];
+    if (existing) {
+      if (existing.company_id !== companyId) {
+        throw new ConflictException(
+          `Ramal ${didNumber} (${provider}) já está em uso por outra empresa`,
+        );
+      }
+      if (
+        currentClientId &&
+        existing.client_id &&
+        existing.client_id !== currentClientId
+      ) {
+        throw new ConflictException(
+          `Ramal ${didNumber} (${provider}) já está associado a outro cliente`,
+        );
+      }
     }
   }
 
@@ -95,22 +129,37 @@ export class ClientsService {
       throw new ForbiddenException('Usuário sem empresa vinculada');
     }
 
-    const { user_id, sip_extension, telephony_provider, ...rest } =
-      createClientDto;
+    const {
+      user_id,
+      sip_extension,
+      test_sip_extension,
+      telephony_provider,
+      audio_format,
+      ...rest
+    } = createClientDto;
+
+    // Se informado ramal de teste, guarda no metadata do cliente
+    const meta = (rest.metadata as Record<string, any>) || {};
+    if (test_sip_extension?.trim()) {
+      meta.test_sip_extension = test_sip_extension.trim();
+    }
+    rest.metadata = meta;
 
     const client = await this.clientsRepository.create({
       ...rest,
       company_id: companyId,
     });
 
-    // Se informado ramal telefônico/SIP, cria o endpoint de roteamento
+    const provider = (
+      telephony_provider?.trim() || 'audiosocket'
+    ).toLowerCase();
+    const codec = audio_format?.trim() || 'g711_ulaw';
+
+    // 1. Se informado ramal de produção, cria o endpoint
     if (client && sip_extension?.trim()) {
       const ext = sip_extension.trim();
-      const provider = (
-        telephony_provider?.trim() || 'audiosocket'
-      ).toLowerCase();
       try {
-        await this.assertDidOwnership(ext, provider, companyId);
+        await this.assertDidAvailability(ext, provider, companyId, client.id);
         await this.prisma.telephony_endpoints.upsert({
           where: {
             did_number_provider: {
@@ -124,13 +173,14 @@ export class ClientsService {
             provider,
             did_number: ext,
             label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
-            audio_format: 'g711_ulaw',
+            audio_format: codec,
             enabled: true,
           },
           update: {
             company_id: companyId,
             client_id: client.id,
             label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
+            audio_format: codec,
             enabled: true,
             updated_at: new Date(),
           },
@@ -144,11 +194,59 @@ export class ClientsService {
       }
     }
 
+    // 2. Se informado ramal de testes, cria o endpoint de sandbox
+    if (client && test_sip_extension?.trim()) {
+      const testExt = test_sip_extension.trim();
+      try {
+        await this.assertDidAvailability(
+          testExt,
+          provider,
+          companyId,
+          client.id,
+        );
+        await this.prisma.telephony_endpoints.upsert({
+          where: {
+            did_number_provider: {
+              did_number: testExt,
+              provider,
+            },
+          },
+          create: {
+            company_id: companyId,
+            client_id: client.id,
+            provider,
+            did_number: testExt,
+            agent_step: 'test',
+            label: `Ramal de Teste ${testExt} (Sandbox) - ${client.company_name || client.agent_name || 'Agente'}`,
+            audio_format: codec,
+            enabled: true,
+          },
+          update: {
+            company_id: companyId,
+            client_id: client.id,
+            agent_step: 'test',
+            label: `Ramal de Teste ${testExt} (Sandbox) - ${client.company_name || client.agent_name || 'Agente'}`,
+            audio_format: codec,
+            enabled: true,
+            updated_at: new Date(),
+          },
+        });
+        await this.telephonyResolver.invalidate(testExt);
+      } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
+        this.logger.error(
+          `Falha ao provisionar ramal de testes ${testExt} para cliente ${client.id}: ${err.message}`,
+        );
+      }
+    }
+
     if (client) void this.metadataService.refresh(client.id);
     return {
       ...client,
       sip_extension: sip_extension?.trim() || null,
-      telephony_provider: telephony_provider?.trim() || 'audiosocket',
+      test_sip_extension: test_sip_extension?.trim() || null,
+      telephony_provider: provider,
+      audio_format: codec,
     };
   }
 
@@ -162,20 +260,35 @@ export class ClientsService {
             did_number: true,
             provider: true,
             agent_step: true,
+            audio_format: true,
             label: true,
             enabled: true,
           },
+          orderBy: { updated_at: 'desc' },
         },
       },
       orderBy: { id: 'asc' },
     });
 
     return clients.map((c) => {
-      const primaryEndpoint = c.telephony_endpoints?.[0];
+      const prodEndpoint = c.telephony_endpoints?.find(
+        (e) => e.agent_step !== 'test',
+      );
+      const testEndpoint = c.telephony_endpoints?.find(
+        (e) => e.agent_step === 'test',
+      );
+      const meta = (c.metadata as Record<string, any>) || {};
       return {
         ...c,
-        sip_extension: primaryEndpoint?.did_number || null,
-        telephony_provider: primaryEndpoint?.provider || null,
+        sip_extension: prodEndpoint?.did_number || null,
+        test_sip_extension:
+          testEndpoint?.did_number || meta.test_sip_extension || null,
+        telephony_provider:
+          prodEndpoint?.provider || testEndpoint?.provider || null,
+        audio_format:
+          prodEndpoint?.audio_format ||
+          testEndpoint?.audio_format ||
+          'g711_ulaw',
       };
     });
   }
@@ -197,6 +310,7 @@ export class ClientsService {
             did_number: true,
             provider: true,
             agent_step: true,
+            audio_format: true,
             label: true,
             enabled: true,
           },
@@ -206,14 +320,27 @@ export class ClientsService {
     });
 
     return clients.map((c) => {
-      const primaryEndpoint = c.telephony_endpoints?.[0];
+      const prodEndpoint = c.telephony_endpoints?.find(
+        (e) => e.agent_step !== 'test',
+      );
+      const testEndpoint = c.telephony_endpoints?.find(
+        (e) => e.agent_step === 'test',
+      );
       const baseName = c.company_name || c.agent_name || 'Operação';
       const companyLabel = c.companies?.name ? ` (${c.companies.name})` : '';
+      const meta = (c.metadata as Record<string, any>) || {};
       return {
         ...c,
         company_name: `${baseName}${companyLabel}`,
-        sip_extension: primaryEndpoint?.did_number || null,
-        telephony_provider: primaryEndpoint?.provider || null,
+        sip_extension: prodEndpoint?.did_number || null,
+        test_sip_extension:
+          testEndpoint?.did_number || meta.test_sip_extension || null,
+        telephony_provider:
+          prodEndpoint?.provider || testEndpoint?.provider || null,
+        audio_format:
+          prodEndpoint?.audio_format ||
+          testEndpoint?.audio_format ||
+          'g711_ulaw',
       };
     });
   }
@@ -228,9 +355,11 @@ export class ClientsService {
             did_number: true,
             provider: true,
             agent_step: true,
+            audio_format: true,
             label: true,
             enabled: true,
           },
+          orderBy: { updated_at: 'desc' },
         },
       },
     });
@@ -240,11 +369,22 @@ export class ClientsService {
         throw new NotFoundException(`Client with ID ${id} not found`);
       }
     }
-    const primaryEndpoint = client.telephony_endpoints?.[0];
+    const prodEndpoint = client.telephony_endpoints?.find(
+      (e) => e.agent_step !== 'test',
+    );
+    const testEndpoint = client.telephony_endpoints?.find(
+      (e) => e.agent_step === 'test',
+    );
+    const meta = (client.metadata as Record<string, any>) || {};
     return {
       ...client,
-      sip_extension: primaryEndpoint?.did_number || null,
-      telephony_provider: primaryEndpoint?.provider || null,
+      sip_extension: prodEndpoint?.did_number || null,
+      test_sip_extension:
+        testEndpoint?.did_number || meta.test_sip_extension || null,
+      telephony_provider:
+        prodEndpoint?.provider || testEndpoint?.provider || 'audiosocket',
+      audio_format:
+        prodEndpoint?.audio_format || testEndpoint?.audio_format || 'g711_ulaw',
     };
   }
 
@@ -256,38 +396,66 @@ export class ClientsService {
   ) {
     await this.validateClientAccess(id, companyId, role);
 
-    const { sip_extension, telephony_provider, ...restDto } = updateClientDto;
+    const {
+      sip_extension,
+      test_sip_extension,
+      telephony_provider,
+      audio_format,
+      ...restDto
+    } = updateClientDto;
+
+    // Se test_sip_extension fornecido, sincroniza no metadata
+    if (test_sip_extension !== undefined) {
+      const currentMeta = (restDto.metadata as Record<string, any>) || {};
+      restDto.metadata = {
+        ...currentMeta,
+        test_sip_extension: test_sip_extension
+          ? test_sip_extension.trim()
+          : null,
+      };
+    }
 
     const client = await this.clientsRepository.update(
       id,
       restDto as Record<string, unknown>,
     );
 
-    // Sincronização do ramal/DID em telephony_endpoints
+    const effectiveCompanyId = client.company_id || companyId;
+    const provider = (
+      telephony_provider?.trim() || 'audiosocket'
+    ).toLowerCase();
+    const codec = audio_format?.trim() || 'g711_ulaw';
+
+    // 1. Sincronização do ramal de PRODUÇÃO (agent_step != 'test')
     if (sip_extension !== undefined) {
       const ext = sip_extension ? sip_extension.trim() : '';
-      const provider = (
-        telephony_provider?.trim() || 'audiosocket'
-      ).toLowerCase();
-      const effectiveCompanyId = client.company_id || companyId;
-
       try {
-        const existing = await this.prisma.telephony_endpoints.findFirst({
-          where: { client_id: id, company_id: effectiveCompanyId },
+        // Encontra TODOS os endpoints de produção atuais deste cliente
+        const existingProds = await this.prisma.telephony_endpoints.findMany({
+          where: {
+            client_id: id,
+            company_id: effectiveCompanyId,
+            OR: [{ agent_step: null }, { agent_step: { not: 'test' } }],
+          },
         });
 
-        if (ext) {
-          if (
-            existing &&
-            (existing.did_number !== ext || existing.provider !== provider)
-          ) {
+        // Remove quaisquer endpoints de produção anteriores que não sejam o novo (ext + provider)
+        for (const ep of existingProds) {
+          if (!ext || ep.did_number !== ext || ep.provider !== provider) {
             await this.prisma.telephony_endpoints.delete({
-              where: { id: existing.id },
+              where: { id: ep.id },
             });
-            await this.telephonyResolver.invalidate(existing.did_number);
+            await this.telephonyResolver.invalidate(ep.did_number);
           }
+        }
 
-          await this.assertDidOwnership(ext, provider, effectiveCompanyId);
+        if (ext) {
+          await this.assertDidAvailability(
+            ext,
+            provider,
+            effectiveCompanyId,
+            id,
+          );
           await this.prisma.telephony_endpoints.upsert({
             where: {
               did_number_provider: {
@@ -301,28 +469,96 @@ export class ClientsService {
               provider,
               did_number: ext,
               label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
-              audio_format: 'g711_ulaw',
+              audio_format: codec,
               enabled: true,
             },
             update: {
               company_id: effectiveCompanyId,
               client_id: id,
               label: `Ramal ${ext} - ${client.company_name || client.agent_name || 'Agente'}`,
+              audio_format: codec,
               enabled: true,
+              agent_step: null,
               updated_at: new Date(),
             },
           });
           await this.telephonyResolver.invalidate(ext);
-        } else if (existing) {
-          await this.prisma.telephony_endpoints.delete({
-            where: { id: existing.id },
-          });
-          await this.telephonyResolver.invalidate(existing.did_number);
         }
       } catch (err: any) {
         if (err instanceof ConflictException) throw err;
         this.logger.error(
-          `Falha ao atualizar ramal ${ext} para cliente ${id}: ${err.message}`,
+          `Falha ao atualizar ramal de produção ${ext} para cliente ${id}: ${err.message}`,
+        );
+      }
+    }
+
+    // 2. Sincronização do ramal de TESTES (agent_step = 'test')
+    if (test_sip_extension !== undefined) {
+      const testExt = test_sip_extension ? test_sip_extension.trim() : '';
+      try {
+        // Encontra TODOS os endpoints de testes atuais deste cliente
+        const existingTests = await this.prisma.telephony_endpoints.findMany({
+          where: {
+            client_id: id,
+            company_id: effectiveCompanyId,
+            agent_step: 'test',
+          },
+        });
+
+        // Remove quaisquer endpoints de testes anteriores que não sejam o novo (testExt + provider)
+        for (const ep of existingTests) {
+          if (
+            !testExt ||
+            ep.did_number !== testExt ||
+            ep.provider !== provider
+          ) {
+            await this.prisma.telephony_endpoints.delete({
+              where: { id: ep.id },
+            });
+            await this.telephonyResolver.invalidate(ep.did_number);
+          }
+        }
+
+        if (testExt) {
+          await this.assertDidAvailability(
+            testExt,
+            provider,
+            effectiveCompanyId,
+            id,
+          );
+          await this.prisma.telephony_endpoints.upsert({
+            where: {
+              did_number_provider: {
+                did_number: testExt,
+                provider,
+              },
+            },
+            create: {
+              company_id: effectiveCompanyId,
+              client_id: id,
+              provider,
+              did_number: testExt,
+              agent_step: 'test',
+              label: `Ramal de Teste ${testExt} (Sandbox) - ${client.company_name || client.agent_name || 'Agente'}`,
+              audio_format: codec,
+              enabled: true,
+            },
+            update: {
+              company_id: effectiveCompanyId,
+              client_id: id,
+              agent_step: 'test',
+              label: `Ramal de Teste ${testExt} (Sandbox) - ${client.company_name || client.agent_name || 'Agente'}`,
+              audio_format: codec,
+              enabled: true,
+              updated_at: new Date(),
+            },
+          });
+          await this.telephonyResolver.invalidate(testExt);
+        }
+      } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
+        this.logger.error(
+          `Falha ao atualizar ramal de testes ${testExt} para cliente ${id}: ${err.message}`,
         );
       }
     }

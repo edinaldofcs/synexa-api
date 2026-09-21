@@ -92,12 +92,15 @@ describe('ClientsService', () => {
     ).resolves.toEqual({
       id: 'client-1',
       sip_extension: null,
+      test_sip_extension: null,
       telephony_provider: 'audiosocket',
+      audio_format: 'g711_ulaw',
     });
 
     expect(clientsRepository.create).toHaveBeenCalledWith({
       company_id: 'company-1',
       company_name: 'ACME',
+      metadata: {},
     });
     expect(metadata.refresh).toHaveBeenCalledWith('client-1');
   });
@@ -125,7 +128,9 @@ describe('ClientsService', () => {
       company_name: 'ACME 2',
       agent_name: 'Ana',
       sip_extension: '2000',
+      test_sip_extension: null,
       telephony_provider: 'audiosocket',
+      audio_format: 'g711_ulaw',
     });
 
     expect(prisma.telephony_endpoints.upsert).toHaveBeenCalledWith({
@@ -149,6 +154,7 @@ describe('ClientsService', () => {
         client_id: 'client-2',
         label: 'Ramal 2000 - ACME 2',
         enabled: true,
+        audio_format: 'g711_ulaw',
         updated_at: expect.any(Date),
       },
     });

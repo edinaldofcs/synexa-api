@@ -4,13 +4,14 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Logger, Optional } from '@nestjs/common';
+import { Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { VoiceGreetingCacheService } from './services/voice-greeting-cache.service';
 import { WebSocket, WebSocketServer as WsServer } from 'ws';
 import { VoiceService } from './voice.service';
 import { VoiceAuthService } from './voice-auth.service';
 import { MockVoiceProvider } from './providers/mock-voice.provider';
+import { AudioSocketServerService } from './telephony/audiosocket-server.service';
 import {
   GeminiLiveVoiceProvider,
   resolveLiveModel,
@@ -112,7 +113,22 @@ export class VoiceGateway
     private readonly keyResolver: ProviderKeyResolverService,
     @Optional()
     private readonly greetingCacheService?: VoiceGreetingCacheService,
+    @Optional()
+    @Inject(forwardRef(() => AudioSocketServerService))
+    private readonly audioSocketServerService?: AudioSocketServerService,
   ) {}
+
+  public broadcast(data: Record<string, any>): void {
+    if (!this.server?.clients) return;
+    const json = JSON.stringify(data);
+    for (const client of this.server.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(json);
+        } catch {}
+      }
+    }
+  }
 
   handleConnection(clientWs: AuthenticatedWebSocket) {
     if (!this.isTrustedOrigin(clientWs)) {
@@ -306,6 +322,23 @@ export class VoiceGateway
       try {
         const msg = JSON.parse(raw.toString());
         switch (msg.type) {
+          case 'flow_listener_subscribe': {
+            clearIdentificationTimer();
+            sendToClient({ type: 'flow_listener_subscribed', status: 'ok' });
+            return;
+          }
+          case 'flow_telephony_hangup': {
+            clearIdentificationTimer();
+            if (this.audioSocketServerService) {
+              await this.audioSocketServerService.hangupTestCall(msg.clientId);
+            }
+            sendToClient({ type: 'flow_telephony_hangup_ack', status: 'ok' });
+            return;
+          }
+          case 'ping': {
+            sendToClient({ type: 'pong', timestamp: Date.now() });
+            return;
+          }
           case 'start': {
             clearIdentificationTimer();
             clearIdentificationTimer();
@@ -949,6 +982,37 @@ export class VoiceGateway
                   },
                   response?.ok === false ? 'warn' : 'success',
                 );
+
+                if (Array.isArray((response as any)?._chainTrail)) {
+                  for (const step of (response as any)._chainTrail) {
+                    sendDebug(
+                      'api',
+                      `🔗 Encadeamento acionado: ${step.from} ➔ ${step.to}`,
+                      {
+                        chainedFrom: step.from,
+                        chainedTo: step.to,
+                        arguments: step.arguments,
+                        response: step.response,
+                        timestamp: step.timestamp,
+                      },
+                      'info',
+                    );
+                    sendToClient({
+                      type: 'tool_chaining',
+                      event: {
+                        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                        from: step.from,
+                        to: step.to,
+                        fromId: step.fromId,
+                        toId: step.toId,
+                        arguments: step.arguments,
+                        response: step.response,
+                        timestamp: step.timestamp,
+                      },
+                    });
+                  }
+                }
+
                 responses.push({ id: call.id, name: call.name, response });
               }
 

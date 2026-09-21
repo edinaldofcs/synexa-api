@@ -28,6 +28,14 @@ export class ClientsController {
     return this.clientsService.findAll(user.company_id);
   }
 
+  @Get('clients/available-test-extension')
+  async getAvailableTestExtension(@CurrentUser() user: { company_id: string }) {
+    const extension = await this.clientsService.getNextAvailableTestExtension(
+      user.company_id,
+    );
+    return { extension };
+  }
+
   @Get('clients/:id')
   get(
     @Param('id', ParseUUIDPipe) id: string,

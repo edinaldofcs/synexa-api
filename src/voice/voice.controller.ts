@@ -12,8 +12,10 @@ import type { VoiceConfigResponse } from './voice.service';
 import { VoiceGreetingCacheService } from './services/voice-greeting-cache.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { Optional, Inject, forwardRef } from '@nestjs/common';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { resolveVoiceGreetingVariations } from './services/voice-runtime.util';
+import { AudioSocketServerService } from './telephony/audiosocket-server.service';
 
 export interface PrewarmGreetingsDto {
   agentId: string;
@@ -27,11 +29,25 @@ export class VoiceController {
     private readonly greetingCacheService: VoiceGreetingCacheService,
     private readonly keyResolver: ProviderKeyResolverService,
     private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(forwardRef(() => AudioSocketServerService))
+    private readonly audioSocketServerService?: AudioSocketServerService,
   ) {}
 
   @Get('config')
   getConfig(): VoiceConfigResponse {
     return this.voiceService.getConfig();
+  }
+
+  /**
+   * Encerra chamadas de teste de telefonia ativas do Flow Studio (MicroSIP / Asterisk).
+   */
+  @Post('telephony/hangup')
+  async hangupTestCall(@Body() body: { clientId?: string }) {
+    if (this.audioSocketServerService) {
+      await this.audioSocketServerService.hangupTestCall(body?.clientId);
+    }
+    return { ok: true };
   }
 
   /**

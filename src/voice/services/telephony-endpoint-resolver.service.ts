@@ -198,6 +198,24 @@ export class TelephonyEndpointResolverService {
       }
     }
 
+    if (
+      !clientId &&
+      process.env.NODE_ENV !== 'test' &&
+      (process.env.ENVIRONMENT === 'development' ||
+        process.env.NODE_ENV === 'development')
+    ) {
+      const devClient = await this.prisma.painel_clients.findFirst();
+      if (devClient) {
+        clientId = devClient.id;
+        companyId = devClient.company_id;
+        provider = lookup.providerName || 'audiosocket';
+        didNumber = lookup.didNumber || '7001';
+        this.logger.log(
+          `📞 [EndpointResolver] Rota dev fallback ativada para did=${didNumber} -> ${devClient.company_name} (${clientId})`,
+        );
+      }
+    }
+
     if (!clientId) {
       // Sem endpoint ligado a nenhum cliente: recusa (anti cross-tenant).
       return null;
