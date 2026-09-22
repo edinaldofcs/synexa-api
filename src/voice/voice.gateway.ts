@@ -1779,6 +1779,15 @@ export class VoiceGateway
 
             switchAgent = async (targetAgent, reason, handoffText) => {
               if (!targetAgent || targetAgent.id === session.agentId) return;
+              const previousAgentId = session.agentId;
+              let previousAgentName = 'Agente';
+              if (previousAgentId) {
+                const voiceAgents = await findVoiceAgents();
+                const found = voiceAgents.find((a) => a.id === previousAgentId);
+                if (found) {
+                  previousAgentName = found.service_step || found.id;
+                }
+              }
               const previousProvider = session.liveProvider;
               session.nextGeneration();
               session.isReady = false;
@@ -1865,6 +1874,10 @@ export class VoiceGateway
               });
               sendToClient({
                 type: 'agent_switched',
+                fromAgent: previousAgentName,
+                fromAgentId: previousAgentId,
+                toAgent: targetAgent.service_step || targetAgent.id,
+                toAgentId: targetAgent.id,
                 agentId: targetAgent.id,
                 agentName: targetAgent.service_step || targetAgent.id,
                 serviceStep: targetAgent.service_step || targetAgent.id,
@@ -1873,6 +1886,7 @@ export class VoiceGateway
                 rawPrompt: targetRawPrompt,
                 systemPrompt: targetSystemPrompt,
                 variables: targetVariables,
+                reason: reason || 'Condição de ativação atendida',
               });
             };
 

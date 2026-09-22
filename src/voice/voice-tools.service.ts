@@ -98,6 +98,8 @@ export class VoiceToolsService {
       headers: api.headers,
       body: api.body,
       extract_data: api.extract_data,
+      next_api_id: (api as any).next_api_id || api.next_tool,
+      next_tool: api.next_tool,
     }));
   }
 
@@ -136,13 +138,43 @@ export class VoiceToolsService {
     sessionState?: Record<string, unknown>,
     visited?: Set<string>,
   ) {
-    const tool = (await this.getAgentTools(clientId, agentId)).find(
+    let tool = (await this.getAgentTools(clientId, agentId)).find(
       (candidate) => candidate.name === functionName,
     );
     if (!tool) {
+      // Se não encontrou entre as ferramentas diretas do agente (ex: é uma API FILHA interna de encadeamento),
+      // busca no catálogo geral de APIs do cliente
+      const allApis = await this.prisma.painel_apis.findMany({
+        where: { client_id: clientId, active: true },
+      });
+      const dbApi = allApis.find(
+        (a) =>
+          this.toFunctionName(a.name, a.id) === functionName ||
+          a.id === functionName ||
+          a.name.toLowerCase().trim() === functionName.toLowerCase().trim() ||
+          a.name === functionName,
+      );
+      if (dbApi) {
+        tool = {
+          id: dbApi.id,
+          apiName: dbApi.name,
+          name: this.toFunctionName(dbApi.name, dbApi.id),
+          description: dbApi.description || '',
+          parameters: this.buildParameters(dbApi),
+          method: dbApi.method,
+          url: dbApi.url,
+          headers: dbApi.headers,
+          body: dbApi.body,
+          extract_data: dbApi.extract_data,
+          next_api_id: (dbApi as any).next_api_id || dbApi.next_tool,
+          next_tool: dbApi.next_tool,
+        } as any;
+      }
+    }
+    if (!tool) {
       return {
         ok: false,
-        error: `Tool ${functionName} nao encontrada para este agente.`,
+        error: `Tool ${functionName} nao encontrada para este cliente/agente.`,
       };
     }
     if (!tool.url) {
@@ -252,7 +284,9 @@ export class VoiceToolsService {
 
       // Encadeamento: regras condicionais (_chaining) ou direto (next_api_id/next_tool)
       const legacyNextApiId =
-        (headers.next_api_id as string) || (tool as any).next_tool;
+        (tool as any).next_api_id ||
+        (headers.next_api_id as string) ||
+        (tool as any).next_tool;
       const nextApiId = resolveChainedApiId(
         tool.extract_data,
         consolidatedData,
