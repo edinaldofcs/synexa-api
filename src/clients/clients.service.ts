@@ -326,12 +326,14 @@ export class ClientsService {
       const testEndpoint = c.telephony_endpoints?.find(
         (e) => e.agent_step === 'test',
       );
-      const baseName = c.company_name || c.agent_name || 'Operação';
-      const companyLabel = c.companies?.name ? ` (${c.companies.name})` : '';
       const meta = (c.metadata as Record<string, any>) || {};
       return {
         ...c,
-        company_name: `${baseName}${companyLabel}`,
+        // company_name NUNCA é mutado aqui: o sufixo "(Empresa)" era
+        // absorvido pelo formData do painel e persistido a cada save
+        // (duplicava "(Synexa Admin) (Synexa Admin)"). A associação com a
+        // empresa vai em campo separado, apenas para exibição.
+        company_label: c.companies?.name || null,
         sip_extension: prodEndpoint?.did_number || null,
         test_sip_extension:
           testEndpoint?.did_number || meta.test_sip_extension || null,

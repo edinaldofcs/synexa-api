@@ -426,4 +426,28 @@ describe('ClientsService', () => {
       expect(clientsRepository.remove).not.toHaveBeenCalled();
     });
   });
+
+  describe('findAllGlobal', () => {
+    it('não muta company_name e expõe company_label separado (regressão do sufixo duplicado)', async () => {
+      prisma.painel_clients.findMany.mockResolvedValueOnce([
+        {
+          id: 'client-1',
+          company_name: 'Cliente Teste',
+          agent_name: 'Maria',
+          metadata: {},
+          companies: { id: 'company-1', name: 'Synexa Admin' },
+          telephony_endpoints: [],
+        },
+      ]);
+
+      const result = await service.findAllGlobal();
+
+      // company_name deve vir EXATAMENTE como está no banco: o sufixo
+      // " (Empresa)" era absorvido pelo formData do painel e persistido
+      // a cada save, crescendo "(Synexa Admin) (Synexa Admin)..."
+      expect(result[0].company_name).toBe('Cliente Teste');
+      expect(result[0].company_label).toBe('Synexa Admin');
+      expect(String(result[0].company_name)).not.toContain('(Synexa Admin)');
+    });
+  });
 });
