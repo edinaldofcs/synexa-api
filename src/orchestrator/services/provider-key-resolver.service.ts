@@ -227,4 +227,28 @@ export class ProviderKeyResolverService {
       enabledModels: config.enabledModels || [],
     };
   }
+
+  /**
+   * Retorna a config não-secreta armazenada no metadata do cliente
+   * (painel_clients.metadata.llm_providers[provider]) — usada por providers
+   * custom BYO (tts-custom/stt-custom) para baseUrl, voz, taxas, timeouts.
+   */
+  async resolveProviderSettings(
+    clientId: string,
+    provider: string,
+  ): Promise<Record<string, any>> {
+    try {
+      const client = await this.prisma.painel_clients.findUnique({
+        where: { id: clientId },
+        select: { metadata: true },
+      });
+      const providers = (client?.metadata as any)?.llm_providers || {};
+      const config = providers[provider] || providers[provider.toLowerCase()];
+      if (!config || typeof config !== 'object') return {};
+      const { apiKey: _apiKey, ...nonSecret } = config;
+      return nonSecret as Record<string, any>;
+    } catch {
+      return {};
+    }
+  }
 }

@@ -24,9 +24,12 @@ import { ProviderKeyResolverService } from '../orchestrator/services/provider-ke
 import { SessionService } from '../common/auth/session.service';
 import { CartesiaTtsService } from './services/cartesia-tts.service';
 import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
+import { CustomHttpTtsService } from './services/custom-http-tts.service';
+import { CustomHttpSttService } from './services/custom-http-stt.service';
 import { SileroVadService } from './services/silero-vad.service';
 import { CartesiaTtsSynthesizer } from './services/synthesizers/cartesia-tts.synthesizer';
 import { GoogleTtsSynthesizer } from './services/synthesizers/google-tts.synthesizer';
+import { CustomTtsSynthesizer } from './services/synthesizers/custom-tts.synthesizer';
 import { TtsSynthesizerFactory } from './services/synthesizers/tts-synthesizer.factory';
 import { VoiceGreetingCacheService } from './services/voice-greeting-cache.service';
 
@@ -65,9 +68,12 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     VoiceToolsService,
     CartesiaTtsService,
     GroqWhisperSttService,
+    CustomHttpTtsService,
+    CustomHttpSttService,
     SileroVadService,
     CartesiaTtsSynthesizer,
     GoogleTtsSynthesizer,
+    CustomTtsSynthesizer,
     TtsSynthesizerFactory,
     VoiceGreetingCacheService,
     ...(voiceStandalone

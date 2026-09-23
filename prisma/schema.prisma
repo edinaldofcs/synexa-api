@@ -283,6 +283,8 @@ model painel_agents {
   allow_interrupted     Boolean?  @default(true)
   voice_name                  String?
   hybrid_audio_enabled  Boolean?  @default(false)
+  tts_provider          String?
+  stt_provider          String?
   interaction_mode      String    @default("both")
 
   painel_clients      painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)

@@ -201,6 +201,7 @@ export class VoiceTelemetryService {
               durationSeconds,
               inputTokens: session.inputTokens,
               outputTokens: session.outputTokens,
+              byoVoice: session.ttsProvider === 'custom',
             })
           : this.pricingService.calculateVoiceLiveCost({
               durationSeconds,
@@ -228,7 +229,9 @@ export class VoiceTelemetryService {
             conversation_id: session.conversationId,
             provider:
               session.voiceEngine === 'hybrid'
-                ? 'cartesia-cascade'
+                ? session.ttsProvider === 'custom'
+                  ? 'custom-cascade'
+                  : 'cartesia-cascade'
                 : 'gemini-live',
             model: session.model,
             status: 'success',
@@ -300,7 +303,9 @@ export class VoiceTelemetryService {
           llmModel: session.model,
           llmProvider:
             session.voiceEngine === 'hybrid'
-              ? 'cartesia-cascade'
+              ? session.ttsProvider === 'custom'
+                ? 'custom-cascade'
+                : 'cartesia-cascade'
               : 'gemini-live',
           hangupCause: session.pendingAiHangup ? 'ai_completed' : undefined,
           startedAt: new Date(session.startTime),

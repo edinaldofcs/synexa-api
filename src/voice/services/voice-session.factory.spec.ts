@@ -19,6 +19,8 @@ const buildFactory = (maxSessions: number) => {
     {} as any,
     {} as any,
     {} as any,
+    {} as any,
+    {} as any,
   );
 };
 

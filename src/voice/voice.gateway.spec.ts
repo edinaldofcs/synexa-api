@@ -102,6 +102,8 @@ function makeGateway(
     redisService as any,
     cartesiaTtsService as any,
     groqWhisperSttService as any,
+    { createSession: jest.fn() } as any,
+    { transcribePcm: jest.fn() } as any,
     sileroVadService as any,
     keyResolver as any,
     greetingCacheService,
@@ -192,6 +194,8 @@ describe('VoiceGateway security', () => {
     const factory = new VoiceSessionFactory(
       {} as any,
       { get: jest.fn(() => 50) } as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -315,6 +319,8 @@ describe('VoiceGateway security', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
+      {} as any,
     );
 
     const prisma = {
@@ -421,6 +427,8 @@ describe('VoiceGateway security', () => {
     const factory = new VoiceSessionFactory(
       {} as any,
       { get: jest.fn(() => 50) } as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,

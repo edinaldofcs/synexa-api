@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ITelephonyAdapter } from '../adapters/telephony-adapter.interface';
 import { GeminiLiveVoiceProvider } from '../providers/gemini-live-voice.provider';
@@ -17,6 +17,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { resolveAudioGateConfig } from './voice-runtime.util';
 import { CartesiaTtsService } from './cartesia-tts.service';
 import { GroqWhisperSttService } from './groq-whisper-stt.service';
+import { CustomHttpTtsService } from './custom-http-tts.service';
+import { CustomHttpSttService } from './custom-http-stt.service';
 import { SileroVadService } from './silero-vad.service';
 import { VoiceGreetingCacheService } from './voice-greeting-cache.service';
 
@@ -39,6 +41,7 @@ export interface SessionSlotCheck {
  */
 @Injectable()
 export class VoiceSessionFactory {
+  private readonly logger = new Logger(VoiceSessionFactory.name);
   private activeSessions = 0;
   private readonly botActiveSessions = new Map<string, number>();
   private readonly maxSessions: number;
@@ -52,6 +55,8 @@ export class VoiceSessionFactory {
     private readonly voiceToolsService: VoiceToolsService,
     private readonly cartesiaTtsService: CartesiaTtsService,
     private readonly groqWhisperSttService: GroqWhisperSttService,
+    private readonly customHttpTtsService: CustomHttpTtsService,
+    private readonly customHttpSttService: CustomHttpSttService,
     private readonly sileroVadService: SileroVadService,
     private readonly greetingCacheService?: VoiceGreetingCacheService,
   ) {
@@ -195,6 +200,26 @@ export class VoiceSessionFactory {
     let cartesiaApiKey = overrides?.cartesiaApiKey || '';
     let groqApiKey = overrides?.groqApiKey || '';
 
+    // BYO Voice: provedores TTS/STT customizados do cliente (por agente)
+    const ttsProviderChoice =
+      (agent.tts_provider as string) ||
+      (clientMeta.tts_provider as string) ||
+      '';
+    const sttProviderChoice =
+      (agent.stt_provider as string) ||
+      (clientMeta.stt_provider as string) ||
+      '';
+    const ttsProvider: 'cartesia' | 'custom' =
+      ttsProviderChoice === 'custom' ? 'custom' : 'cartesia';
+    const sttProvider: 'groq' | 'custom' =
+      sttProviderChoice === 'custom' ? 'custom' : 'groq';
+    let customTts:
+      | { baseUrl: string; apiKey: string; voice?: string; sampleRate?: number; timeoutMs?: number }
+      | undefined;
+    let customStt:
+      | { baseUrl: string; apiKey: string; timeoutMs?: number }
+      | undefined;
+
     const isUuidVoice =
       resolvedVoiceName &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -202,21 +227,56 @@ export class VoiceSessionFactory {
       );
 
     if (voiceEngine === 'hybrid') {
-      if (!cartesiaApiKey && clientId) {
+      if (ttsProvider === 'custom' && clientId) {
+        const settings = await this.resolveCustomSettings(
+          clientId,
+          'tts-custom',
+        );
+        customTts = settings
+          ? {
+              baseUrl: settings.baseUrl,
+              apiKey: settings.apiKey,
+              voice: settings.voice,
+              sampleRate: settings.sampleRate,
+              timeoutMs: settings.timeoutMs,
+            }
+          : undefined;
+        if (!customTts) {
+          this.logger.warn(
+            `[VoiceSessionFactory] tts_provider=custom mas config 'tts-custom' ausente (clientId=${clientId}). Usando Cartesia.`,
+          );
+        }
+      } else if (!cartesiaApiKey && clientId) {
         cartesiaApiKey = await this.keyResolver.resolveApiKey(
           clientId,
           'cartesia',
         );
       }
-      if (!groqApiKey && clientId) {
+      if (sttProvider === 'custom' && clientId) {
+        const settings = await this.resolveCustomSettings(
+          clientId,
+          'stt-custom',
+        );
+        customStt = settings
+          ? {
+              baseUrl: settings.baseUrl,
+              apiKey: settings.apiKey,
+              timeoutMs: settings.timeoutMs,
+            }
+          : undefined;
+      } else if (!groqApiKey && clientId) {
         groqApiKey = await this.keyResolver.resolveApiKey(clientId, 'groq');
       }
       if (!isUuidVoice) {
         resolvedVoiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
       }
       liveProvider = new CascadeVoiceProvider(
-        this.cartesiaTtsService,
-        this.groqWhisperSttService,
+        ttsProvider === 'custom'
+          ? this.customHttpTtsService
+          : this.cartesiaTtsService,
+        sttProvider === 'custom'
+          ? this.customHttpSttService
+          : this.groqWhisperSttService,
         this.sileroVadService,
       );
     } else {
@@ -241,6 +301,10 @@ export class VoiceSessionFactory {
         undefined,
       voiceName: resolvedVoiceName,
       voiceEngine: voiceEngine as 'hybrid' | 'live_api',
+      ttsProvider: voiceEngine === 'hybrid' ? ttsProvider : 'google',
+      sttProvider: voiceEngine === 'hybrid' ? sttProvider : 'groq',
+      customTts,
+      customStt,
       cartesiaApiKey,
       groqApiKey,
       gateConfig: resolveAudioGateConfig(client),
@@ -283,5 +347,41 @@ export class VoiceSessionFactory {
     });
 
     return { session, liveProvider };
+  }
+
+  /**
+   * Resolve a config BYO de um provider custom: chave via BYOK/env e
+   * não-secretos (baseUrl, voice, sampleRate, timeout) via metadata do cliente.
+   */
+  private async resolveCustomSettings(
+    clientId: string,
+    provider: 'tts-custom' | 'stt-custom',
+  ): Promise<
+    | {
+        baseUrl: string;
+        apiKey: string;
+        voice?: string;
+        sampleRate?: number;
+        timeoutMs?: number;
+      }
+    | null
+  > {
+    const apiKey = await this.keyResolver.resolveApiKey(clientId, provider);
+    const settings = await this.keyResolver.resolveProviderSettings(
+      clientId,
+      provider,
+    );
+    const cfg = (settings || {}) as Record<string, any>;
+    const baseUrl = cfg.baseUrl || cfg.base_url;
+    if (!baseUrl) return null;
+    const sampleRateRaw = cfg.output_sample_rate || cfg.sampleRate;
+    const timeoutRaw = cfg.timeout_ms || cfg.timeoutMs;
+    return {
+      baseUrl: `${baseUrl}`.trim(),
+      apiKey,
+      voice: cfg.voice ? `${cfg.voice}`.trim() : undefined,
+      sampleRate: sampleRateRaw ? Number(sampleRateRaw) : undefined,
+      timeoutMs: timeoutRaw ? Number(timeoutRaw) : undefined,
+    };
   }
 }

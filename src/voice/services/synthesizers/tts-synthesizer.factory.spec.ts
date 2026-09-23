@@ -1,12 +1,14 @@
 import { TtsSynthesizerFactory } from './tts-synthesizer.factory';
 import { CartesiaTtsSynthesizer } from './cartesia-tts.synthesizer';
 import { GoogleTtsSynthesizer } from './google-tts.synthesizer';
+import { CustomTtsSynthesizer } from './custom-tts.synthesizer';
 import { ITtsSynthesizer } from './tts-synthesizer.interface';
 
 describe('TtsSynthesizerFactory', () => {
   let factory: TtsSynthesizerFactory;
   let mockCartesia: jest.Mocked<CartesiaTtsSynthesizer>;
   let mockGoogle: jest.Mocked<GoogleTtsSynthesizer>;
+  let mockCustom: jest.Mocked<CustomTtsSynthesizer>;
 
   beforeEach(() => {
     mockCartesia = {
@@ -19,7 +21,16 @@ describe('TtsSynthesizerFactory', () => {
       synthesize: jest.fn().mockResolvedValue(Buffer.from('google-audio')),
     } as any;
 
-    factory = new TtsSynthesizerFactory(mockCartesia, mockGoogle);
+    mockCustom = {
+      providerName: 'custom',
+      synthesize: jest.fn().mockResolvedValue(Buffer.from('custom-audio')),
+    } as any;
+
+    factory = new TtsSynthesizerFactory(
+      mockCartesia,
+      mockGoogle,
+      mockCustom,
+    );
   });
 
   it('deve resolver o sintetizador do Cartesia com sucesso', () => {
@@ -32,6 +43,12 @@ describe('TtsSynthesizerFactory', () => {
     const synth = factory.get('google');
     expect(synth).toBe(mockGoogle);
     expect(synth.providerName).toBe('google');
+  });
+
+  it('deve resolver o sintetizador custom (BYO) com sucesso', () => {
+    const synth = factory.get('custom');
+    expect(synth).toBe(mockCustom);
+    expect(synth.providerName).toBe('custom');
   });
 
   it('deve ser case-insensitive e tolerar espaços', () => {

@@ -4,8 +4,12 @@ import {
   IVoiceProvider,
   VoiceProviderConnectOptions,
 } from './voice-provider.interface';
-import { CartesiaTtsService } from '../services/cartesia-tts.service';
-import { GroqWhisperSttService } from '../services/groq-whisper-stt.service';
+import {
+  CustomSttConfig,
+  SttTranscriber,
+  StreamingTtsSession,
+  StreamingTtsSessionFactory,
+} from './custom-voice.types';
 import {
   SileroVadService,
   SileroVadSession,
@@ -18,9 +22,7 @@ const MAX_CONVERSATION_HISTORY = 20;
 export class CascadeVoiceProvider implements IVoiceProvider {
   private readonly logger = new Logger(CascadeVoiceProvider.name);
   private options: VoiceProviderConnectOptions | null = null;
-  private cartesiaSession: ReturnType<
-    CartesiaTtsService['createSession']
-  > | null = null;
+  private ttsSession: StreamingTtsSession | null = null;
   private vadSession: SileroVadSession | null = null;
   private isReady = false;
   private isSpeaking = false;
@@ -42,8 +44,10 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }> = [];
 
   constructor(
-    private readonly cartesiaTtsService: CartesiaTtsService,
-    private readonly groqWhisperSttService: GroqWhisperSttService,
+    // Contratos estruturais: CartesiaTtsService e GroqWhisperSttService (ou
+    // os serviços custom HTTP BYO) satisfazem estas assinaturas sem acoplamento.
+    private readonly ttsSessionFactory: StreamingTtsSessionFactory,
+    private readonly sttTranscriber: SttTranscriber,
     private readonly sileroVadService?: SileroVadService,
   ) {}
 
@@ -57,24 +61,40 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
   public connect(options: VoiceProviderConnectOptions): void {
     this.options = options;
-    const cartesiaKey =
-      options.cartesiaApiKey || process.env.CARTESIA_API_KEY || '';
+    const customTts = options.customTts;
     const voiceId = options.voiceName || DEFAULT_CARTESIA_VOICE;
 
-    if (!cartesiaKey) {
-      this.logger.warn(
-        '⚠️ [CascadeVoice] CARTESIA_API_KEY não encontrada. Síntese de voz pode falhar.',
+    if (customTts?.baseUrl) {
+      // BYO TTS: sessão HTTP do cliente (chave/config já resolvidas pelo factory)
+      this.logger.log(
+        `🎙️ [CascadeVoice] TTS customizado (BYO) ativado: ${customTts.baseUrl}`,
       );
+      this.ttsSession = this.ttsSessionFactory.createSession({
+        apiKey: customTts.apiKey,
+        voiceId: customTts.voice || voiceId,
+        sampleRate: 24000,
+        language: 'pt',
+        baseUrl: customTts.baseUrl,
+        outputSampleRate: customTts.sampleRate,
+        timeoutMs: customTts.timeoutMs,
+      });
+    } else {
+      const cartesiaKey =
+        options.cartesiaApiKey || process.env.CARTESIA_API_KEY || '';
+      if (!cartesiaKey) {
+        this.logger.warn(
+          '⚠️ [CascadeVoice] CARTESIA_API_KEY não encontrada. Síntese de voz pode falhar.',
+        );
+      }
+      // Inicializa a sessão WebSocket com a Cartesia em 24kHz (padrão de saída do Synexa)
+      this.ttsSession = this.ttsSessionFactory.createSession({
+        apiKey: cartesiaKey,
+        voiceId,
+        modelId: 'sonic-3.6',
+        sampleRate: 24000,
+        language: 'pt',
+      });
     }
-
-    // Inicializa a sessão WebSocket com a Cartesia em 24kHz (padrão de saída do Synexa)
-    this.cartesiaSession = this.cartesiaTtsService.createSession({
-      apiKey: cartesiaKey,
-      voiceId,
-      modelId: 'sonic-3.6',
-      sampleRate: 24000,
-      language: 'pt',
-    });
 
     // Inicializa Silero VAD v5 se disponível (Rede Neural via ONNX Runtime)
     if (this.sileroVadService) {
@@ -304,9 +324,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       this.turnCompleteTimer = null;
     }
     this.aiPlaybackUntil = 0;
-    if (this.cartesiaSession) {
-      this.cartesiaSession.close();
-      this.cartesiaSession = null;
+    if (this.ttsSession) {
+      this.ttsSession.close();
+      this.ttsSession = null;
     }
     if (this.vadSession) {
       this.vadSession.reset();
@@ -436,8 +456,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         clearTimeout(this.turnCompleteTimer);
         this.turnCompleteTimer = null;
       }
-      if (this.activeContextId && this.cartesiaSession) {
-        this.cartesiaSession.cancelContext(this.activeContextId);
+      if (this.activeContextId && this.ttsSession) {
+        this.ttsSession.cancelContext(this.activeContextId);
         this.activeContextId = null;
       }
       if (this.abortController) {
@@ -453,9 +473,14 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     rms: number,
     durationMs: number,
   ): Promise<void> {
+    const customStt: CustomSttConfig | undefined = this.options?.customStt;
     const groqKey = this.options?.groqApiKey || process.env.GROQ_API_KEY || '';
 
-    if (!groqKey) {
+    if (customStt?.baseUrl) {
+      this.logger.log(
+        `🎙️ [CascadeVoice] Turno de fala (${durationMs}ms) despachado para STT customizado (BYO)...`,
+      );
+    } else if (!groqKey) {
       this.logger.error(
         '❌ [CascadeVoice] GROQ_API_KEY não configurada para STT',
       );
@@ -463,9 +488,17 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     }
 
     try {
-      const userText = await this.groqWhisperSttService.transcribePcm(
+      const sttInput = customStt?.baseUrl
+        ? {
+            apiKey: customStt.apiKey,
+            baseUrl: customStt.baseUrl,
+            timeoutMs: customStt.timeoutMs,
+          }
+        : { apiKey: groqKey };
+
+      const userText = await this.sttTranscriber.transcribePcm(
         pcmBuffer,
-        { apiKey: groqKey },
+        sttInput,
       );
 
       if (!userText || !userText.trim()) {
@@ -644,11 +677,11 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         }
       }
 
-      // Envia o restante do buffer para a Cartesia
+      // Envia o restante do buffer para o TTS ativo
       if (sentenceBuffer.trim().length > 0) {
         this.pushToCartesia(contextId, sentenceBuffer, false);
-      } else if (this.cartesiaSession) {
-        this.cartesiaSession.finalizeContext(contextId);
+      } else if (this.ttsSession) {
+        this.ttsSession.finalizeContext(contextId);
       }
 
       if (fullAiResponse) {
@@ -694,9 +727,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     text: string,
     continueStream: boolean,
   ): void {
-    if (!this.cartesiaSession || !text.trim()) return;
+    if (!this.ttsSession || !text.trim()) return;
 
-    this.cartesiaSession.pushText(contextId, text, continueStream, {
+    this.ttsSession.pushText(contextId, text, continueStream, {
       onAudioChunk: (pcmChunk) => {
         // Envia o PCM 24kHz base64 para o telephonyAdapter / web client
         // 24kHz 16-bit mono = 48 bytes/ms

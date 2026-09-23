@@ -136,8 +136,19 @@ export class ModelPricingService {
     inputTokens?: number;
     outputTokens?: number;
     ttsCharacters?: number;
+    /** BYO Voice: TTS/STT próprios do cliente — cobra apenas o LLM. */
+    byoVoice?: boolean;
   }): number {
     const duration = params.durationSeconds || 0;
+    if (params.byoVoice) {
+      // Cliente usa TTS/STT próprios: custo de síntese/transcrição é dele.
+      const llmCostOnly = this.calculateTokenCost({
+        model: 'gemini-2.5-flash-lite',
+        inputTokens: params.inputTokens || 0,
+        outputTokens: params.outputTokens || 0,
+      });
+      return Number(llmCostOnly.toFixed(6));
+    }
     const sttCost = this.calculateAudioCost(duration);
     // Cartesia Sonic: $35 por 1M caracteres (~15 chars/seg de fala ativa)
     const ttsChars = params.ttsCharacters ?? Math.round(duration * 15);

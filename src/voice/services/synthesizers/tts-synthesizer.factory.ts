@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ITtsSynthesizer } from './tts-synthesizer.interface';
 import { CartesiaTtsSynthesizer } from './cartesia-tts.synthesizer';
 import { GoogleTtsSynthesizer } from './google-tts.synthesizer';
+import { CustomTtsSynthesizer } from './custom-tts.synthesizer';
 
 @Injectable()
 export class TtsSynthesizerFactory {
@@ -11,9 +12,11 @@ export class TtsSynthesizerFactory {
   constructor(
     private readonly cartesiaSynthesizer: CartesiaTtsSynthesizer,
     private readonly googleSynthesizer: GoogleTtsSynthesizer,
+    private readonly customSynthesizer: CustomTtsSynthesizer,
   ) {
     this.register(this.cartesiaSynthesizer);
     this.register(this.googleSynthesizer);
+    this.register(this.customSynthesizer);
   }
 
   /**

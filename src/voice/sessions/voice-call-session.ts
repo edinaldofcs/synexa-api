@@ -53,6 +53,24 @@ export interface VoiceCallSessionConfig {
   /** Canal usado na sincronização com painel_interactions (ex: voice_sip, voice_webrtc) */
   channel?: string;
   voiceEngine?: 'hybrid' | 'live_api';
+  /** Provedor TTS efetivo da chamada: 'cartesia' | 'custom' | 'google'. */
+  ttsProvider?: string;
+  /** Provedor STT efetivo da chamada: 'groq' | 'custom'. */
+  sttProvider?: string;
+  /** Config BYO de TTS (endpoint HTTP do cliente) quando ttsProvider === 'custom'. */
+  customTts?: {
+    baseUrl: string;
+    apiKey: string;
+    voice?: string;
+    sampleRate?: number;
+    timeoutMs?: number;
+  };
+  /** Config BYO de STT (endpoint HTTP do cliente) quando sttProvider === 'custom'. */
+  customStt?: {
+    baseUrl: string;
+    apiKey: string;
+    timeoutMs?: number;
+  };
   cartesiaApiKey?: string;
   groqApiKey?: string;
   /**
@@ -821,14 +839,23 @@ export class VoiceCallSession {
     if (variation && cacheEnabled && this.greetingCacheService) {
       try {
         const isHybrid = this.config.voiceEngine === 'hybrid';
-        const provider = isHybrid ? 'cartesia' : 'google';
-        const apiKey = isHybrid
-          ? this.config.cartesiaApiKey || process.env.CARTESIA_API_KEY || ''
-          : this.config.apiKey || process.env.GEMINI_API_KEY || '';
+        const provider =
+          this.config.ttsProvider || (isHybrid ? 'cartesia' : 'google');
+        const customTts = this.config.customTts;
+        const apiKey =
+          provider === 'custom'
+            ? customTts?.apiKey || ''
+            : isHybrid
+              ? this.config.cartesiaApiKey || process.env.CARTESIA_API_KEY || ''
+              : this.config.apiKey || process.env.GEMINI_API_KEY || '';
 
         const voiceId =
-          this.config.voiceName ||
-          (isHybrid ? 'cb2694c3-715f-4da9-99f3-1c974fff2928' : 'Aoede');
+          provider === 'custom'
+            ? customTts?.voice ||
+              this.config.voiceName ||
+              'synexa-custom-voice'
+            : this.config.voiceName ||
+              (isHybrid ? 'cb2694c3-715f-4da9-99f3-1c974fff2928' : 'Aoede');
 
         const customerName =
           (this.sessionState.nome as string) ||
@@ -847,6 +874,7 @@ export class VoiceCallSession {
               customerName,
               variables: this.sessionState,
               apiKey,
+              customTts: provider === 'custom' ? customTts : undefined,
             });
 
           if (res.audioBuffer && res.audioBuffer.length > 0) {
@@ -1113,6 +1141,9 @@ export class VoiceCallSession {
               durationSeconds,
               inputTokens: this.inputTokens,
               outputTokens: this.outputTokens,
+              byoVoice:
+                this.config.ttsProvider === 'custom' ||
+                this.config.sttProvider === 'custom',
             })
           : this.pricingService.calculateVoiceLiveCost({
               durationSeconds,

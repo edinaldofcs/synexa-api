@@ -89,6 +89,18 @@ export class UpdateAgentDto {
   @IsOptional()
   hybrid_audio_enabled?: boolean;
 
+  /** Provedor de síntese de voz: 'cartesia' (padrão) ou 'custom' (BYO HTTP). */
+  @IsString()
+  @IsOptional()
+  @IsIn(['cartesia', 'custom'])
+  tts_provider?: string;
+
+  /** Provedor de transcrição: 'groq' (padrão) ou 'custom' (BYO HTTP). */
+  @IsString()
+  @IsOptional()
+  @IsIn(['groq', 'custom'])
+  stt_provider?: string;
+
   @IsString()
   @IsOptional()
   @IsIn(['text', 'voice', 'both'])

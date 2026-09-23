@@ -22,6 +22,14 @@ export interface ResolveGreetingAudioOptions extends GreetingCacheKeyOptions {
   sampleRate?: number;
   language?: string;
   variables?: Record<string, unknown>;
+  /** Config BYO obrigatória quando provider === 'custom'. */
+  customTts?: {
+    baseUrl: string;
+    apiKey?: string;
+    voice?: string;
+    sampleRate?: number;
+    timeoutMs?: number;
+  };
 }
 
 export interface ResolveGreetingResult {
@@ -167,6 +175,7 @@ export class VoiceGreetingCacheService {
       voiceId: options.voiceId,
       sampleRate: options.sampleRate || 24000,
       language: options.language || 'pt',
+      customTts: options.customTts,
     });
 
     // 3. Salva no cache assincronamente (não bloqueia a resposta da chamada)
@@ -195,6 +204,13 @@ export class VoiceGreetingCacheService {
     apiKey: string;
     sampleRate?: number;
     concurrency?: number;
+    customTts?: {
+      baseUrl: string;
+      apiKey?: string;
+      voice?: string;
+      sampleRate?: number;
+      timeoutMs?: number;
+    };
   }): Promise<{
     total: number;
     cached: number;
@@ -230,6 +246,7 @@ export class VoiceGreetingCacheService {
               customerName: name,
               apiKey: options.apiKey,
               sampleRate: options.sampleRate,
+              customTts: options.customTts,
             });
             if (res.fromCache) {
               cached++;

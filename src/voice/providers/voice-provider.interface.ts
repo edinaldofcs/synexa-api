@@ -4,10 +4,30 @@ export interface VoiceProviderToolDeclaration {
   parameters?: Record<string, any>;
 }
 
+export interface CustomTtsConnectConfig {
+  baseUrl: string;
+  apiKey: string;
+  voice?: string;
+  sampleRate?: number;
+  timeoutMs?: number;
+}
+
+export interface CustomSttConnectConfig {
+  baseUrl: string;
+  apiKey: string;
+  timeoutMs?: number;
+}
+
 export interface VoiceProviderConnectOptions {
   apiKey: string;
   cartesiaApiKey?: string;
   groqApiKey?: string;
+  /** 'custom' = TTS BYO via endpoint HTTP do cliente (config em customTts). */
+  ttsProvider?: 'cartesia' | 'custom';
+  /** 'custom' = STT BYO via endpoint HTTP do cliente (config em customStt). */
+  sttProvider?: 'groq' | 'custom';
+  customTts?: CustomTtsConnectConfig;
+  customStt?: CustomSttConnectConfig;
   systemPrompt: string;
   model?: string;
   voiceName?: string;

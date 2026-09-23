@@ -21,6 +21,8 @@ import { CascadeVoiceProvider } from './providers/cascade-voice.provider';
 import { IVoiceProvider } from './providers/voice-provider.interface';
 import { CartesiaTtsService } from './services/cartesia-tts.service';
 import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
+import { CustomHttpTtsService } from './services/custom-http-tts.service';
+import { CustomHttpSttService } from './services/custom-http-stt.service';
 import { SileroVadService } from './services/silero-vad.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { AudioGateService } from './services/audio-gate.service';
@@ -107,6 +109,8 @@ export class VoiceGateway
     private readonly redis: RedisService,
     private readonly cartesiaTtsService: CartesiaTtsService,
     private readonly groqWhisperSttService: GroqWhisperSttService,
+    private readonly customHttpTtsService: CustomHttpTtsService,
+    private readonly customHttpSttService: CustomHttpSttService,
     private readonly sileroVadService: SileroVadService,
     private readonly keyResolver: ProviderKeyResolverService,
     @Optional()
@@ -126,6 +130,42 @@ export class VoiceGateway
         } catch {}
       }
     }
+  }
+
+  /**
+   * Resolve a config BYO de um provider custom (chave via BYOK/env,
+   * não-secretos via metadata do cliente) — mesma regra do VoiceSessionFactory.
+   */
+  private async resolveCustomSettings(
+    clientId: string,
+    provider: 'tts-custom' | 'stt-custom',
+  ): Promise<
+    | {
+        baseUrl: string;
+        apiKey: string;
+        voice?: string;
+        sampleRate?: number;
+        timeoutMs?: number;
+      }
+    | null
+  > {
+    const apiKey = await this.keyResolver.resolveApiKey(clientId, provider);
+    const settings = await this.keyResolver.resolveProviderSettings(
+      clientId,
+      provider,
+    );
+    const cfg = (settings || {}) as Record<string, any>;
+    const baseUrl = cfg.baseUrl || cfg.base_url;
+    if (!baseUrl) return null;
+    const sampleRateRaw = cfg.output_sample_rate || cfg.sampleRate;
+    const timeoutRaw = cfg.timeout_ms || cfg.timeoutMs;
+    return {
+      baseUrl: `${baseUrl}`.trim(),
+      apiKey,
+      voice: cfg.voice ? `${cfg.voice}`.trim() : undefined,
+      sampleRate: sampleRateRaw ? Number(sampleRateRaw) : undefined,
+      timeoutMs: timeoutRaw ? Number(timeoutRaw) : undefined,
+    };
   }
 
   handleConnection(clientWs: AuthenticatedWebSocket) {
@@ -1337,13 +1377,67 @@ export class VoiceGateway
               let provider: IVoiceProvider;
               let cartesiaApiKey = '';
               let groqApiKey = '';
+              // BYO Voice: provider escolhido no agente (tts_provider/stt_provider)
+              const ttsProviderChoice =
+                ((agent as any)?.tts_provider as string) ||
+                (clientMeta.tts_provider as string) ||
+                '';
+              const sttProviderChoice =
+                ((agent as any)?.stt_provider as string) ||
+                (clientMeta.stt_provider as string) ||
+                '';
+              const ttsProvider: 'cartesia' | 'custom' =
+                ttsProviderChoice === 'custom' ? 'custom' : 'cartesia';
+              const sttProvider: 'groq' | 'custom' =
+                sttProviderChoice === 'custom' ? 'custom' : 'groq';
+              session.ttsProvider = ttsProvider;
+              let customTts:
+                | {
+                    baseUrl: string;
+                    apiKey: string;
+                    voice?: string;
+                    sampleRate?: number;
+                    timeoutMs?: number;
+                  }
+                | undefined;
+              let customStt:
+                | { baseUrl: string; apiKey: string; timeoutMs?: number }
+                | undefined;
 
               if (voiceEngine === 'hybrid') {
-                if (session.clientId) {
+                if (ttsProvider === 'custom' && session.clientId) {
+                  const settings = await this.resolveCustomSettings(
+                    session.clientId,
+                    'tts-custom',
+                  );
+                  if (settings) {
+                    customTts = settings;
+                  } else {
+                    this.logger.warn(
+                      `[VoiceGateway] tts_provider=custom sem config 'tts-custom' (clientId=${session.clientId}). Usando Cartesia.`,
+                    );
+                  }
+                }
+                if (ttsProvider !== 'custom' && session.clientId) {
                   cartesiaApiKey = await this.keyResolver.resolveApiKey(
                     session.clientId,
                     'cartesia',
                   );
+                }
+                if (sttProvider === 'custom' && session.clientId) {
+                  const settings = await this.resolveCustomSettings(
+                    session.clientId,
+                    'stt-custom',
+                  );
+                  if (settings) {
+                    customStt = {
+                      baseUrl: settings.baseUrl,
+                      apiKey: settings.apiKey,
+                      timeoutMs: settings.timeoutMs,
+                    };
+                  }
+                }
+                if (sttProvider !== 'custom' && session.clientId) {
                   groqApiKey = await this.keyResolver.resolveApiKey(
                     session.clientId,
                     'groq',
@@ -1361,8 +1455,12 @@ export class VoiceGateway
                   session.model = 'gemini-2.5-flash-lite';
                 }
                 provider = new CascadeVoiceProvider(
-                  this.cartesiaTtsService,
-                  this.groqWhisperSttService,
+                  ttsProvider === 'custom'
+                    ? this.customHttpTtsService
+                    : this.cartesiaTtsService,
+                  sttProvider === 'custom'
+                    ? this.customHttpSttService
+                    : this.groqWhisperSttService,
                   this.sileroVadService,
                 );
               } else {
@@ -1381,6 +1479,10 @@ export class VoiceGateway
                 apiKey,
                 cartesiaApiKey,
                 groqApiKey,
+                ttsProvider,
+                sttProvider,
+                customTts,
+                customStt,
                 model: session.model,
                 voiceName: session.voiceName,
                 systemPrompt,
@@ -1485,22 +1587,33 @@ export class VoiceGateway
                       ) {
                         try {
                           const isHybrid = voiceEngine === 'hybrid';
-                          const ttsProvider = isHybrid ? 'cartesia' : 'google';
-                          const resolvedApiKey = isHybrid
-                            ? cartesiaApiKey ||
-                              this.configService.get('CARTESIA_API_KEY') ||
-                              process.env.CARTESIA_API_KEY ||
-                              ''
-                            : apiKey ||
-                              this.configService.get('GEMINI_API_KEY') ||
-                              process.env.GEMINI_API_KEY ||
-                              '';
+                          const greetingTtsProvider = isHybrid
+                            ? ttsProvider === 'custom' && customTts
+                              ? 'custom'
+                              : 'cartesia'
+                            : 'google';
+                          const resolvedApiKey =
+                            greetingTtsProvider === 'custom'
+                              ? customTts?.apiKey || ''
+                              : isHybrid
+                                ? cartesiaApiKey ||
+                                  this.configService.get('CARTESIA_API_KEY') ||
+                                  process.env.CARTESIA_API_KEY ||
+                                  ''
+                                : apiKey ||
+                                  this.configService.get('GEMINI_API_KEY') ||
+                                  process.env.GEMINI_API_KEY ||
+                                  '';
 
                           const voiceId =
-                            session.voiceName ||
-                            (isHybrid
-                              ? 'cb2694c3-715f-4da9-99f3-1c974fff2928'
-                              : 'Aoede');
+                            greetingTtsProvider === 'custom'
+                              ? customTts?.voice ||
+                                session.voiceName ||
+                                'synexa-custom-voice'
+                              : session.voiceName ||
+                                (isHybrid
+                                  ? 'cb2694c3-715f-4da9-99f3-1c974fff2928'
+                                  : 'Aoede');
 
                           const customerName =
                             (session.state.nome as string) ||
@@ -1514,7 +1627,7 @@ export class VoiceGateway
                                 {
                                   companyId: session.companyId!,
                                   agentId: agent.id,
-                                  provider: ttsProvider,
+                                  provider: greetingTtsProvider,
                                   voiceId,
                                   template: variation,
                                   customerName,
@@ -1523,6 +1636,10 @@ export class VoiceGateway
                                     unknown
                                   >,
                                   apiKey: resolvedApiKey,
+                                  customTts:
+                                    greetingTtsProvider === 'custom'
+                                      ? customTts
+                                      : undefined,
                                 },
                               );
 
@@ -1587,7 +1704,7 @@ export class VoiceGateway
 
                               sendDebug(
                                 'session',
-                                `⚡ Saudação inicial reproduzida (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${ttsProvider} | Texto: "${res.text}"`,
+                                `⚡ Saudação inicial reproduzida (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${greetingTtsProvider} | Texto: "${res.text}"`,
                                 { fromCache: res.fromCache, text: res.text },
                                 'success',
                               );

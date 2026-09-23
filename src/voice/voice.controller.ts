@@ -89,12 +89,52 @@ export class VoiceController {
 
     const voiceEngine = (capabilities.voice_engine as string) || 'live_api';
     const isHybrid = voiceEngine === 'hybrid';
-    const provider = isHybrid ? 'cartesia' : 'google';
+    const ttsProviderChoice =
+      (agent.tts_provider as string) || (capabilities.tts_provider as string);
+    const provider =
+      isHybrid && ttsProviderChoice === 'custom'
+        ? 'custom'
+        : isHybrid
+          ? 'cartesia'
+          : 'google';
 
-    const apiKey = await this.keyResolver.resolveApiKey(
-      agent.client_id,
-      provider,
-    );
+    let customTts: {
+      baseUrl: string;
+      apiKey?: string;
+      voice?: string;
+      sampleRate?: number;
+      timeoutMs?: number;
+    } | undefined;
+    let apiKey = '';
+    if (provider === 'custom') {
+      const settings = await this.keyResolver.resolveProviderSettings(
+        agent.client_id,
+        'tts-custom',
+      );
+      const baseUrl = (settings.baseUrl || settings.base_url) as
+        | string
+        | undefined;
+      if (!baseUrl) {
+        return {
+          ok: false,
+          error:
+            "TTS customizado não configurado: cadastre a URL em Provedores (BYOK) como 'tts-custom'",
+        };
+      }
+      apiKey = await this.keyResolver.resolveApiKey(
+        agent.client_id,
+        'tts-custom',
+      );
+      customTts = {
+        baseUrl: baseUrl,
+        apiKey,
+        voice: (settings.voice as string) || undefined,
+        sampleRate: Number(settings.output_sample_rate) || undefined,
+        timeoutMs: Number(settings.timeout_ms) || undefined,
+      };
+    } else {
+      apiKey = await this.keyResolver.resolveApiKey(agent.client_id, provider);
+    }
 
     if (!apiKey) {
       return {
@@ -104,8 +144,12 @@ export class VoiceController {
     }
 
     const voiceId =
-      (capabilities.voice_name as string) ||
-      (isHybrid ? 'cb2694c3-715f-4da9-99f3-1c974fff2928' : 'Aoede');
+      provider === 'custom'
+        ? customTts?.voice ||
+          (capabilities.voice_name as string) ||
+          'synexa-custom-voice'
+        : (capabilities.voice_name as string) ||
+          (isHybrid ? 'cb2694c3-715f-4da9-99f3-1c974fff2928' : 'Aoede');
 
     const totalStats = { total: 0, cached: 0, synthesized: 0, failed: 0 };
     for (const template of variations) {
@@ -117,6 +161,7 @@ export class VoiceController {
         template,
         names,
         apiKey,
+        customTts: provider === 'custom' ? customTts : undefined,
       });
       totalStats.total += res.total;
       totalStats.cached += res.cached;

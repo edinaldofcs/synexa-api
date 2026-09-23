@@ -12,6 +12,14 @@ export interface TtsSynthesizeOptions {
   sampleRate?: number;
   /** Idioma da síntese (padrão: 'pt') */
   language?: string;
+  /** Config do endpoint BYO do cliente (obrigatória para provider 'custom') */
+  customTts?: {
+    baseUrl: string;
+    apiKey?: string;
+    voice?: string;
+    sampleRate?: number;
+    timeoutMs?: number;
+  };
 }
 
 /**
