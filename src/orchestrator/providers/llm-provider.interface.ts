@@ -30,7 +30,6 @@ export interface AgentChatParams {
     citation_policy?: string;
   };
   ragContext?: string;
-  webSearchResults?: string;
   onToolCall: (
     toolName: string,
     args: Record<string, unknown>,

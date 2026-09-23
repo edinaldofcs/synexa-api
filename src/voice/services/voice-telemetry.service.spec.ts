@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { VoiceTelemetryService } from './voice-telemetry.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
-import { InteractionsService } from '../../interactions/interactions.service';
+import { InteractionSyncService } from './interaction-sync.service';
 import { VoiceClientSession } from '../sessions/voice-client-session';
 
 describe('VoiceTelemetryService', () => {
@@ -39,7 +39,7 @@ describe('VoiceTelemetryService', () => {
         VoiceTelemetryService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: ModelPricingService, useValue: pricingMock },
-        { provide: InteractionsService, useValue: interactionsMock },
+        { provide: InteractionSyncService, useValue: interactionsMock },
       ],
     }).compile();
 

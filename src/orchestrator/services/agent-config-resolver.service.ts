@@ -99,7 +99,6 @@ export class AgentConfigResolver {
       citation_policy: { policy: 'optional' },
       allowed_knowledge_base_ids: [],
       allowed_tool_names: [],
-      web_search_allowed: false,
       temperature: 0.3,
     };
   }
@@ -111,7 +110,6 @@ export class AgentConfigResolver {
   ): AgentConfig & { agentId: string; llmProvider?: string } {
     const transitions =
       (painelAgent?.transitions as Record<string, unknown>) || {};
-    const ws = (transitions.web_search as Record<string, unknown>) || {};
 
     let systemPrompt =
       painelAgent?.system_prompt || 'You are a helpful assistant.';
@@ -143,7 +141,6 @@ export class AgentConfigResolver {
       allowed_tool_names: Array.isArray(painelAgent?.allowed_tool_names)
         ? (painelAgent.allowed_tool_names as string[])
         : [],
-      web_search_allowed: ws.enabled !== false,
       temperature: 0.3,
     };
   }

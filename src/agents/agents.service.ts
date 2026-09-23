@@ -7,7 +7,6 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
-import { WebSearchConfigDto } from './dto/web-search-config.dto';
 import {
   PreviewPromptDto,
   SimulateSequenceDto,
@@ -166,87 +165,6 @@ export class AgentsService {
       await this.agentsRepository.remove(id);
     if (removedAgent) void this.metadataService.refresh(removedAgent.client_id);
     return result;
-  }
-
-  async getWebSearchConfig(agentId: string, companyId: string) {
-    const agent = await this.agentsRepository.findOne(agentId);
-    const client = await this.prisma.painel_clients.findUnique({
-      where: { id: agent.client_id },
-      select: { company_id: true },
-    });
-    if (!client || client.company_id !== companyId) {
-      throw new NotFoundException(`Agent with ID ${agentId} not found`);
-    }
-
-    const transitions = (agent.transitions as Record<string, unknown>) || {};
-    const webSearch = (transitions.web_search as Record<string, unknown>) || {};
-
-    return {
-      enabled: webSearch.enabled !== false,
-    };
-  }
-
-  async updateWebSearchConfig(
-    agentId: string,
-    dto: WebSearchConfigDto,
-    companyId: string,
-  ) {
-    const agent = await this.agentsRepository.findOne(agentId);
-    const client = await this.prisma.painel_clients.findUnique({
-      where: { id: agent.client_id },
-      select: { company_id: true },
-    });
-    if (!client || client.company_id !== companyId) {
-      throw new NotFoundException(`Agent with ID ${agentId} not found`);
-    }
-
-    const transitions = (agent.transitions as Record<string, unknown>) || {};
-    const updated = {
-      ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
-    };
-
-    transitions.web_search = updated;
-
-    await this.agentsRepository.update(agentId, {
-      transitions: transitions as any,
-    });
-
-    void this.metadataService.refresh(agent.client_id);
-
-    return {
-      enabled: updated.enabled !== false,
-    };
-  }
-
-  async getAllWebSearchConfigs(companyId: string) {
-    const agents = await this.prisma.painel_agents.findMany({
-      where: { painel_clients: { company_id: companyId } },
-      select: {
-        id: true,
-        service_step: true,
-        client_id: true,
-        model: true,
-        is_active: true,
-        transitions: true,
-      },
-      orderBy: { execution_order: 'asc' },
-    });
-
-    return agents.map((agent) => {
-      const transitions = (agent.transitions as Record<string, unknown>) || {};
-      const webSearch =
-        (transitions.web_search as Record<string, unknown>) || {};
-      return {
-        agent_id: agent.id,
-        agent_name: agent.service_step,
-        client_id: agent.client_id,
-        model: agent.model,
-        is_active: agent.is_active,
-        web_search: {
-          enabled: webSearch.enabled !== false,
-        },
-      };
-    });
   }
 
   async previewPrompt(

@@ -26,8 +26,6 @@ describe('ApiToolExecutorService - chaining tenant scope & cycle guard', () => {
     prisma as never,
     {} as never,
     {} as never,
-    { requestHandoff: jest.fn() } as never,
-    {} as never,
   );
 
   const fetchMock = (

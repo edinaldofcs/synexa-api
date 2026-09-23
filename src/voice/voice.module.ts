@@ -17,11 +17,10 @@ import { TelephonyAdapterFactory } from './adapters/telephony-adapter.factory';
 import { TelephonyEndpointResolverService } from './services/telephony-endpoint-resolver.service';
 import { VoiceSessionFactory } from './services/voice-session.factory';
 import { VoiceTelemetryService } from './services/voice-telemetry.service';
+import { InteractionSyncService } from './services/interaction-sync.service';
 import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
 import { VoiceToolsService } from './voice-tools.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
-import { AnalyticsModule } from '../analytics/analytics.module';
-import { InteractionsModule } from '../interactions/interactions.module';
 import { SessionService } from '../common/auth/session.service';
 import { CartesiaTtsService } from './services/cartesia-tts.service';
 import { GroqWhisperSttService } from './services/groq-whisper-stt.service';
@@ -39,8 +38,6 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
 @Module({
   imports: [
     CommonModule,
-    AnalyticsModule,
-    InteractionsModule,
     ...(voiceStandalone
       ? [ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])]
       : []),
@@ -62,6 +59,7 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     TelephonyEndpointResolverService,
     VoiceSessionFactory,
     VoiceTelemetryService,
+    InteractionSyncService,
     ModelPricingService,
     ProviderKeyResolverService,
     VoiceToolsService,

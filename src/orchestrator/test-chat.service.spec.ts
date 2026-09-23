@@ -5,7 +5,6 @@ import { RedisService } from '../common/redis/redis.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { MediaService } from '../media/media.service';
 import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
-import { AnalyticsService } from '../analytics/analytics.service';
 import { ApiToolExecutorService } from './services/api-tool-executor.service';
 import { LlmToolLoopService } from './services/llm-tool-loop.service';
 import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
@@ -164,12 +163,6 @@ describe('TestChatService', () => {
         {
           provide: SessionDataTransformerService,
           useValue: { transform: jest.fn().mockReturnValue({ cliente: 'x' }) },
-        },
-        {
-          provide: AnalyticsService,
-          useValue: {
-            evaluateAndRecord: jest.fn().mockResolvedValue(undefined),
-          },
         },
         { provide: ApiToolExecutorService, useValue: mockApiToolExecutor },
         { provide: LlmToolLoopService, useValue: mockLlmToolLoop },

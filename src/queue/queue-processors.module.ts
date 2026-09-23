@@ -12,7 +12,6 @@ import { CommonModule } from '../common/common.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
-import { WebSearchModule } from '../agents/web-search/web-search.module';
 import { MediaModule } from '../media/media.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
@@ -86,7 +85,7 @@ export class QueueProcessorsModule implements OnModuleInit {
       imports.push(ConversationsModule);
     }
     if (sourceQueues.has(QUEUE_AGENT)) {
-      imports.push(OrchestratorModule, WebSearchModule);
+      imports.push(OrchestratorModule);
     }
     if (sourceQueues.has(QUEUE_DISPATCHER)) {
       imports.push(forwardRef(() => ChannelsModule));

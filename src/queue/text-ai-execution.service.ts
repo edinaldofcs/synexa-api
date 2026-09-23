@@ -207,23 +207,6 @@ export class TextAiExecutionService {
 
   /** Portado 1:1 de AgentProcessor.process — orquestra LLM e encadeia resposta. */
   async processWithAgent(data: AgentJobData): Promise<void> {
-    // Se a conversa estiver em modo manual (operador humano), a IA não responde.
-    const conversation = await this.prisma.conversations.findUnique({
-      where: { id: data.conversation_id },
-      select: { mode: true, assigned_to: true },
-    });
-
-    if (conversation?.mode === 'manual') {
-      this.logger.log(
-        {
-          conversation_id: data.conversation_id,
-          assigned_to: conversation.assigned_to,
-        },
-        'Conversa em modo manual. IA ignorada.',
-      );
-      return;
-    }
-
     const lockKey = `lock:agent:${data.conversation_id}`;
     const acquired = await this.redisService.acquireLock(lockKey, 60);
     if (!acquired) {

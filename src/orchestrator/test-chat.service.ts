@@ -23,7 +23,6 @@ import {
 import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
 import { ModelPricingService } from './services/model-pricing.service';
 import { ConversationsService } from '../conversations/conversations.service';
-import { AnalyticsService } from '../analytics/analytics.service';
 import { MediaService } from '../media/media.service';
 import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 import {
@@ -36,7 +35,7 @@ import {
   LlmToolLoopService,
   type MemoryMessage,
 } from './services/llm-tool-loop.service';
-import { extractFunnelFromState } from '../interactions/utils/funnel-mapping.util';
+import { extractFunnelFromState } from '../common/utils/funnel-mapping.util';
 
 const TEST_CHAT_CONTEXT_KEY = 'test_chat_context_variables';
 const PAINEL_MESSAGES_LIMIT = 50;
@@ -128,7 +127,6 @@ export class TestChatService {
     private readonly conversationsService: ConversationsService,
     private readonly mediaService: MediaService,
     private readonly sessionDataTransformer: SessionDataTransformerService,
-    private readonly analyticsService: AnalyticsService,
     private readonly apiToolExecutor: ApiToolExecutorService,
     private readonly llmToolLoop: LlmToolLoopService,
   ) {}
@@ -780,7 +778,7 @@ export class TestChatService {
             });
 
             // Handoff imediato retorna antes do bloco normal de finalização:
-            // grava Analytics/Session Data aqui para não perder o registro do turno.
+            // grava Session Data aqui para não perder o registro do turno.
             const immediateSessionRecord =
               await this.recordAnalyticsAndSessionData({
                 clientId,
@@ -789,7 +787,6 @@ export class TestChatService {
                 originChannel,
                 contextVariables: immediateResult.contextVariables,
                 state,
-                toolCalls: immediateResult.result.toolCalls || [],
                 client,
                 conversationRecord,
               });
@@ -844,7 +841,6 @@ export class TestChatService {
           originChannel,
           contextVariables,
           state,
-          toolCalls: result.toolCalls || [],
           client,
           conversationRecord,
         });
@@ -1040,7 +1036,7 @@ export class TestChatService {
 
   /**
    * P31: leitura única da conversa por turno (com end_users para o bloco de
-   * session data/analytics). O resultado é cacheado em `conversationRecord` no send().
+   * session data). O resultado é cacheado em `conversationRecord` no send().
    */
   private loadConversationRecord(conversationId: string) {
     return this.prisma.conversations.findUnique({
@@ -1753,10 +1749,10 @@ export class TestChatService {
   }
 
   /**
-   * Grava Analytics (marcadores de negócio), o sessionRecord transformado e o
-   * contexto no metadata da conversa. Extraída do fluxo principal para
-   * também ser invocada no handoff imediato, que retorna antes do bloco
-   * normal de finalização. Retorna o sessionRecord (quando produzido).
+   * Grava o sessionRecord transformado e o contexto no metadata da conversa.
+   * Extraída do fluxo principal para também ser invocada no handoff imediato,
+   * que retorna antes do bloco normal de finalização. Retorna o sessionRecord
+   * (quando produzido).
    */
   private async recordAnalyticsAndSessionData(params: {
     clientId?: string;
@@ -1765,7 +1761,6 @@ export class TestChatService {
     originChannel?: string;
     contextVariables: Record<string, unknown>;
     state: Record<string, unknown>;
-    toolCalls: Array<{ name?: string }>;
     client?: Awaited<ReturnType<TestChatService['loadPainelClient']>>;
     conversationRecord?: Awaited<
       ReturnType<TestChatService['loadConversationRecord']>
@@ -1778,7 +1773,6 @@ export class TestChatService {
       originChannel,
       contextVariables,
       state,
-      toolCalls,
       client,
       conversationRecord,
     } = params;
@@ -1794,23 +1788,6 @@ export class TestChatService {
         ...contextVariables,
         ...state,
       };
-
-      // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
-      if (clientId && companyId) {
-        await this.analyticsService.evaluateAndRecord({
-          clientId,
-          companyId,
-          conversationId,
-          endUserId: freshConv?.end_user_id || null,
-          originChannel: originChannel,
-          toolNames: toolCalls
-            .map((call) => call?.name)
-            .filter(
-              (name: unknown): name is string => typeof name === 'string',
-            ),
-          state: combinedState,
-        });
-      }
 
       sessionRecord = this.sessionDataTransformer.transform({
         sessionState: combinedState,

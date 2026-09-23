@@ -4,7 +4,6 @@ export interface AgentCapabilities {
   audio_in: boolean;
   audio_out: boolean;
   rag: boolean;
-  web_search: boolean;
   tools: boolean;
 }
 
@@ -14,7 +13,6 @@ export const DEFAULT_CAPABILITIES: AgentCapabilities = {
   audio_in: false,
   audio_out: false,
   rag: false,
-  web_search: true,
   tools: true,
 };
 
@@ -31,6 +29,5 @@ export interface AgentConfig {
   citation_policy: CitationPolicy;
   allowed_knowledge_base_ids: string[];
   allowed_tool_names: string[];
-  web_search_allowed: boolean;
   temperature?: number;
 }

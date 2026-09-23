@@ -28,7 +28,7 @@ import {
 } from '../services/voice-runtime.util';
 
 import { VoiceGreetingCacheService } from '../services/voice-greeting-cache.service';
-import { extractFunnelFromState } from '../../interactions/utils/funnel-mapping.util';
+import { extractFunnelFromState } from '../../common/utils/funnel-mapping.util';
 import { evaluateConditionsWithDetails } from '../../orchestrator/utils/condition-evaluator.util';
 
 export interface VoiceGateRuntimeConfig {

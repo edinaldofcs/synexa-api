@@ -1,7 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { ConversationsService } from '../../conversations/conversations.service';
-import { WebSearchService } from '../../agents/web-search/web-search.service';
 import { RagSearchService } from './rag-search.service';
 import { ProviderKeyResolverService } from './provider-key-resolver.service';
 import {
@@ -12,13 +10,11 @@ import {
 import { resolveChainedApiId } from '../../common/utils/api-chaining.util';
 import { validateWebhookUrl } from '../../common/utils/ssrf-guard';
 import {
-  HANDOFF_TOOL_NAME,
   LEGACY_TOOL_NAMES,
   RAG_SEARCH_TOOL_ID,
 } from '../constants/tools.constants';
 
 export {
-  HANDOFF_TOOL_NAME,
   LEGACY_TOOL_NAMES,
   RAG_SEARCH_TOOL_ID,
 } from '../constants/tools.constants';
@@ -91,9 +87,7 @@ export class ApiToolExecutorService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly webSearchService: WebSearchService,
     private readonly ragSearchService: RagSearchService,
-    private readonly conversationsService: ConversationsService,
     private readonly providerKeyResolver: ProviderKeyResolverService,
   ) {}
 
@@ -127,16 +121,8 @@ export class ApiToolExecutorService {
       availableTools,
     );
 
-    const capabilities = this.asRecord(transitions.capabilities);
-    const webSearch = this.asRecord(transitions.web_search);
-    if (capabilities.web_search !== false && webSearch.enabled !== false) {
-      apiTools.push(this.buildNativeWebSearchApiTool());
-    }
     if (this.canUseNativeRag(params.agentConfig)) {
       apiTools.push(this.buildNativeRagApiTool());
-    }
-    if (availableTools.includes(HANDOFF_TOOL_NAME)) {
-      apiTools.push(this.buildNativeHandoffApiTool());
     }
 
     const subagentTools = await this.loadSubagentTools(
@@ -245,23 +231,6 @@ export class ApiToolExecutorService {
     return `${slug || 'tool'}_${id.replace(/-/g, '_')}`;
   }
 
-  buildNativeWebSearchApiTool(): ApiTool {
-    const def = this.webSearchService.getToolDefinition();
-    const id = this.webSearchService.getNativeToolId();
-    return {
-      id,
-      name: def.name,
-      functionName: id,
-      description: def.description,
-      method: 'NATIVE',
-      url: null,
-      headers: null,
-      body: null,
-      parameters: def.parameters,
-      extract_data: null,
-    };
-  }
-
   buildNativeRagApiTool(): ApiTool {
     const def = this.ragSearchService.ragToolDefinition();
     return {
@@ -274,31 +243,6 @@ export class ApiToolExecutorService {
       headers: null,
       body: null,
       parameters: def.parameters,
-      extract_data: null,
-    };
-  }
-
-  buildNativeHandoffApiTool(): ApiTool {
-    return {
-      id: 'transfer_to_human',
-      name: 'transfer_to_human',
-      functionName: 'transfer_to_human',
-      description:
-        'Transfere o atendimento para um atendente humano / operador. Use SEMPRE que o cliente pedir para falar com um humano, atendente, suporte humano ou quando o problema não puder ser resolvido pela IA.',
-      method: 'NATIVE',
-      url: null,
-      headers: null,
-      body: null,
-      parameters: {
-        type: 'object',
-        properties: {
-          reason: {
-            type: 'string',
-            description: 'Motivo da transferência para o atendente humano',
-          },
-        },
-        required: [],
-      },
       extract_data: null,
     };
   }
@@ -353,7 +297,6 @@ export class ApiToolExecutorService {
         transitions.capabilities,
       ) as Partial<AgentCapabilities>),
     };
-    const webSearch = this.asRecord(transitions.web_search);
     const allowedKnowledgeBaseIds = Array.isArray(
       transitions.allowed_knowledge_base_ids,
     )
@@ -377,14 +320,13 @@ export class ApiToolExecutorService {
       citation_policy: { policy: 'optional' },
       allowed_knowledge_base_ids: allowedKnowledgeBaseIds,
       allowed_tool_names: allowedToolNames,
-      web_search_allowed: webSearch.enabled !== false,
       temperature: 0.3,
     };
   }
 
   // ── Execução de tool calls ──────────────────────────────────────
 
-  /** Despacha um tool call do LLM (nativa web/RAG/handoff, subagente ou API). */
+  /** Despacha um tool call do LLM (nativa RAG, subagente ou API). */
   async executeToolCall(params: {
     tool?: ApiTool;
     functionName: string;
@@ -393,19 +335,8 @@ export class ApiToolExecutorService {
   }): Promise<ToolCallDebug> {
     const { tool, functionName, args, context } = params;
 
-    const isNativeWeb =
-      functionName === this.webSearchService.getNativeToolId();
     const isNativeRag = functionName === RAG_SEARCH_TOOL_ID;
-    const isNativeHandoff =
-      functionName === 'transfer_to_human' ||
-      functionName === 'request_handoff';
     const isSubagent = functionName.startsWith('subagent_');
-
-    if (isNativeWeb) {
-      const nativeArgs = this.withFallbackQuery(args, context.message);
-      const result = await this.webSearchService.execute(nativeArgs);
-      return { name: 'web_search', arguments: nativeArgs, result };
-    }
 
     if (isNativeRag) {
       const nativeArgs = this.withFallbackQuery(args, context.message);
@@ -422,22 +353,6 @@ export class ApiToolExecutorService {
         },
         result,
       };
-    }
-
-    if (isNativeHandoff) {
-      const convId = context.nativeRagContext?.conversationId;
-      if (convId) {
-        await this.conversationsService.requestHandoff(convId, {
-          reason: String(args.reason || 'solicitação no chat'),
-          requested_by: 'ai_tool',
-        });
-      }
-      const result = {
-        status: 'transferred',
-        message:
-          'Atendimento transferido para a equipe de atendentes humanos com sucesso. Avise o cliente cordialmente que um operador irá atendê-lo a seguir.',
-      };
-      return { name: 'transfer_to_human', arguments: args, result };
     }
 
     if (isSubagent) {

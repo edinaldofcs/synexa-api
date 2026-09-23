@@ -1,9 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { createHash } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { RedisService } from '../../common/redis/redis.service';
-import { ConversationsService } from '../../conversations/conversations.service';
-import { WebSearchService } from '../../agents/web-search/web-search.service';
 import { NativeToolsService } from '../../common/services/native-tools.service';
 import type { AgentConfig } from '../types/capabilities.types';
 import { sanitize } from '../../common/utils/sanitize-log.util';
@@ -14,9 +10,6 @@ export class ToolCallDispatcher {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly redisService: RedisService,
-    private readonly conversationsService: ConversationsService,
-    private readonly webSearchService: WebSearchService,
     private readonly nativeToolsService: NativeToolsService,
   ) {}
 
@@ -44,16 +37,6 @@ export class ToolCallDispatcher {
           return onSearchRag(String(args.query || ''), Number(args.limit || 5));
         }
         return { error: 'RAG search handler not registered' };
-      case 'web_search':
-        return this.searchWeb(
-          agentConfig,
-          String(args.query || args.question || args.pergunta || ''),
-          agentRunId,
-          conversationId,
-          messageId,
-          companyId,
-          requestId,
-        );
       case 'media.transcribe':
         return this.transcribeMedia(
           String(args.media_asset_id || ''),
@@ -74,12 +57,6 @@ export class ToolCallDispatcher {
           clientId,
           requestId,
         );
-      case 'transfer_to_human':
-      case 'request_handoff':
-        return this.handleTransferToHuman(
-          conversationId,
-          String(args.reason || 'solicitação do usuário'),
-        );
       case 'validate_variable_part':
       case 'validate_variable':
       case 'set_session_variable':
@@ -91,121 +68,6 @@ export class ToolCallDispatcher {
       default:
         return { result: 'tool_executed', toolName };
     }
-  }
-
-  async searchWeb(
-    agentConfig: AgentConfig,
-    query: string,
-    agentRunId: string,
-    conversationId: string,
-    messageId: string,
-    companyId: string,
-    requestId?: string,
-  ): Promise<{ result: string; sources: string[] }> {
-    const startedAt = Date.now();
-
-    const toolCall = await this.prisma.tool_calls.create({
-      data: {
-        company_id: companyId,
-        client_id:
-          agentConfig.id === 'default'
-            ? '00000000-0000-0000-0000-000000000000'
-            : agentConfig.id,
-        conversation_id: conversationId,
-        message_id: messageId,
-        agent_run_id: agentRunId,
-        request_id: requestId || null,
-        tool_name: 'web_search',
-        tool_type: 'native',
-        arguments: { query } as any,
-        status: 'running',
-      },
-    });
-
-    try {
-      const cacheKey = `websearch:${createHash('md5').update(query.toLowerCase().trim()).digest('hex')}`;
-      const cached = await this.redisService.get<{
-        results: string[];
-        sources: string[];
-      }>(cacheKey);
-
-      if (cached) {
-        await this.completeWebSearchTool(
-          toolCall.id,
-          startedAt,
-          cached.results,
-          cached.sources,
-        );
-        return { result: cached.results.join('\n\n'), sources: cached.sources };
-      }
-
-      const searchResponse = await this.webSearchService.execute({ query });
-
-      const searchResults: string[] = [];
-      const sources: string[] = [];
-
-      for (const r of searchResponse.results) {
-        searchResults.push(`${r.title}\n${r.snippet}`);
-        sources.push(r.link);
-        if (searchResults.length >= 5) break;
-      }
-
-      if (searchResponse.error && searchResults.length === 0) {
-        throw new Error(searchResponse.error);
-      }
-
-      const resultText =
-        searchResults.length > 0
-          ? searchResults.join('\n\n')
-          : 'Nenhum resultado encontrado.';
-
-      await this.redisService.set(cacheKey, {
-        results: searchResults,
-        sources: sources.slice(0, 5),
-      });
-
-      await this.completeWebSearchTool(
-        toolCall.id,
-        startedAt,
-        searchResults,
-        sources.slice(0, 5),
-      );
-
-      return { result: resultText, sources: sources.slice(0, 5) };
-    } catch (error) {
-      await this.prisma.tool_calls.update({
-        where: { id: toolCall.id },
-        data: {
-          status: 'failed',
-          latency_ms: Date.now() - startedAt,
-          error_message:
-            error instanceof Error ? error.message : 'Web search failed',
-          completed_at: new Date(),
-        },
-      });
-
-      return {
-        result: `Erro na busca web: ${error instanceof Error ? error.message : 'unknown'}`,
-        sources: [],
-      };
-    }
-  }
-
-  private async completeWebSearchTool(
-    toolCallId: string,
-    startedAt: number,
-    results: string[],
-    sources: string[],
-  ) {
-    await this.prisma.tool_calls.update({
-      where: { id: toolCallId },
-      data: {
-        status: 'success',
-        latency_ms: Date.now() - startedAt,
-        result: { count: results.length, sources } as any,
-        completed_at: new Date(),
-      },
-    });
   }
 
   async transcribeMedia(
@@ -290,14 +152,6 @@ export class ToolCallDispatcher {
     };
   }
 
-  webSearchToolDefinition() {
-    const def = this.webSearchService.getToolDefinition();
-    return {
-      ...def,
-      type: 'native' as const,
-    };
-  }
-
   mediaTranscribeToolDefinition() {
     return {
       name: 'media.transcribe',
@@ -334,50 +188,5 @@ export class ToolCallDispatcher {
         required: ['media_asset_id'],
       },
     };
-  }
-
-  transferToHumanToolDefinition() {
-    return {
-      name: 'transfer_to_human',
-      description:
-        'Transfere o atendimento para um atendente humano / operador. Use SEMPRE que o cliente pedir para falar com um humano, atendente, suporte humano ou quando o problema não puder ser resolvido pela IA.',
-      parameters: {
-        type: 'object',
-        properties: {
-          reason: {
-            type: 'string',
-            description:
-              'Motivo da transferência para o atendente humano (ex: "solicitação do cliente", "dúvida complexa").',
-          },
-        },
-        required: [],
-      },
-    };
-  }
-
-  async handleTransferToHuman(
-    conversationId: string,
-    reason: string,
-  ): Promise<{ status: string; message: string }> {
-    this.logger.log(
-      { conversation_id: conversationId, reason },
-      'Tool transfer_to_human executada pela IA',
-    );
-    try {
-      await this.conversationsService.requestHandoff(conversationId, {
-        reason,
-        requested_by: 'ai_tool',
-      });
-      return {
-        status: 'transferred',
-        message:
-          'Atendimento transferido para a equipe de atendentes humanos com sucesso. Avise o usuário cordialmente que um operador irá atendê-lo a seguir.',
-      };
-    } catch (err: any) {
-      return {
-        status: 'error',
-        message: `Não foi possível transferir: ${err.message}`,
-      };
-    }
   }
 }

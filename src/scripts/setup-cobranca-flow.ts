@@ -348,7 +348,7 @@ Seu objetivo é acolher o cliente com cordialidade, solicitar a confirmação do
       } as any,
       transitions: {
         llm_provider: 'gemini',
-        capabilities: { web_search: false, rag: false },
+        capabilities: { rag: false },
       } as any,
     },
     create: {
@@ -374,7 +374,7 @@ Seu objetivo é acolher o cliente com cordialidade, solicitar a confirmação do
       } as any,
       transitions: {
         llm_provider: 'gemini',
-        capabilities: { web_search: false, rag: false },
+        capabilities: { rag: false },
       } as any,
     },
   });
@@ -443,7 +443,7 @@ Débito localizado para regularização imediata.
       } as any,
       transitions: {
         llm_provider: 'gemini',
-        capabilities: { web_search: false, rag: false },
+        capabilities: { rag: false },
       } as any,
     },
     create: {
@@ -475,7 +475,7 @@ Débito localizado para regularização imediata.
       } as any,
       transitions: {
         llm_provider: 'gemini',
-        capabilities: { web_search: false, rag: false },
+        capabilities: { rag: false },
       } as any,
     },
   });
@@ -529,7 +529,7 @@ Você assume a conversa no instante em que o acordo foi registrado no sistema pe
       } as any,
       transitions: {
         llm_provider: 'gemini',
-        capabilities: { web_search: false, rag: false },
+        capabilities: { rag: false },
       } as any,
     },
     create: {
@@ -559,7 +559,7 @@ Você assume a conversa no instante em que o acordo foi registrado no sistema pe
       } as any,
       transitions: {
         llm_provider: 'gemini',
-        capabilities: { web_search: false, rag: false },
+        capabilities: { rag: false },
       } as any,
     },
   });

@@ -92,7 +92,6 @@ function makeGateway(
     configService as any,
     prismaService ?? ({} as any),
     voiceToolsService as any,
-    {} as any,
     nativeToolsService as any,
     {
       flushAiBuffer: jest.fn(),

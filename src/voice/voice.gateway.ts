@@ -32,7 +32,6 @@ import {
   describeEvaluation,
   type ActivationConditionGroup,
 } from '../orchestrator/utils/condition-evaluator.util';
-import { AnalyticsService } from '../analytics/analytics.service';
 import { NativeToolsService } from '../common/services/native-tools.service';
 import { getSessionId } from '../common/auth/auth-cookie';
 import { isUuid } from '../common/utils/uuid.helper';
@@ -103,7 +102,6 @@ export class VoiceGateway
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly voiceToolsService: VoiceToolsService,
-    private readonly analyticsService: AnalyticsService,
     private readonly nativeToolsService: NativeToolsService,
     private readonly telemetryService: VoiceTelemetryService,
     private readonly redis: RedisService,
@@ -1022,21 +1020,6 @@ export class VoiceGateway
                 this.logger.error(
                   `Falha ao enviar toolResponse ao provider: ${err.message}`,
                 );
-              }
-
-              // Analytics: avaliação dos marcadores de negócio pós-tool
-              if (session.clientId && session.companyId) {
-                const toolNames = functionCalls
-                  .filter((call: any) => !call?.name?.startsWith('subagent_'))
-                  .map((call: any) => call.name);
-                await this.analyticsService.evaluateAndRecord({
-                  clientId: session.clientId,
-                  companyId: session.companyId,
-                  conversationId: session.conversationId || undefined,
-                  originChannel: 'voice',
-                  toolNames,
-                  state: session.state,
-                });
               }
 
               if (requestedAgent) {

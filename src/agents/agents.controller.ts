@@ -10,7 +10,6 @@ import {
 import { AgentsService } from './agents.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
-import { WebSearchConfigDto } from './dto/web-search-config.dto';
 import {
   PreviewPromptDto,
   SimulateSequenceDto,
@@ -103,38 +102,12 @@ export class AgentsController {
     return this.agentsService.findAllByClient(clientId, user.company_id);
   }
 
-  @Get('agents/web-search')
-  getAllWebSearchConfigs(@CurrentUser() user: { company_id: string }) {
-    return this.agentsService.getAllWebSearchConfigs(user.company_id);
-  }
-
   @Get('agents/:agentId')
   findOne(
     @Param('agentId') agentId: string,
     @CurrentUser() user: { company_id: string },
   ) {
     return this.agentsService.findOne(agentId, user.company_id);
-  }
-
-  @Get('agents/:agentId/web-search')
-  getWebSearchConfig(
-    @Param('agentId') agentId: string,
-    @CurrentUser() user: { company_id: string },
-  ) {
-    return this.agentsService.getWebSearchConfig(agentId, user.company_id);
-  }
-
-  @Patch('agents/:agentId/web-search')
-  updateWebSearchConfig(
-    @Param('agentId') agentId: string,
-    @Body() dto: WebSearchConfigDto,
-    @CurrentUser() user: { company_id: string },
-  ) {
-    return this.agentsService.updateWebSearchConfig(
-      agentId,
-      dto,
-      user.company_id,
-    );
   }
 
   @Patch('agents/:agentId')

@@ -39,7 +39,6 @@ describe('applyTenantInjection', () => {
     for (const model of [
       'credential_audit_logs',
       'provider_credentials',
-      'business_events',
       'painel_interactions',
       'voice_session_telemetry',
       'telephony_endpoints',

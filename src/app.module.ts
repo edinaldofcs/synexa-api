@@ -7,28 +7,20 @@ import { CommonModule } from './common/common.module';
 import { AuthModule } from './common/auth/auth.module';
 import { MailModule } from './common/mail/mail.module';
 import { AdminModule } from './admin/admin.module';
-import { TablesModule } from './tables/tables.module';
 import { ChatModule } from './chat/chat.module';
 import { ClientsModule } from './clients/clients.module';
 import { AgentsModule } from './agents/agents.module';
 import { TracksModule } from './tracks/tracks.module';
 import { ApisModule } from './apis/apis.module';
-import { AuditModule } from './audit/audit.module';
 import { ChannelsModule } from './channels/channels.module';
-import { ObservabilityModule } from './observability/observability.module';
 import { ConversationsModule } from './conversations/conversations.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { QueueModule } from './queue/queue.module';
 import { MediaModule } from './media/media.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { OrchestratorModule } from './orchestrator/orchestrator.module';
-import { WebSearchModule } from './agents/web-search/web-search.module';
-import { ImportsModule } from './imports/imports.module';
 import { BillingModule } from './billing/billing.module';
-import { AnalyticsModule } from './analytics/analytics.module';
 import { SubagentsModule } from './subagents/subagents.module';
-import { WorkflowVersionsModule } from './workflow-versions/workflow-versions.module';
-import { InteractionsModule } from './interactions/interactions.module';
 import { TelephonyModule } from './telephony/telephony.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -53,28 +45,20 @@ import { AppService } from './app.service';
     MailModule,
     AuthModule.forRoot(),
     AdminModule,
-    TablesModule,
     ChatModule,
     ClientsModule,
     AgentsModule,
     SubagentsModule,
-    WorkflowVersionsModule,
     TracksModule,
     ApisModule,
-    AuditModule,
     ChannelsModule,
-    ObservabilityModule,
     ConversationsModule,
     WebhooksModule,
     QueueModule,
     MediaModule,
     KnowledgeModule,
     OrchestratorModule,
-    WebSearchModule,
-    ImportsModule,
     BillingModule,
-    AnalyticsModule,
-    InteractionsModule,
     TelephonyModule,
   ],
   controllers: [AppController],

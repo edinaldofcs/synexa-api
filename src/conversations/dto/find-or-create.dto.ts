@@ -35,12 +35,6 @@ export interface AddMessagePartDto {
   metadata?: Record<string, unknown>;
 }
 
-export interface HandoffRequestDto {
-  assigned_to?: string;
-  reason?: string;
-  requested_by?: string;
-}
-
 export interface ConversationResult {
   id: string;
   company_id: string;

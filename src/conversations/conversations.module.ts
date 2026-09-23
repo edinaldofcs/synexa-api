@@ -3,8 +3,6 @@ import { CommonModule } from '../common/common.module';
 import { ConversationsController } from './conversations.controller';
 import { ConversationsService } from './conversations.service';
 import { ConversationsRepository } from './repositories/conversations.repository';
-import { OperatorPresenceService } from './operator-presence.service';
-import { HandoffDistributorService } from './handoff-distributor.service';
 
 import { TabulationService } from './services/tabulation.service';
 import { TabulationSchedulerService } from './services/tabulation-scheduler.service';
@@ -15,16 +13,9 @@ import { TabulationSchedulerService } from './services/tabulation-scheduler.serv
   providers: [
     ConversationsService,
     ConversationsRepository,
-    OperatorPresenceService,
-    HandoffDistributorService,
     TabulationService,
     TabulationSchedulerService,
   ],
-  exports: [
-    ConversationsService,
-    OperatorPresenceService,
-    HandoffDistributorService,
-    TabulationService,
-  ],
+  exports: [ConversationsService, TabulationService],
 })
 export class ConversationsModule {}

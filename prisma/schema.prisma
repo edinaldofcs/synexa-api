@@ -25,7 +25,6 @@ model companies {
   media_assets        media_assets[]
   outbox_events       outbox_events[]
   message_events      message_events[]
-  business_events     business_events[]
   tool_calls          tool_calls[]
   agent_runs          agent_runs[]
   knowledge_bases     knowledge_bases[]
@@ -34,7 +33,6 @@ model companies {
   knowledge_embeddings knowledge_embeddings[]
   provider_credentials provider_credentials[]
   credential_audit_logs credential_audit_logs[]
-  workflow_versions   workflow_versions[]
   voice_session_telemetry voice_session_telemetry[]
   telephony_endpoints telephony_endpoints[]
   painel_interactions painel_interactions[]
@@ -91,7 +89,6 @@ model conversations {
   messages            messages[]
   conversation_state  conversation_state[]
   message_events      message_events[]
-  business_events     business_events[]
   tool_calls          tool_calls[]
   agent_runs          agent_runs[]
   voice_session_telemetry voice_session_telemetry?
@@ -223,7 +220,7 @@ model painel_clients {
   agent_name   String?
   logo_url     String?
   logo_icon    String?
-  // Processamento da IA de texto: TRUE = BullMQ (durável); FALSE = execução inline na API
+  // Processamento da IA de texto: TRUE = BullMQ (durÃ¡vel); FALSE = execuÃ§Ã£o inline na API
   queue_enabled Boolean @default(true)
   tabulation_inactivity_minutes Int @default(30)
 
@@ -240,7 +237,6 @@ model painel_clients {
   media_assets        media_assets[]
   outbox_events       outbox_events[]
   message_events      message_events[]
-  business_events     business_events[]
   tool_calls          tool_calls[]
   agent_runs          agent_runs[]
   painel_subagents    painel_subagents[]
@@ -250,7 +246,6 @@ model painel_clients {
   knowledge_embeddings knowledge_embeddings[]
   provider_credentials provider_credentials[]
   credential_audit_logs credential_audit_logs[]
-  workflow_versions   workflow_versions[]
   voice_session_telemetry voice_session_telemetry[]
   telephony_endpoints telephony_endpoints[]
   painel_interactions painel_interactions[]
@@ -318,8 +313,8 @@ model painel_subagents {
   @@index([is_active])
 }
 
-/// Ferramentas de IA do agente: APIs externas configuráveis por cliente,
-/// executadas pelo LLM via function calling (catálogo do ApiToolExecutorService).
+/// Ferramentas de IA do agente: APIs externas configurÃ¡veis por cliente,
+/// executadas pelo LLM via function calling (catÃ¡logo do ApiToolExecutorService).
 model painel_apis {
   id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   client_id        String         @db.Uuid
@@ -343,8 +338,8 @@ model painel_apis {
   painel_agents    painel_agents? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 }
 
-/// Trilhas de Atendimento: situações que o assistente do cliente resolve,
-/// organizadas com contexto visual (ícone, cor, categoria) e frases de exemplo.
+/// Trilhas de Atendimento: situaÃ§Ãµes que o assistente do cliente resolve,
+/// organizadas com contexto visual (Ã­cone, cor, categoria) e frases de exemplo.
 model painel_tracks {
   id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   client_id     String    @db.Uuid
@@ -370,7 +365,7 @@ model painel_tracks {
   @@index([category])
 }
 
-/// Conexões de canal de entrada/saída (WhatsApp, webchat, SIP etc.)
+/// ConexÃµes de canal de entrada/saÃ­da (WhatsApp, webchat, SIP etc.)
 /// que alimentam o roteamento de eventos de mensageria.
 model channel_connections {
   id                          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -454,7 +449,6 @@ model end_users {
   painel_clients      painel_clients      @relation(fields: [client_id], references: [id])
   channel_identities  channel_identities[]
   conversations       conversations[]
-  business_events     business_events[]
 
   @@index([company_id])
   @@index([client_id])
@@ -560,28 +554,6 @@ model message_events {
   @@index([event_type])
 }
 
-model business_events {
-  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id      String    @db.Uuid
-  client_id       String?   @db.Uuid
-  conversation_id String?   @db.Uuid
-  end_user_id     String?   @db.Uuid
-  marker_code     String
-  values          Json?     @default("{}") @db.JsonB
-  origin_channel  String?
-  created_at      DateTime? @default(now()) @db.Timestamptz(6)
-
-  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  conversations  conversations?  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
-  end_users      end_users?      @relation(fields: [end_user_id], references: [id])
-
-  @@unique([conversation_id, marker_code])
-  @@index([company_id, marker_code, created_at])
-  @@index([client_id, marker_code, created_at])
-  @@index([company_id, created_at])
-  @@index([client_id, created_at])
-}
 
 model agent_runs {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -801,28 +773,6 @@ model credential_audit_logs {
   @@index([created_at])
 }
 
-model workflow_versions {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id   String    @db.Uuid
-  client_id    String    @db.Uuid
-  version      Int       @default(1)
-  status       String    @default("draft") // draft, published, archived
-  snapshot     Json      @db.JsonB
-  description  String?
-  base_version Int?      // Origem do snapshot (ex: v1)
-  published_at DateTime? @db.Timestamptz(6)
-  published_by String?   @db.Uuid
-  created_at   DateTime? @default(now()) @db.Timestamptz(6)
-  created_by   String?   @db.Uuid
-
-  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
-
-  @@unique([client_id, version])
-  @@index([company_id])
-  @@index([client_id])
-  @@index([status])
-}
 
 model voice_session_telemetry {
   id                          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -866,10 +816,10 @@ model voice_session_telemetry {
   @@index([created_at])
 }
 
-// ── Telefonia Plug-and-Play ──────────────────────────────────────────────
+// â”€â”€ Telefonia Plug-and-Play â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Cada linha roteia um DID/origem de um discador (NexCore, CallFlex, Twilio
-// SIP, PABX próprio...) para empresa/cliente/agente. A IA fica plug-and-play:
-// novo discador SIP = nova linha aqui; protocolo proprietário = adapter novo.
+// SIP, PABX prÃ³prio...) para empresa/cliente/agente. A IA fica plug-and-play:
+// novo discador SIP = nova linha aqui; protocolo proprietÃ¡rio = adapter novo.
 model telephony_endpoints {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id          String    @db.Uuid
@@ -880,7 +830,7 @@ model telephony_endpoints {
   agent_step          String?
   audio_format        String    @default("g711_ulaw") // g711_ulaw | g711_alaw | pcm_16k | slin_8k
   interaction_mode    String    @default("voice")     // voice | text | both
-  inbound_secret_hash String?   // SHA-256 hex do token de autenticação do ingresso (WS do discador)
+  inbound_secret_hash String?   // SHA-256 hex do token de autenticaÃ§Ã£o do ingresso (WS do discador)
   config              Json?     @default("{}") @db.JsonB
   enabled             Boolean   @default(true)
   created_by          String?   @db.Uuid
@@ -899,25 +849,25 @@ model telephony_endpoints {
 model painel_interactions {
   id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
-  // ── Identificação e Multi-tenancy ──
+  // â”€â”€ IdentificaÃ§Ã£o e Multi-tenancy â”€â”€
   company_id                String    @db.Uuid
   client_id                 String    @db.Uuid
   agent_id                  String?   @db.Uuid
   session_id                String    @unique
 
-  // ── Canal e Direção ──
+  // â”€â”€ Canal e DireÃ§Ã£o â”€â”€
   channel                   String    @default("webchat") // voice_webrtc | voice_sip | whatsapp | webchat | telegram
   direction                 String    @default("inbound") // inbound | outbound
   interaction_mode          String    @default("both")    // voice | text | both
 
-  // ── Interlocutores ──
+  // â”€â”€ Interlocutores â”€â”€
   client_identifier         String?   // CPF, Telefone E.164, Remote JID
-  company_identifier        String?   // DID / Ramal / Número de Origem
+  company_identifier        String?   // DID / Ramal / NÃºmero de Origem
   client_name               String?
   agent_name                String?
 
-  // ── Funil de Atendimento e Cobrança ──
-  /// 1. Alô / Detecção Humana
+  // â”€â”€ Funil de Atendimento e CobranÃ§a â”€â”€
+  /// 1. AlÃ´ / DetecÃ§Ã£o Humana
   has_human_answer          Boolean   @default(false)
   human_answered_at         DateTime? @db.Timestamptz(6)
 
@@ -925,7 +875,7 @@ model painel_interactions {
   is_right_party            Boolean   @default(false)
   right_party_at            DateTime? @db.Timestamptz(6)
 
-  /// 3. CPCA: Contato com a Pessoa Certa com Apresentação da Dívida (Debt Presented)
+  /// 3. CPCA: Contato com a Pessoa Certa com ApresentaÃ§Ã£o da DÃ­vida (Debt Presented)
   is_debt_presented         Boolean   @default(false)
   debt_presented_at         DateTime? @db.Timestamptz(6)
   debt_amount               Decimal?  @db.Decimal(10, 2)
@@ -948,13 +898,13 @@ model painel_interactions {
   tagcode                   String?
   status                    String    @default("ongoing") // ongoing | completed | abandoned | transferred | failed
 
-  // ── Telemetria de Voz e Interrupções (Barge-in) ──
+  // â”€â”€ Telemetria de Voz e InterrupÃ§Ãµes (Barge-in) â”€â”€
   barge_in_count            Int       @default(0)
   avg_barge_in_latency_ms   Int?
   avg_first_byte_latency_ms Int?
   is_answering_machine      Boolean   @default(false)
 
-  // ── Telefonia e Gravação ──
+  // â”€â”€ Telefonia e GravaÃ§Ã£o â”€â”€
   call_id                   String?
   call_status               String?   // answered | busy | no_answer | failed
   recording_url             String?
@@ -962,7 +912,7 @@ model painel_interactions {
   billable_seconds          Int       @default(0)
   hangup_cause              String?
 
-  // ── Consumo de LLM e Métricas ──
+  // â”€â”€ Consumo de LLM e MÃ©tricas â”€â”€
   llm_provider              String?
   llm_model                 String?
   total_tokens              Int       @default(0)
@@ -971,26 +921,26 @@ model painel_interactions {
   estimated_cost_usd        Decimal?  @db.Decimal(10, 6)
   avg_latency_ms            Int?
 
-  // ── Análise Pós-Atendimento ──
+  // â”€â”€ AnÃ¡lise PÃ³s-Atendimento â”€â”€
   sentiment                 String?   // positive | neutral | negative
   summary                   String?   @db.Text
 
-  // ── Conteúdo e Contexto ──
+  // â”€â”€ ConteÃºdo e Contexto â”€â”€
   messages                  Json      @default("[]") @db.JsonB
   context_variables         Json      @default("{}") @db.JsonB
 
-  // ── Timestamps ──
+  // â”€â”€ Timestamps â”€â”€
   created_at                DateTime  @default(now()) @db.Timestamptz(6)
   updated_at                DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
   started_at                DateTime? @db.Timestamptz(6)
   ended_at                  DateTime? @db.Timestamptz(6)
 
-  // ── Relações ──
+  // â”€â”€ RelaÃ§Ãµes â”€â”€
   companies                 companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_clients            painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
   painel_agents             painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
 
-  // ── Índices ──
+  // â”€â”€ Ãndices â”€â”€
   @@index([company_id, client_id, created_at(sort: Desc)])
   @@index([client_id, has_human_answer, is_right_party, is_debt_presented, is_agreement_reached, is_promise_to_pay])
   @@index([company_id, created_at(sort: Desc)])

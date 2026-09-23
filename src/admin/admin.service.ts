@@ -104,7 +104,6 @@ export class AdminService {
       await tx.tool_calls.deleteMany({ where: { company_id: id } });
       await tx.agent_runs.deleteMany({ where: { company_id: id } });
       await tx.message_events.deleteMany({ where: { company_id: id } });
-      await tx.business_events.deleteMany({ where: { company_id: id } });
       await tx.inbound_events.deleteMany({ where: { company_id: id } });
       await tx.outbox_events.deleteMany({ where: { company_id: id } });
 
@@ -124,7 +123,6 @@ export class AdminService {
         where: { company_id: id },
       });
       await tx.telephony_endpoints.deleteMany({ where: { company_id: id } });
-      await tx.workflow_versions.deleteMany({ where: { company_id: id } });
       await tx.media_assets.deleteMany({ where: { company_id: id } });
 
       // 6. Conversas e mensagens (message_parts/conversation_state cascateiam)
@@ -216,13 +214,7 @@ export class AdminService {
         where: { end_user_id: endUserId },
       });
 
-      // 5. Eventos de negocio sobreviventes sem conversa: desvincula titular
-      const businessEvents = await tx.business_events.updateMany({
-        where: { end_user_id: endUserId },
-        data: { end_user_id: null, values: {} },
-      });
-
-      // 6. Interacoes de cobranca: remove conteudo pessoal, preserva valores
+      // 5. Interacoes de cobranca: remove conteudo pessoal, preserva valores
       //    financeiros (obrigacao legal/defesa de direitos - art. 16, II)
       const interactions = await tx.painel_interactions.updateMany({
         where: {
@@ -257,7 +249,6 @@ export class AdminService {
         tool_calls_removed: toolCalls.count,
         agent_runs_removed: agentRuns.count,
         telemetry_anonymized: telemetry.count,
-        business_events_stripped: businessEvents.count,
         interactions_anonymized: interactions.count,
       };
     });

@@ -47,7 +47,6 @@ import {
   isRetryableError,
 } from './utils/retry-with-backoff.util';
 import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
-import { AnalyticsService } from '../analytics/analytics.service';
 
 @Injectable()
 export class OrchestrationService {
@@ -65,7 +64,6 @@ export class OrchestrationService {
     private readonly circuitBreaker: ProviderCircuitBreakerService,
     private readonly fallbackProviderService: FallbackProviderService,
     private readonly sessionDataTransformer: SessionDataTransformerService,
-    private readonly analyticsService: AnalyticsService,
   ) {}
 
   async processMessage(
@@ -807,17 +805,9 @@ export class OrchestrationService {
       tools.push(this.ragSearchService.ragToolDefinition());
     }
 
-    if (agentConfig.capabilities.web_search && agentConfig.web_search_allowed) {
-      tools.push(this.toolCallDispatcher.webSearchToolDefinition());
-    }
-
     if (agentConfig.capabilities.tools) {
       tools.push(this.toolCallDispatcher.mediaTranscribeToolDefinition());
       tools.push(this.toolCallDispatcher.mediaDescribeImageToolDefinition());
-      // Habilitável por agente: só é injetada se selecionada nas ferramentas
-      if (agentConfig.allowed_tool_names.includes('transfer_to_human')) {
-        tools.push(this.toolCallDispatcher.transferToHumanToolDefinition());
-      }
     }
 
     return tools;
@@ -856,19 +846,6 @@ export class OrchestrationService {
         const outputConfig = (clientMeta.session_output_config as any) || null;
         const freshState =
           await this.conversationsService.getState(conversationId);
-
-        // Analytics: avaliação dos marcadores de negócio sobre o estado pós-tool
-        if (conv.client_id) {
-          await this.analyticsService.evaluateAndRecord({
-            clientId: conv.client_id,
-            companyId,
-            conversationId,
-            endUserId: conv.end_user_id || null,
-            originChannel: conv.origin_channel || null,
-            toolNames: calledTools,
-            state: freshState as Record<string, unknown>,
-          });
-        }
 
         const sessionRecord = this.sessionDataTransformer.transform({
           sessionState: freshState,

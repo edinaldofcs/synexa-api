@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
-import { InteractionsService } from '../../interactions/interactions.service';
+import { InteractionSyncService } from './interaction-sync.service';
 import type { VoiceClientSession } from '../sessions/voice-client-session';
 
 export interface VoiceTelemetryPayload {
@@ -34,7 +34,7 @@ export class VoiceTelemetryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: ModelPricingService,
-    private readonly interactionsService: InteractionsService,
+    private readonly interactionsService: InteractionSyncService,
   ) {}
 
   // ── Buffer do turno da IA ───────────────────────────────────────

@@ -14,7 +14,6 @@ describe('AdminService - deleteCompany', () => {
       tool_calls: { deleteMany: jest.fn() },
       agent_runs: { deleteMany: jest.fn() },
       message_events: { deleteMany: jest.fn() },
-      business_events: { deleteMany: jest.fn() },
       inbound_events: { deleteMany: jest.fn() },
       outbox_events: { deleteMany: jest.fn() },
       knowledge_embeddings: { deleteMany: jest.fn() },
@@ -26,7 +25,6 @@ describe('AdminService - deleteCompany', () => {
       painel_interactions: { deleteMany: jest.fn() },
       voice_session_telemetry: { deleteMany: jest.fn() },
       telephony_endpoints: { deleteMany: jest.fn() },
-      workflow_versions: { deleteMany: jest.fn() },
       media_assets: { deleteMany: jest.fn() },
       messages: { deleteMany: jest.fn() },
       conversations: { deleteMany: jest.fn() },
@@ -129,9 +127,6 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
       messages: { deleteMany: jest.fn().mockResolvedValue({ count: 40 }) },
-      business_events: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
       painel_interactions: {
         updateMany: jest.fn().mockResolvedValue({ count: 4 }),
       },

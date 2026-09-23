@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { ConversationsService } from '../conversations/conversations.service';
-import { WebSearchService } from '../agents/web-search/web-search.service';
 import { AgentConfigResolver } from './services/agent-config-resolver.service';
 import { RagSearchService } from './services/rag-search.service';
 import { ToolCallDispatcher } from './services/tool-call-dispatcher.service';
@@ -11,7 +10,6 @@ import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
 import { FallbackProviderService } from './services/fallback-provider.service';
 import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
-import { AnalyticsService } from '../analytics/analytics.service';
 
 jest.mock('./providers/llm-provider.factory', () => ({
   getLLMProvider: jest.fn(),
@@ -111,13 +109,11 @@ describe('OrchestrationService', () => {
       audio_in: false,
       audio_out: false,
       rag: false,
-      web_search: false,
       tools: true,
     },
     citation_policy: { policy: 'optional' },
     allowed_knowledge_base_ids: [],
     allowed_tool_names: [],
-    web_search_allowed: false,
     temperature: 0.3,
   };
 
@@ -148,12 +144,6 @@ describe('OrchestrationService', () => {
 
   const mockToolCallDispatcher = {
     dispatch: jest.fn().mockResolvedValue({ result: 'tool_executed' }),
-    webSearchToolDefinition: jest.fn().mockReturnValue({
-      name: 'web_search',
-      type: 'native',
-      description: 'Mock web search',
-      parameters: {},
-    }),
     mediaTranscribeToolDefinition: jest.fn().mockReturnValue({
       name: 'media.transcribe',
       type: 'native',
@@ -174,11 +164,6 @@ describe('OrchestrationService', () => {
     setVariableToolDefinition: jest.fn().mockReturnValue({
       name: 'set_variable',
       description: 'Mock set variable',
-      parameters: {},
-    }),
-    transferToHumanToolDefinition: jest.fn().mockReturnValue({
-      name: 'transfer_to_human',
-      description: 'Mock transfer to human',
       parameters: {},
     }),
   };
@@ -227,33 +212,6 @@ describe('OrchestrationService', () => {
           provide: SessionDataTransformerService,
           useValue: {
             transform: jest.fn().mockReturnValue({}),
-          },
-        },
-        {
-          provide: AnalyticsService,
-          useValue: {
-            evaluateAndRecord: jest.fn().mockResolvedValue(undefined),
-          },
-        },
-        {
-          provide: WebSearchService,
-          useValue: {
-            getToolDefinition: jest.fn().mockReturnValue({
-              name: 'web_search',
-              description: 'Mock web search',
-              parameters: {},
-            }),
-            getNativeToolId: jest.fn().mockReturnValue('web_search'),
-            execute: jest.fn().mockResolvedValue({
-              results: [
-                {
-                  title: 'Mock result',
-                  snippet: 'Mock snippet',
-                  link: 'https://example.com',
-                },
-              ],
-              source: 'OpenRouter',
-            }),
           },
         },
       ],

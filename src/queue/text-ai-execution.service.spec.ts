@@ -73,9 +73,6 @@ describe('TextAiExecutionService', () => {
         create: jest.fn(),
       },
       end_users: { create: jest.fn() },
-      conversations: {
-        findUnique: jest.fn().mockResolvedValue({ mode: 'bot' }),
-      },
     };
     redis = {
       acquireLock: jest.fn().mockResolvedValue(true),
@@ -189,19 +186,6 @@ describe('TextAiExecutionService', () => {
     } finally {
       jest.useRealTimers();
     }
-  });
-
-  it('conversa em modo manual interrompe agente antes da LLM', async () => {
-    prisma.conversations.findUnique.mockResolvedValue({
-      mode: 'manual',
-      assigned_to: 'op-1',
-    });
-
-    await service.dispatchAgent(AGENT_DATA);
-    await new Promise((r) => setImmediate(r));
-
-    expect(orchestration.processMessage).not.toHaveBeenCalled();
-    expect(deadLetterCalls(redis)).toHaveLength(0);
   });
 
   it('dispatch respeita o mesmo toggle para envio externo', async () => {

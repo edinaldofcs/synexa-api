@@ -29,8 +29,6 @@ export const TENANT_SUPPORTED_MODELS = [
   'knowledge_documents',
   'knowledge_chunks',
   'knowledge_embeddings',
-  'workflow_versions',
-  'business_events',
   'provider_credentials',
   'credential_audit_logs',
   'painel_interactions',
