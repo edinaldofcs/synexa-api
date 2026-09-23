@@ -478,10 +478,14 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
         } catch {}
       }
       adapter.hangup('internal_error');
-    } finally {
+      // Broadcast de encerramento APENAS quando a sessão falhou ao iniciar.
+      // O fim legítimo da chamada é transmitido por adapter.onCallEnd /
+      // onSessionEnd / hangup manual — nunca aqui, pois o `start()` resolve
+      // em ~2s (só configura provider + transporte) e um broadcast neste
+      // ponto matava as animações AO VIVO do Flow Studio no meio da ligação.
       if (isTestRoute) {
         const current = this.testSessions.get(String(channelId));
-        if (current) current.broadcastCallEnd('flow_cleanup');
+        if (current) current.broadcastCallEnd('start_failed');
       }
     }
   }

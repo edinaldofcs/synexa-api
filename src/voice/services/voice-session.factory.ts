@@ -272,7 +272,13 @@ export class VoiceSessionFactory {
       greetingCacheService: this.greetingCacheService,
       config: {
         ...config,
-        onSessionEnd: () => this.releaseSession(clientId),
+        // Compõe em vez de sobrescrever: o ingresso (AudioSocket/FastAGI) usa
+        // onSessionEnd para transmitir o fim visual da chamada ao Flow Studio;
+        // o factory precisa também liberar o slot global de sessões.
+        onSessionEnd: () => {
+          overrides?.onSessionEnd?.();
+          this.releaseSession(clientId);
+        },
       },
     });
 

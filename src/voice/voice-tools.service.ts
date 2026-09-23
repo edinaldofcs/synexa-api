@@ -8,6 +8,10 @@ import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 
 const TOOLS_CACHE_TTL_SECONDS = 30;
 
+/** Forma de UUID v4 usada para distinguir id de nome legado (next_tool). */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface VoiceToolDeclaration {
   name: string;
   description: string;
@@ -98,9 +102,37 @@ export class VoiceToolsService {
       headers: api.headers,
       body: api.body,
       extract_data: api.extract_data,
-      next_api_id: (api as any).next_api_id || api.next_tool,
+      next_api_id: this.resolveNextApiId(api as any),
       next_tool: api.next_tool,
     }));
+  }
+
+  /**
+   * Resolve o alvo de encadeamento de uma API na ordem correta:
+   * 1. `next_api_id` da linha crua (se existir como coluna);
+   * 2. `next_api_id` salvo na metadata (jsonb headers) pelo painel — UUID;
+   * 3. `next_tool` legado (nome da API filha).
+   *
+   * O repositório de APIs (ApisRepository.splitPayload) guarda campos
+   * desconhecidos — inclusive `next_api_id` — dentro do jsonb `headers`,
+   * e o frontend os recebe de volta via `flat()`. A linha crua do Prisma
+   * NÃO possui essas chaves, então sem esta leitura o encadeamento de voz
+   * resolve pelo NOME (`next_tool`) e a busca por id falha (P2023) ou
+   * perde o UUID salvo pelo painel.
+   */
+  private resolveNextApiId(api: Record<string, any>): string | null {
+    const meta = this.asRecord(api.headers);
+    const candidates = [
+      (api as any).next_api_id,
+      meta.next_api_id,
+      api.next_tool,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim() !== '') {
+        return candidate.trim();
+      }
+    }
+    return null;
   }
 
   async getAgentSubagents(
@@ -166,7 +198,7 @@ export class VoiceToolsService {
           headers: dbApi.headers,
           body: dbApi.body,
           extract_data: dbApi.extract_data,
-          next_api_id: (dbApi as any).next_api_id || dbApi.next_tool,
+          next_api_id: this.resolveNextApiId(dbApi as any),
           next_tool: dbApi.next_tool,
         } as any;
       }
@@ -300,14 +332,29 @@ export class VoiceToolsService {
             `Ciclo detectado no encadeamento de APIs de voz (${nextApiId}); cadeia abortada`,
           );
         } else {
+          this.logger.log(
+            `🔗 [VoiceTools] Encadeamento resolvido: ${tool.apiName} ➔ ${nextApiId}`,
+          );
           try {
+            // O filtro `id` do Prisma é UUID: passar um nome legado
+            // (next_tool, ex: "offers") lança P2023 e aborta a cadeia em
+            // silêncio. O filtro por id só entra quando o valor tem forma
+            // de UUID; nomes resolvem apenas por `name`.
+            const isUuidValue = UUID_SHAPE.test(nextApiId.trim());
             const nextApi = await this.prisma.painel_apis.findFirst({
               where: {
-                OR: [{ id: nextApiId }, { name: nextApiId }],
+                ...(isUuidValue
+                  ? { OR: [{ id: nextApiId }, { name: nextApiId }] }
+                  : { name: nextApiId }),
                 active: true,
                 client_id: clientId,
               },
             });
+            if (!nextApi) {
+              this.logger.warn(
+                `API encadeada não encontrada no catálogo do cliente (${nextApiId}); cadeia abortada`,
+              );
+            }
             if (nextApi) {
               const nextArgs = {
                 ...args,
