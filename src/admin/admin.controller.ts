@@ -68,8 +68,16 @@ export class AdminController {
 
   @Get('users')
   @Roles(ROLES.PLATFORM_ADMIN, ROLES.COMPANY_ADMIN)
-  async listUsers(@CurrentUser() actor: ActorContext) {
-    return this.adminService.listUsers(actor);
+  async listUsers(
+    @CurrentUser() actor: ActorContext,
+    @Query('company_id') companyId?: string,
+  ) {
+    // Filtro por empresa disponível apenas ao platform_admin (lista global);
+    // company_admin é sempre escopado à própria empresa no service.
+    return this.adminService.listUsers(
+      actor,
+      actor.role === ROLES.PLATFORM_ADMIN ? companyId : undefined,
+    );
   }
 
   @Get('users/:id')

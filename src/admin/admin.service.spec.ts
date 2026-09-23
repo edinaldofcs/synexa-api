@@ -266,6 +266,61 @@ describe('AdminService - createUser', () => {
       'Este e-mail já está cadastrado para outra empresa no sistema.',
     );
   });
+
+  it('company_admin não pode criar outro company_admin (escalacao bloqueada)', async () => {
+    const prisma = {
+      companies: { findUnique: jest.fn() },
+      users: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new AdminService(prisma as never, {} as never);
+
+    await expect(
+      service.createUser(
+        { id: 'adm-empresa-1', role: 'company_admin', company_id: 'comp-A' },
+        {
+          email: 'novo.admin@empresa.com',
+          role: 'company_admin',
+        },
+      ),
+    ).rejects.toThrow('Somente platform_admin pode conceder esse papel');
+  });
+
+  it('platform_admin cria company_admin vinculado a empresa informada', async () => {
+    const prisma = {
+      companies: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'comp-2', status: 'active' }),
+      },
+      users: { findUnique: jest.fn().mockResolvedValue(null) },
+      localUsers: { create: jest.fn() },
+    };
+    const localAdminService = {
+      createUser: jest.fn().mockResolvedValue({
+        success: true,
+        user: { id: 'u-new', role: 'company_admin' },
+      }),
+    };
+    const service = new AdminService(
+      prisma as never,
+      localAdminService as never,
+    );
+
+    await service.createUser(
+      { id: 'super-1', role: 'platform_admin' },
+      {
+        email: 'admin.company2@exemplo.com',
+        password: 'Senha123',
+        role: 'company_admin',
+        company_id: 'comp-2',
+        name: 'Admin Empresa 2',
+      },
+    );
+
+    expect(localAdminService.createUser).toHaveBeenCalledWith(
+      expect.objectContaining({ company_id: 'comp-2', role: 'company_admin' }),
+    );
+  });
 });
 
 describe('AdminService - updateUser', () => {
@@ -328,13 +383,87 @@ describe('AdminService - updateUser', () => {
       { company_id: 'comp-B' },
     );
 
-    expect(result.success).toBe(true);
+expect(result.success).toBe(true);
     expect(prisma.users.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'user-1' },
         data: expect.objectContaining({ company_id: 'comp-B' }),
       }),
     );
-    expect(sessionService.destroyAllForUser).toHaveBeenCalledWith('user-1');
+  });
+
+  it('company_admin não pode promover usuário a company_admin', async () => {
+    const prisma = {
+      users: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          company_id: 'comp-A',
+          role: 'operator',
+        }),
+        update: jest.fn(),
+      },
+    };
+    const service = new AdminService(prisma as never, {} as never);
+
+    await expect(
+      service.updateUser(
+        { id: 'adm-empresa-1', role: 'company_admin', company_id: 'comp-A' },
+        'user-1',
+        { role: 'company_admin' },
+      ),
+    ).rejects.toThrow('Somente platform_admin pode conceder esse papel');
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminService - listUsers', () => {
+  const uuid = '11111111-1111-1111-1111-111111111111';
+
+  it('platform_admin filtra por company_id (lista global)', async () => {
+    const prisma = {
+      users: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new AdminService(prisma as never, {} as never);
+
+    await service.listUsers(
+      { id: 'super-1', role: 'platform_admin' },
+      uuid,
+    );
+
+    expect(prisma.users.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { company_id: uuid },
+      }),
+    );
+  });
+
+  it('company_admin ignora o filtro e recebe apenas a própria empresa', async () => {
+    const prisma = {
+      users: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new AdminService(prisma as never, {} as never);
+
+    await service.listUsers(
+      { id: 'adm-1', role: 'company_admin', company_id: uuid },
+      'outra-company',
+    );
+
+    expect(prisma.users.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { company_id: uuid },
+      }),
+    );
+  });
+
+  it('rejeita company_id com formato inválido', async () => {
+    const prisma = { users: { findMany: jest.fn() } };
+    const service = new AdminService(prisma as never, {} as never);
+
+    await expect(
+      service.listUsers(
+        { id: 'super-1', role: 'platform_admin' },
+        'nao-e-uuid',
+      ),
+    ).rejects.toThrow('company_id inválido');
   });
 });

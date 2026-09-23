@@ -16,6 +16,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { LocalAdminService } from '../common/auth/local/local-admin.service';
 import { SessionService } from '../common/auth/session.service';
 import { ROLES, isPlatformAdmin } from '../common/auth/roles.constants';
+import { UUID_SHAPE_REGEX } from '../common/validators/uuid-shape';
 
 export interface ActorContext {
   id: string;
@@ -271,9 +272,17 @@ export class AdminService {
 
   // ── Users (platform_admin global; company_admin restrito à própria empresa) ──
 
-  async listUsers(actor: ActorContext) {
+  async listUsers(actor: ActorContext, companyId?: string) {
     if (isPlatformAdmin(actor.role)) {
+      const where: Record<string, unknown> = {};
+      if (companyId) {
+        if (!UUID_SHAPE_REGEX.test(companyId)) {
+          throw new BadRequestException('company_id inválido');
+        }
+        where.company_id = companyId;
+      }
       return this.prisma.users.findMany({
+        where,
         orderBy: { created_at: 'desc' },
         select: this.userPublicSelect(),
       });
@@ -309,7 +318,13 @@ export class AdminService {
   ) {
     const role = data.role || ROLES.OPERATOR;
 
-    if (role === ROLES.PLATFORM_ADMIN && !isPlatformAdmin(actor.role)) {
+    // Escalação de privilégio: papéis administrativos são exclusivos da
+    // plataforma — company_admin só cria acessos operacionais na própria
+    // empresa (operator/viewer).
+    if (
+      (role === ROLES.PLATFORM_ADMIN || role === ROLES.COMPANY_ADMIN) &&
+      !isPlatformAdmin(actor.role)
+    ) {
       throw new ForbiddenException(
         'Somente platform_admin pode conceder esse papel',
       );
@@ -442,7 +457,13 @@ export class AdminService {
     const target = await this.findUserOrThrow(id);
     this.assertCanManageUser(actor, target);
 
-    if (dto.role === ROLES.PLATFORM_ADMIN && !isPlatformAdmin(actor.role)) {
+    // Mesma trava do createUser: company_admin não pode promover ninguém a
+    // company_admin/platform_admin (nem a si mesmo via outro usuário).
+    if (
+      (dto.role === ROLES.PLATFORM_ADMIN ||
+        dto.role === ROLES.COMPANY_ADMIN) &&
+      !isPlatformAdmin(actor.role)
+    ) {
       throw new ForbiddenException(
         'Somente platform_admin pode conceder esse papel',
       );
@@ -551,13 +572,14 @@ export class AdminService {
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
-  private userPublicSelect(): Record<string, boolean> {
+  private userPublicSelect() {
     return {
       id: true,
       email: true,
       name: true,
       role: true,
       company_id: true,
+      companies: { select: { name: true } },
       created_at: true,
       updated_at: true,
     };
