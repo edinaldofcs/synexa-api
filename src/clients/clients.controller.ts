@@ -14,6 +14,7 @@ import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
+import { TestVoiceProviderDto } from './dto/test-voice-provider.dto';
 import { ClientsService } from './clients.service';
 
 @Controller()
@@ -110,6 +111,24 @@ export class ClientsController {
       user.id,
       rawIp,
       userAgent,
+      user.role,
+    );
+  }
+
+  /**
+   * Testa um endpoint BYO de TTS/STT (conectividade, auth e formato) sem
+   * precisar fazer uma chamada real.
+   */
+  @Post('clients/:id/voice-providers/test')
+  testVoiceProvider(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: TestVoiceProviderDto,
+    @CurrentUser() user: { company_id: string; role?: string },
+  ) {
+    return this.clientsService.testVoiceProvider(
+      id,
+      body,
+      user.company_id,
       user.role,
     );
   }

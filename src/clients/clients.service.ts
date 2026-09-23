@@ -16,6 +16,13 @@ import { TracksRepository } from '../tracks/repositories/tracks.repository';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
+import { TestVoiceProviderDto } from './dto/test-voice-provider.dto';
+import {
+  assertPublicHttpUrl,
+  customHttpTimeout,
+  MAX_CUSTOM_RESPONSE_BYTES,
+} from '../common/utils/url-guard.util';
+import { pcmToWav } from '../common/utils/pcm-wav.util';
 import { ClientsRepository } from './repositories/clients.repository';
 import { encrypt, decrypt } from '../common/utils/crypto.util';
 import { CredentialAuditService } from '../common/services/credential-audit.service';
@@ -733,15 +740,21 @@ export class ClientsService {
       }
 
       const hasStoredKey = Boolean(rawKey && rawKey.trim().length > 0);
+      const legacyExtras = decryptedLegacy[cred.provider] || {};
       masked[cred.provider] = {
         hasStoredKey,
         apiKey: hasStoredKey ? this.maskApiKey(rawKey) : '',
         enabledModels: Array.isArray(cred.enabled_models)
-          ? cred.enabled_models
+          ? (cred.enabled_models as string[])
           : [],
         healthStatus: cred.health_status || 'unknown',
         lastTestedAt: cred.last_tested_at || null,
         lastUsedAt: cred.last_used_at || null,
+        // BYO Voice: config não-secreta (vem do metadata)
+        baseUrl: legacyExtras?.baseUrl || legacyExtras?.base_url || '',
+        voice: legacyExtras?.voice || '',
+        output_sample_rate: legacyExtras?.output_sample_rate || undefined,
+        timeout_ms: legacyExtras?.timeout_ms || undefined,
       };
     }
 
@@ -852,9 +865,8 @@ export class ClientsService {
 
     return Object.fromEntries(
       Object.entries(providers as Record<string, any>).map(
-        ([providerId, config]) => [
-          providerId,
-          {
+        ([providerId, config]) => {
+          const normalized: Record<string, any> = {
             apiKey: typeof config?.apiKey === 'string' ? config.apiKey : '',
             enabledModels: Array.isArray(config?.enabledModels)
               ? config.enabledModels.filter(
@@ -862,8 +874,26 @@ export class ClientsService {
                     typeof model === 'string',
                 )
               : [],
-          },
-        ],
+          };
+
+          // BYO Voice (tts-custom/stt-custom): preserva config não-secreta
+          const baseUrl =
+            (typeof config?.baseUrl === 'string' && config.baseUrl.trim()) ||
+            (typeof config?.base_url === 'string' && config.base_url.trim()) ||
+            '';
+          if (baseUrl) normalized.baseUrl = baseUrl.trim();
+          if (config?.voice) normalized.voice = String(config.voice).trim();
+          const sampleRate = Number(config?.output_sample_rate);
+          if (Number.isFinite(sampleRate) && sampleRate > 0) {
+            normalized.output_sample_rate = sampleRate;
+          }
+          const timeoutMs = Number(config?.timeout_ms);
+          if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+            normalized.timeout_ms = timeoutMs;
+          }
+
+          return [providerId, normalized];
+        },
       ),
     );
   }
@@ -1017,5 +1047,138 @@ export class ClientsService {
     );
     metadata.llm_providers_updated_at = new Date().toISOString();
     return this.clientsRepository.update(clientId, { metadata });
+  }
+
+  /**
+   * Testa conectividade/auth/formato de um endpoint BYO de TTS ou STT.
+   * TTS: sintetiza uma frase curta e valida áudio PCM/WAV na resposta.
+   * STT: envia um WAV de 1s (tom 440Hz) e valida resposta com texto.
+   */
+  async testVoiceProvider(
+    clientId: string,
+    dto: TestVoiceProviderDto,
+    companyId: string,
+    role?: string,
+  ) {
+    await this.validateClientAccess(clientId, companyId, role);
+
+    let url: URL;
+    try {
+      url = assertPublicHttpUrl(
+        dto.baseUrl,
+        dto.kind === 'tts' ? 'TTS customizado' : 'STT customizado',
+      );
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+
+    const timeoutMs = customHttpTimeout(dto.timeoutMs);
+    const startMs = Date.now();
+
+    try {
+      if (dto.kind === 'tts') {
+        const res = await fetch(url.toString(), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dto.apiKey || ''}`,
+          },
+          body: JSON.stringify({
+            text: 'Teste de voz do Synexa.',
+            voice: dto.voice || undefined,
+            language: 'pt',
+            format: 'pcm_s16le',
+            sample_rate: dto.outputSampleRate || 24000,
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        const latencyMs = Date.now() - startMs;
+        if (!res.ok) {
+          return {
+            ok: false,
+            latencyMs,
+            error: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+          };
+        }
+        const contentType = res.headers.get('content-type') || '';
+        let bytes = 0;
+        if (contentType.includes('application/json')) {
+          const json = (await res.json()) as { audio_base64?: string };
+          bytes = json.audio_base64
+            ? Buffer.byteLength(json.audio_base64, 'base64')
+            : 0;
+        } else {
+          const buf = Buffer.from(await res.arrayBuffer());
+          bytes = buf.length;
+        }
+        if (bytes === 0) {
+          return {
+            ok: false,
+            latencyMs,
+            error: 'Resposta sem áudio (esperado PCM bruto, WAV ou audio_base64)',
+          };
+        }
+        return {
+          ok: true,
+          latencyMs,
+          bytes,
+          message: `TTS respondeu ${bytes} bytes de áudio em ${latencyMs}ms`,
+        };
+      }
+
+      // STT: WAV mono 16kHz de 1s com tom 440Hz
+      const sampleRate = 16000;
+      const pcm = Buffer.alloc(sampleRate * 2);
+      for (let i = 0; i < sampleRate; i++) {
+        pcm.writeInt16LE(
+          Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 8000),
+          i * 2,
+        );
+      }
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'audio/wav',
+          Authorization: `Bearer ${dto.apiKey || ''}`,
+        },
+        body: new Uint8Array(pcmToWav(pcm, sampleRate)),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const latencyMs = Date.now() - startMs;
+      if (!res.ok) {
+        return {
+          ok: false,
+          latencyMs,
+          error: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+        };
+      }
+      const raw = await res.text();
+      if (raw.length > MAX_CUSTOM_RESPONSE_BYTES / 10) {
+        return { ok: false, latencyMs, error: 'Resposta excessivamente grande' };
+      }
+      let text = raw.trim();
+      try {
+        const json = JSON.parse(raw) as {
+          text?: string;
+          transcript?: string;
+          result?: string;
+        };
+        text = (json.text || json.transcript || json.result || '').trim();
+      } catch {
+        // resposta texto puro
+      }
+      return {
+        ok: true,
+        latencyMs,
+        text,
+        message: `STT respondeu em ${latencyMs}ms: "${text || '(sem texto para o tom de teste — normal)'}"`,
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        latencyMs: Date.now() - startMs,
+        error: err.message || 'Falha na conexão',
+      };
+    }
   }
 }
