@@ -471,6 +471,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
     } catch (err: any) {
       this.logger.error(
         `[AudioSocket] Erro ao processar chamada ${channelId}: ${err.message}`,
+        err?.stack,
       );
       if (session) {
         try {

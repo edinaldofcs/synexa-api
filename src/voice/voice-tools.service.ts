@@ -89,10 +89,13 @@ export class VoiceToolsService {
       orderBy: { execution_order: 'asc' },
     });
 
+    // Nomes de tool únicos por cliente (slug puro, sem UUID). O LLM chama
+    // pelo nome amigável; duplicados recebem sufixo numérico.
+    const takenNames = new Set<string>();
     return apis.map((api) => ({
       id: api.id,
       apiName: api.name,
-      name: this.toFunctionName(api.name, api.id),
+      name: this.toFunctionName(api.name, api.id, takenNames),
       description:
         api.description ||
         `Executa a API "${api.name}" e retorna os dados encontrados.`,
@@ -179,13 +182,30 @@ export class VoiceToolsService {
       const allApis = await this.prisma.painel_apis.findMany({
         where: { client_id: clientId, active: true },
       });
-      const dbApi = allApis.find(
-        (a) =>
-          this.toFunctionName(a.name, a.id) === functionName ||
+      // Legado: nomes no formato antigo `slug_uuid` (sessões em andamento
+      // e caches) continuam resolvendo — comparo o prefixo antes do UUID.
+      const legacySlug = functionName
+        .toLowerCase()
+        .replace(/_[0-9a-f]{8}(_[0-9a-f]{4}){3}_[0-9a-f]{12}$/i, '')
+        .replace(/_+$/, '');
+      const dbApi = allApis.find((a) => {
+        const fn = this.toFunctionName(a.name, a.id);
+        return (
+          fn === functionName ||
           a.id === functionName ||
           a.name.toLowerCase().trim() === functionName.toLowerCase().trim() ||
-          a.name === functionName,
-      );
+          a.name === functionName ||
+          (legacySlug && legacySlug === fn) ||
+          (legacySlug &&
+            legacySlug ===
+              a.name
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-zA-Z0-9_-]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .toLowerCase())
+        );
+      });
       if (dbApi) {
         tool = {
           id: dbApi.id,
@@ -987,7 +1007,14 @@ export class VoiceToolsService {
     return [...url.matchAll(/{([^}]+)}/g)].map((match) => match[1]);
   }
 
-  private toFunctionName(name: string, id: string) {
+  /**
+   * Nome da function declarada ao LLM: slug do nome da API, único por
+   * cliente (nomes duplicados ganham sufixo numérico: offers, offers_2).
+   * Sem UUID no nome — muito mais natural para o agente chamar.
+   * A resolução reverse (functionName -> API) aceita o nome da API e o
+   * slug, mantendo compatibilidade com tools legadas com UUID.
+   */
+  private toFunctionName(name: string, id: string, taken?: Set<string>) {
     const slug = name
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
@@ -995,7 +1022,17 @@ export class VoiceToolsService {
       .replace(/^_+|_+$/g, '')
       .slice(0, 40)
       .toLowerCase();
-    return `${slug || 'tool'}_${id.replace(/-/g, '_')}`;
+    const base = slug || 'tool';
+    if (!taken) return base;
+    if (!taken.has(base)) {
+      taken.add(base);
+      return base;
+    }
+    let n = 2;
+    while (taken.has(`${base}_${n}`)) n++;
+    const unique = `${base}_${n}`;
+    taken.add(unique);
+    return unique;
   }
 
   private toSubagentFunctionName(name: string) {

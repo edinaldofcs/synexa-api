@@ -398,6 +398,16 @@ export class VoiceCallSession {
         apiKey: this.config.apiKey || process.env.GEMINI_API_KEY || '',
         cartesiaApiKey: this.config.cartesiaApiKey,
         groqApiKey: this.config.groqApiKey,
+        ttsProvider:
+          this.config.ttsProvider === 'custom' && this.config.customTts
+            ? 'custom'
+            : 'cartesia',
+        sttProvider:
+          this.config.sttProvider === 'custom' && this.config.customStt
+            ? 'custom'
+            : 'groq',
+        customTts: this.config.customTts,
+        customStt: this.config.customStt,
         model:
           this.config.voiceEngine === 'hybrid'
             ? this.config.model &&
@@ -605,6 +615,7 @@ export class VoiceCallSession {
                   }
 
                   const isSubagent = call.name.startsWith('subagent_');
+                  const toolCallStarted = Date.now();
                   const response = isSubagent
                     ? await this.voiceToolsService.executeSubagent(
                         clientId,
@@ -619,6 +630,33 @@ export class VoiceCallSession {
                         call.args || {},
                         this.sessionState,
                       );
+
+                  // Persiste a chamada de tool da voz na tabela tool_calls
+                  // (não-bloqueante: falha de log não pode derrubar a chamada)
+                  if (this.config.companyId) {
+                    void this.prisma.tool_calls
+                      .create({
+                        data: {
+                          company_id: this.config.companyId,
+                          client_id: clientId,
+                          conversation_id: this.conversationId,
+                          tool_name: call.name,
+                          tool_type: isSubagent ? 'subagent' : 'api',
+                          arguments: (call.args || {}) as any,
+                          result: (response || {}) as any,
+                          status:
+                            (response as any)?.ok === false
+                              ? 'failed'
+                              : 'success',
+                          latency_ms: Date.now() - toolCallStarted,
+                          error_message:
+                            (response as any)?.error ||
+                            (response as any)?.message ||
+                            null,
+                        },
+                      })
+                      .catch(() => undefined);
+                  }
 
                   if (
                     response &&
