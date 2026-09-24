@@ -16,13 +16,20 @@ const BLOCKED_HOSTNAMES = new Set([
   'instance-data',
 ]);
 
+/**
+ * Hosts especiais permitidos apenas fora de produção: o gateway roda em
+ * container e precisa alcançar serviços do próprio host do desenvolvedor
+ * (ex: servidor ASR/TTS local em host.docker.internal:7860).
+ */
+const DEV_ALLOWED_HOSTS = new Set(['host.docker.internal']);
+
 /** Limite de resposta de endpoints custom (10MB). */
 export const MAX_CUSTOM_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 /**
  * Validação SSRF para endpoints HTTP configurados por tenants (BYO TTS/STT).
  * Regras: https obrigatório em produção (http liberado em dev/test),
- * hosts privados/loopback bloqueados.
+ * hosts privados/loopback bloqueados — exceto host.docker.internal em dev.
  */
 export function assertPublicHttpUrl(
   rawUrl: string,
@@ -49,18 +56,23 @@ export function assertPublicHttpUrl(
   }
 
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  const isDevAllowed = !isProd && DEV_ALLOWED_HOSTS.has(hostname);
 
-  if (BLOCKED_HOSTNAMES.has(hostname)) {
+  if (BLOCKED_HOSTNAMES.has(hostname) && !isDevAllowed) {
     throw new Error(`${label}: host não permitido (${hostname})`);
   }
 
-  if (isPrivateIpv4(hostname)) {
+  if (!isDevAllowed && isPrivateIpv4(hostname)) {
     throw new Error(
       `${label}: endereços privados/loopback não são permitidos (${hostname})`,
     );
   }
 
-  if (hostname.startsWith('[') && /(::1|fc00|fc01|fd00|fe80)/i.test(hostname)) {
+  if (
+    !isDevAllowed &&
+    hostname.startsWith('[') &&
+    /(::1|fc00|fc01|fd00|fe80)/i.test(hostname)
+  ) {
     throw new Error(`${label}: endereço IPv6 privado não permitido`);
   }
 
