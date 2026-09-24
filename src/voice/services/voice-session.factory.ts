@@ -271,10 +271,10 @@ export class VoiceSessionFactory {
         resolvedVoiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
       }
       liveProvider = new CascadeVoiceProvider(
-        ttsProvider === 'custom'
+        ttsProvider === 'custom' && customTts
           ? this.customHttpTtsService
           : this.cartesiaTtsService,
-        sttProvider === 'custom'
+        sttProvider === 'custom' && customStt
           ? this.customHttpSttService
           : this.groqWhisperSttService,
         this.sileroVadService,
@@ -301,10 +301,19 @@ export class VoiceSessionFactory {
         undefined,
       voiceName: resolvedVoiceName,
       voiceEngine: voiceEngine as 'hybrid' | 'live_api',
-      ttsProvider: voiceEngine === 'hybrid' ? ttsProvider : 'google',
-      sttProvider: voiceEngine === 'hybrid' ? sttProvider : 'groq',
-      customTts,
-      customStt,
+      // Provider efetivo: só é 'custom' quando a config BYO existe
+      ttsProvider:
+        voiceEngine === 'hybrid' && ttsProvider === 'custom' && customTts
+          ? 'custom'
+          : voiceEngine === 'hybrid'
+            ? 'cartesia'
+            : 'google',
+      sttProvider:
+        voiceEngine === 'hybrid' && sttProvider === 'custom' && customStt
+          ? 'custom'
+          : 'groq',
+      customTts: ttsProvider === 'custom' ? customTts : undefined,
+      customStt: sttProvider === 'custom' ? customStt : undefined,
       cartesiaApiKey,
       groqApiKey,
       gateConfig: resolveAudioGateConfig(client),

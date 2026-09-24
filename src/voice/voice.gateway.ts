@@ -1458,10 +1458,10 @@ export class VoiceGateway
                   session.model = 'gemini-2.5-flash-lite';
                 }
                 provider = new CascadeVoiceProvider(
-                  ttsProvider === 'custom'
+                  ttsProvider === 'custom' && customTts
                     ? this.customHttpTtsService
                     : this.cartesiaTtsService,
-                  sttProvider === 'custom'
+                  sttProvider === 'custom' && customStt
                     ? this.customHttpSttService
                     : this.groqWhisperSttService,
                   this.sileroVadService,
@@ -1482,10 +1482,15 @@ export class VoiceGateway
                 apiKey,
                 cartesiaApiKey,
                 groqApiKey,
-                ttsProvider,
-                sttProvider,
-                customTts,
-                customStt,
+                // Provider efetivo: só 'custom' quando a config BYO existe
+                ttsProvider:
+                  ttsProvider === 'custom' && customTts
+                    ? 'custom'
+                    : 'cartesia',
+                sttProvider:
+                  sttProvider === 'custom' && customStt ? 'custom' : 'groq',
+                customTts: ttsProvider === 'custom' ? customTts : undefined,
+                customStt: sttProvider === 'custom' ? customStt : undefined,
                 model: session.model,
                 voiceName: session.voiceName,
                 systemPrompt,

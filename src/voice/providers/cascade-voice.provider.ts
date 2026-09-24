@@ -106,8 +106,11 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         preRollFrames: 8, // ~256ms de áudio pré-fala
         onSpeechStart: () => {
           if (this.isInterruptionBlocked) return;
-          const isAiAudible =
-            this.isSpeaking || Date.now() < this.aiPlaybackUntil;
+          // Barge-in só quando há áudio da IA REALMENTE enfileirado/reproduzindo.
+          // `isSpeaking` fica true desde o início da geração do LLM (janela
+          // morta de 1-2s antes do primeiro chunk de TTS) — usá-lo aqui fazia
+          // qualquer ruído de ambiente abortar a saudação logo na conexão.
+          const isAiAudible = Date.now() < this.aiPlaybackUntil;
           if (isAiAudible) {
             this.logger.log(
               '⚡ [CascadeVoice] Barge-in confirmado pelo Silero VAD. Abortando áudio da IA.',
@@ -464,6 +467,13 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         this.abortController.abort();
         this.abortController = null;
       }
+      // Limpa o estado do VAD para não fechar segmentos fantasmas (8ms)
+      // com o áudio de eco/ruído acumulado durante a fala abortada
+      this.vadSession?.reset();
+      this.inboundAudioBuffers = [];
+      this.preRollBuffers = [];
+      this.consecutiveBargeInFrames = 0;
+      this.hasVoiceInCurrentTurn = false;
       this.options?.onInterrupted?.();
     }
   }

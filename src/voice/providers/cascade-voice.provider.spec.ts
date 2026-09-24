@@ -179,7 +179,10 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
       );
       provider.connect({ apiKey: 'k', systemPrompt: 'p', onInterrupted });
 
+      // IA falando: áudio já enfileirado no cliente (janela de reprodução ativa).
+      // Apenas isSpeaking=true (LLM gerando, janela morta) NÃO deve interromper.
       (provider as any).isSpeaking = true;
+      (provider as any).aiPlaybackUntil = Date.now() + 2000;
       (provider as any).activeContextId = 'ctx-1';
 
       // Dispara o callback de onSpeechStart configurado na sessão
@@ -188,6 +191,25 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
       expect(onInterrupted).toHaveBeenCalledTimes(1);
       expect((provider as any).isSpeaking).toBe(false);
       expect(mockSession.cancelContext).toHaveBeenCalledWith('ctx-1');
+    });
+
+    it('não deve interromper durante a janela morta de geração do LLM (sem áudio reproduzindo)', () => {
+      const onInterrupted = jest.fn();
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({ apiKey: 'k', systemPrompt: 'p', onInterrupted });
+
+      // LLM gerando (isSpeaking=true) mas nenhum chunk de áudio entregue ainda
+      (provider as any).isSpeaking = true;
+      (provider as any).activeContextId = 'ctx-1';
+
+      mockVadSession._opts.onSpeechStart();
+
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect((provider as any).isSpeaking).toBe(true);
     });
 
     it('deve confirmar barge-in se o usuário falar durante a janela de reprodução do áudio (aiPlaybackUntil) mesmo com isSpeaking false', () => {
