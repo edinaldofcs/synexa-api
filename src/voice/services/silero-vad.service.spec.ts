@@ -122,11 +122,34 @@ describe('SileroVadService & SileroVadSession (Silero VAD v5)', () => {
     const onSpeechStart = jest.fn();
     const session = new SileroVadSession(null, null, { onSpeechStart });
 
-    // Áudio com volume alto simula fala no fallback
+    // Áudio com volume alto simula fala no fallback.
+    // O fallback agora reproduz a máquina de estados do Silero: a fala só é
+    // confirmada com minSpeechFrames (default 2) frames SUSTENTADOS de energia.
     const loudChunk = createPcmChunk(3000, 512);
-    const res = await session.processChunk(loudChunk);
+    await session.processChunk(loudChunk); // frame 1 — ainda acumulando
+    const res = await session.processChunk(loudChunk); // frame 2 — confirma fala
 
     expect(res.isSpeech).toBe(true);
     expect(onSpeechStart).toHaveBeenCalled();
+  });
+
+  it('fallback acústico NÃO deve disparar onSpeechEnd com fragmentos curtos (pico isolado)', async () => {
+    const onSpeechStart = jest.fn();
+    const onSpeechEnd = jest.fn();
+    const session = new SileroVadSession(null, null, {
+      onSpeechStart,
+      onSpeechEnd,
+    });
+
+    const loudChunk = createPcmChunk(3000, 512);
+    const silenceChunk = createPcmChunk(10, 512);
+
+    // Pico isolado: frame alto + silêncio — nunca deve confirmar turno
+    await session.processChunk(loudChunk);
+    await session.processChunk(silenceChunk);
+
+    expect(onSpeechStart).not.toHaveBeenCalled();
+    expect(onSpeechEnd).not.toHaveBeenCalled();
+    expect(session.speaking).toBe(false);
   });
 });

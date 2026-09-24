@@ -230,7 +230,11 @@ export class SileroVadSession {
   }
 
   /**
-   * Fallback acústico caso o runtime ONNX não esteja disponível
+   * Fallback acústico caso o runtime ONNX não esteja disponível.
+   * Reproduz a máquina de estados do Silero (histerese + redemption):
+   * - Fala confirmada só com peak/rms altos SUSTENTADOS por minSpeechFrames
+   * - Turno fechado só após redemptionFrames de silêncio (entrega o buffer acumulado)
+   * - Nunca dispara onSpeechEnd com fragmentos curtos (descartáveis no Cascade)
    */
   private fallbackRmsVad(chunk: Buffer): {
     isSpeech: boolean;
@@ -245,19 +249,52 @@ export class SileroVadSession {
       sum += s * s;
     }
     const rms = count > 0 ? Math.sqrt(sum / count) : 0;
-    const isSpeech = peak >= 1000 || rms >= 180;
-    const probability = isSpeech ? 0.8 : 0.05;
+    const isSpeechFrame = peak >= 1000 || rms >= 180;
+    const probability = isSpeechFrame ? 0.8 : 0.05;
     this.lastProbability = probability;
 
-    if (isSpeech && !this.isSpeaking) {
-      this.isSpeaking = true;
-      this.options.onSpeechStart?.();
-    } else if (!isSpeech && this.isSpeaking) {
-      this.isSpeaking = false;
-      this.options.onSpeechEnd?.(chunk);
+    if (isSpeechFrame) {
+      this.consecutiveSpeechFrames++;
+      this.consecutiveSilenceFrames = 0;
+
+      if (!this.isSpeaking) {
+        if (this.consecutiveSpeechFrames >= this.minSpeechFrames) {
+          this.isSpeaking = true;
+          this.speechFrames = [...this.preRollQueue, chunk];
+          this.preRollQueue = [];
+          this.options.onSpeechStart?.();
+        } else {
+          this.preRollQueue.push(chunk);
+          if (this.preRollQueue.length > this.preRollFrames) {
+            this.preRollQueue.shift();
+          }
+        }
+      } else {
+        this.speechFrames.push(chunk);
+      }
+    } else {
+      this.consecutiveSpeechFrames = 0;
+
+      if (this.isSpeaking) {
+        // Hangover: silêncio breve dentro do turno continua no buffer
+        this.speechFrames.push(chunk);
+        this.consecutiveSilenceFrames++;
+        if (this.consecutiveSilenceFrames >= this.redemptionFrames) {
+          this.isSpeaking = false;
+          const fullAudio = Buffer.concat(this.speechFrames);
+          this.speechFrames = [];
+          this.preRollQueue = [];
+          this.options.onSpeechEnd?.(fullAudio);
+        }
+      } else {
+        this.preRollQueue.push(chunk);
+        if (this.preRollQueue.length > this.preRollFrames) {
+          this.preRollQueue.shift();
+        }
+      }
     }
 
-    return { isSpeech, probability };
+    return { isSpeech: this.isSpeaking, probability };
   }
 
   /**
@@ -334,8 +371,18 @@ export class SileroVadService implements OnModuleInit {
 
     try {
       if (!ortModule) {
-        const moduleName = 'onnxruntime-node';
-        ortModule = await import(moduleName);
+        // Preferência: onnxruntime-node (nativo, glibc). Em contêineres Alpine
+        // (musl) o binário nativo não carrega — fallback para onnxruntime-web
+        // (WASM puro, independente de libc).
+        try {
+          ortModule = await import('onnxruntime-node');
+        } catch (nodeErr: any) {
+          this.logger.warn(
+            `⚠️ [SileroVAD] onnxruntime-node indisponível (${nodeErr.message.split('\n')[0]}). Tentando onnxruntime-web (WASM)...`,
+          );
+          const web = await import('onnxruntime-web');
+          ortModule = (web as any).default ?? web;
+        }
       }
       this.inferenceSession = await ortModule.InferenceSession.create(
         resolvedPath,
@@ -346,11 +393,11 @@ export class SileroVadService implements OnModuleInit {
       );
       this.isInitialized = true;
       this.logger.log(
-        `🧠 [SileroVAD] Silero VAD v5 inicializado com sucesso via onnxruntime-node (${resolvedPath})`,
+        `🧠 [SileroVAD] Silero VAD v5 inicializado com sucesso (${resolvedPath})`,
       );
     } catch (err: any) {
       this.logger.warn(
-        `⚠️ [SileroVAD] onnxruntime-node indisponível (${err.message}). Operando com fallback acústico.`,
+        `⚠️ [SileroVAD] Nenhum runtime ONNX disponível (${err.message.split('\n')[0]}). Operando com fallback acústico.`,
       );
     }
   }
