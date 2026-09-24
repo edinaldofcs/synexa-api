@@ -1377,12 +1377,15 @@ export class VoiceGateway
               let provider: IVoiceProvider;
               let cartesiaApiKey = '';
               let groqApiKey = '';
-              // BYO Voice: provider escolhido no agente (tts_provider/stt_provider)
+              // BYO Voice: provider escolhido no agente, no cliente ou
+              // override em tempo de teste (msg.tts_provider/msg.stt_provider)
               const ttsProviderChoice =
+                (msg.tts_provider as string) ||
                 ((agent as any)?.tts_provider as string) ||
                 (clientMeta.tts_provider as string) ||
                 '';
               const sttProviderChoice =
+                (msg.stt_provider as string) ||
                 ((agent as any)?.stt_provider as string) ||
                 (clientMeta.stt_provider as string) ||
                 '';
