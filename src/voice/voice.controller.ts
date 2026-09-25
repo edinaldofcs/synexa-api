@@ -98,13 +98,15 @@ export class VoiceController {
           ? 'cartesia'
           : 'google';
 
-    let customTts: {
-      baseUrl: string;
-      apiKey?: string;
-      voice?: string;
-      sampleRate?: number;
-      timeoutMs?: number;
-    } | undefined;
+    let customTts:
+      | {
+          baseUrl: string;
+          apiKey?: string;
+          voice?: string;
+          sampleRate?: number;
+          timeoutMs?: number;
+        }
+      | undefined;
     let apiKey = '';
     if (provider === 'custom') {
       const settings = await this.keyResolver.resolveProviderSettings(

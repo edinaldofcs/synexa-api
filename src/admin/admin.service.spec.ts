@@ -383,7 +383,7 @@ describe('AdminService - updateUser', () => {
       { company_id: 'comp-B' },
     );
 
-expect(result.success).toBe(true);
+    expect(result.success).toBe(true);
     expect(prisma.users.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'user-1' },
@@ -425,10 +425,7 @@ describe('AdminService - listUsers', () => {
     };
     const service = new AdminService(prisma as never, {} as never);
 
-    await service.listUsers(
-      { id: 'super-1', role: 'platform_admin' },
-      uuid,
-    );
+    await service.listUsers({ id: 'super-1', role: 'platform_admin' }, uuid);
 
     expect(prisma.users.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

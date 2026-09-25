@@ -405,7 +405,10 @@ export class BillingService {
 
         return rows.map((row) => {
           const costUsd = Number(row.cost_usd);
-          const billable = this.pricingService.calculateBillable(costUsd, false);
+          const billable = this.pricingService.calculateBillable(
+            costUsd,
+            false,
+          );
           return {
             date: row.date,
             runs: Number(row.runs),
@@ -607,7 +610,10 @@ export class BillingService {
 
         const toTokensItem = (row: AgentTokensRow) => {
           const costUsd = Number(row.cost_usd);
-          const billable = this.pricingService.calculateBillable(costUsd, false);
+          const billable = this.pricingService.calculateBillable(
+            costUsd,
+            false,
+          );
           return {
             runs: Number(row.runs),
             inputTokens: Number(row.input_tokens),
@@ -621,15 +627,13 @@ export class BillingService {
 
         const byModel = rows
           .filter(
-            (row) =>
-              Number(row.model_grp) === 0 && Number(row.agent_grp) === 1,
+            (row) => Number(row.model_grp) === 0 && Number(row.agent_grp) === 1,
           )
           .map((row) => ({ model: row.model_key, ...toTokensItem(row) }));
 
         const byAgent = rows
           .filter(
-            (row) =>
-              Number(row.model_grp) === 1 && Number(row.agent_grp) === 0,
+            (row) => Number(row.model_grp) === 1 && Number(row.agent_grp) === 0,
           )
           .map((row) => ({ agentId: row.agent_key, ...toTokensItem(row) }));
 
@@ -640,8 +644,12 @@ export class BillingService {
             outputTokens: acc.outputTokens + item.outputTokens,
             totalTokens: acc.totalTokens + item.totalTokens,
             costUsd: Number((acc.costUsd + item.costUsd).toFixed(6)),
-            billableUsd: Number((acc.billableUsd + item.billableUsd).toFixed(6)),
-            billableBrl: Number((acc.billableBrl + item.billableBrl).toFixed(4)),
+            billableUsd: Number(
+              (acc.billableUsd + item.billableUsd).toFixed(6),
+            ),
+            billableBrl: Number(
+              (acc.billableBrl + item.billableBrl).toFixed(4),
+            ),
           }),
           {
             runs: 0,

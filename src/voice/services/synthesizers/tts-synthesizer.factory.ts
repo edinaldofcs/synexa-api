@@ -1,3 +1,4 @@
+import { InworldVoiceService } from '../inworld-voice.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { ITtsSynthesizer } from './tts-synthesizer.interface';
 import { CartesiaTtsSynthesizer } from './cartesia-tts.synthesizer';
@@ -14,6 +15,7 @@ export class TtsSynthesizerFactory {
     private readonly googleSynthesizer: GoogleTtsSynthesizer,
     private readonly customSynthesizer: CustomTtsSynthesizer,
   ) {
+    this.register(new InworldVoiceService());
     this.register(this.cartesiaSynthesizer);
     this.register(this.googleSynthesizer);
     this.register(this.customSynthesizer);

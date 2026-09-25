@@ -13,7 +13,10 @@ describe('VoiceTelemetryService', () => {
 
   beforeEach(async () => {
     prismaMock = {
-      conversations: { update: jest.fn().mockResolvedValue({}) },
+      conversations: {
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       agent_runs: { create: jest.fn().mockResolvedValue({}) },
       voice_session_telemetry: { create: jest.fn().mockResolvedValue({}) },
       messages: {

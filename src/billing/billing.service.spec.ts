@@ -164,9 +164,13 @@ describe('BillingService', () => {
 
   it('should reject invalid client_id in the summary', async () => {
     await expect(
-      service.getUsageSummary('00000000-0000-0000-0000-000000000001', undefined, {
-        clientId: 'not-a-uuid',
-      }),
+      service.getUsageSummary(
+        '00000000-0000-0000-0000-000000000001',
+        undefined,
+        {
+          clientId: 'not-a-uuid',
+        },
+      ),
     ).rejects.toThrow(BadRequestException);
     expect(mockPrismaService.$queryRaw).not.toHaveBeenCalled();
   });
@@ -200,15 +204,11 @@ describe('BillingService', () => {
   it('should filter daily usage by client and custom window', async () => {
     mockPrismaService.$queryRaw.mockResolvedValueOnce([]);
 
-    await service.getDailyUsage(
-      '00000000-0000-0000-0000-000000000001',
-      30,
-      {
-        clientId: '11111111-1111-1111-1111-111111111111',
-        from: '2026-08-01T00:00:00.000Z',
-        to: '2026-08-31T23:59:59.999Z',
-      },
-    );
+    await service.getDailyUsage('00000000-0000-0000-0000-000000000001', 30, {
+      clientId: '11111111-1111-1111-1111-111111111111',
+      from: '2026-08-01T00:00:00.000Z',
+      to: '2026-08-31T23:59:59.999Z',
+    });
 
     const query = mockPrismaService.$queryRaw.mock.calls[0][0] as Prisma.Sql;
     expect(query.values).toContain('11111111-1111-1111-1111-111111111111');
@@ -287,20 +287,15 @@ describe('BillingService', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
-    await service.getVoiceMinutes(
-      '00000000-0000-0000-0000-000000000001',
-      { days: 30 },
-    );
+    await service.getVoiceMinutes('00000000-0000-0000-0000-000000000001', {
+      days: 30,
+    });
 
     const queries = (mockPrismaService.$queryRaw.mock.calls as unknown[][]).map(
       (call) => (call[0] as Prisma.Sql).sql,
     );
-    queries.forEach((sql) =>
-      expect(sql).toContain('voice_session_telemetry'),
-    );
-    queries.forEach((sql) =>
-      expect(sql).not.toContain('agent_runs'),
-    );
+    queries.forEach((sql) => expect(sql).toContain('voice_session_telemetry'));
+    queries.forEach((sql) => expect(sql).not.toContain('agent_runs'));
   });
 
   it('should reject voice minutes windows longer than 366 days', async () => {
@@ -393,10 +388,7 @@ describe('BillingService', () => {
     expect(result.byModel).toHaveLength(2);
     expect(result.byModel[0].model).toBe('llama-3.3-70b-versatile');
     expect(result.byAgent).toHaveLength(2);
-    expect(result.byAgent.map((a) => a.agentId)).toEqual([
-      'agent-1',
-      'none',
-    ]);
+    expect(result.byAgent.map((a) => a.agentId)).toEqual(['agent-1', 'none']);
 
     const query = mockPrismaService.$queryRaw.mock.calls[0][0] as Prisma.Sql;
     expect(query.sql).toContain('billing_tokens_by_grouping_sets');
@@ -440,13 +432,17 @@ describe('BillingService', () => {
     await service.getUsageSummary(companyId, undefined, {
       clientId: '11111111-1111-1111-1111-111111111111',
     });
-    const cacheGets = mockRedisService.get.mock.calls.map((c) => c[0] as string);
+    const cacheGets = mockRedisService.get.mock.calls.map(
+      (c) => c[0] as string,
+    );
     expect(cacheGets).toHaveLength(3);
     // Chamadas 1 e 2 compartilham a mesma chave; a 3ª tem chave própria
     expect(new Set(cacheGets).size).toBe(2);
     expect(cacheGets[2]).not.toBe(cacheGets[0]);
     cacheGets.forEach((key) =>
-      expect(key).toMatch(/^billing:00000000-0000-0000-0000-000000000001:(summary|tokens|daily|voice-minutes):/),
+      expect(key).toMatch(
+        /^billing:00000000-0000-0000-0000-000000000001:(summary|tokens|daily|voice-minutes):/,
+      ),
     );
   });
 
@@ -455,7 +451,13 @@ describe('BillingService', () => {
       companyId: '00000000-0000-0000-0000-000000000001',
       from: '2026-09-01T00:00:00.000Z',
       to: '2026-09-21T00:00:00.000Z',
-      totals: { sessions: 0, durationSeconds: 0, durationMinutes: 0, forwardedSeconds: 0, forwardedMinutes: 0 },
+      totals: {
+        sessions: 0,
+        durationSeconds: 0,
+        durationMinutes: 0,
+        forwardedSeconds: 0,
+        forwardedMinutes: 0,
+      },
       byDay: [],
       byClient: [],
       byModel: [],

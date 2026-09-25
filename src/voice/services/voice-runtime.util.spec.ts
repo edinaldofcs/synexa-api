@@ -1,4 +1,8 @@
 import {
+  withFlowGreeting,
+  resolveVoiceGreetingVariations as greetingVariations,
+} from './voice-runtime.util';
+import {
   mergeApiReturnIntoState,
   aiSpeaksFirstEnabled,
   resolveVoiceGreeting,
@@ -348,5 +352,47 @@ describe('buildVoiceFarewellToolResponse', () => {
 describe('constantes de timing de hangup', () => {
   it('garante que o watchdog timeout seja adequado para conclusao do turno', () => {
     expect(VOICE_HANGUP_WATCHDOG_TIMEOUT_MS).toBe(16000);
+  });
+});
+
+describe('Flow greeting overrides', () => {
+  const agent = {
+    transitions: {
+      next: 'other',
+      capabilities: {
+        ai_speaks_first: false,
+        greeting_message: 'Original',
+        greeting_variations: ['Original variation'],
+        hangup: true,
+      },
+    },
+  };
+  it('preserves agent defaults when no Flow greeting is set', () => {
+    expect(
+      withFlowGreeting(agent, {
+        greetingMessage: '  ',
+        greetingCacheEnabled: true,
+      }),
+    ).toBe(agent);
+  });
+  it('overrides message and variations without changing the stored agent', () => {
+    const result = withFlowGreeting(agent, {
+      greetingMessage: 'Olá {{nome}}\n---\nTudo bem?',
+      aiSpeaksFirst: true,
+    });
+    expect(greetingVariations(result)).toEqual(['Olá {{nome}}', 'Tudo bem?']);
+    expect(result.transitions.capabilities).toMatchObject({
+      ai_speaks_first: true,
+      hangup: true,
+    });
+    expect(agent.transitions.capabilities.greeting_variations).toEqual([
+      'Original variation',
+    ]);
+  });
+  it('can disable the opening without deleting agent configuration', () => {
+    expect(
+      withFlowGreeting(agent, { aiSpeaksFirst: false }).transitions.capabilities
+        .ai_speaks_first,
+    ).toBe(false);
   });
 });

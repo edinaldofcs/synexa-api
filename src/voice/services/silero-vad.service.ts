@@ -375,11 +375,13 @@ export class SileroVadService implements OnModuleInit {
         // (musl) o binário nativo não carrega — fallback para onnxruntime-web
         // (WASM puro, independente de libc).
         try {
+          // @ts-ignore
           ortModule = await import('onnxruntime-node');
         } catch (nodeErr: any) {
           this.logger.warn(
             `⚠️ [SileroVAD] onnxruntime-node indisponível (${nodeErr.message.split('\n')[0]}). Tentando onnxruntime-web (WASM)...`,
           );
+          // @ts-ignore
           const web = await import('onnxruntime-web');
           ortModule = (web as any).default ?? web;
         }

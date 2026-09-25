@@ -41,7 +41,8 @@ export class CustomTtsSynthesizer implements ITtsSynthesizer {
     const apiKey = config.apiKey || options.apiKey;
     const voice = config.voice || options.voiceId || '';
     const language = options.language || 'pt';
-    const declaredRate = config.sampleRate || options.sampleRate || CANONICAL_SAMPLE_RATE;
+    const declaredRate =
+      config.sampleRate || options.sampleRate || CANONICAL_SAMPLE_RATE;
 
     const res = await fetch(config.baseUrl, {
       method: 'POST',
@@ -56,7 +57,9 @@ export class CustomTtsSynthesizer implements ITtsSynthesizer {
         format: 'pcm_s16le',
         sample_rate: declaredRate,
       }),
-      signal: AbortSignal.timeout(customHttpTimeout(config.timeoutMs || 10_000)),
+      signal: AbortSignal.timeout(
+        customHttpTimeout(config.timeoutMs || 10_000),
+      ),
     });
 
     if (!res.ok) {

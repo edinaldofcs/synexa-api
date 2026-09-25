@@ -5,6 +5,7 @@ export interface GroqTranscriptionOptions {
   sampleRate?: number;
   language?: string;
   prompt?: string;
+  model?: string;
 }
 
 @Injectable()
@@ -28,7 +29,12 @@ export class GroqWhisperSttService {
     const formData = new FormData();
     const blob = new Blob([new Uint8Array(wavBuffer)], { type: 'audio/wav' });
     formData.append('file', blob, 'audio.wav');
-    formData.append('model', 'whisper-large-v3-turbo');
+    formData.append(
+      'model',
+      options.model === 'whisper-large-v3'
+        ? options.model
+        : 'whisper-large-v3-turbo',
+    );
     formData.append('language', language);
     formData.append('response_format', 'json');
     formData.append('temperature', '0.0');

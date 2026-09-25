@@ -3,6 +3,7 @@ import {
   GeminiLiveVoiceProvider,
   resolveLiveModel,
   resolveLiveVoice,
+  resolveGeminiLiveSettings,
 } from './gemini-live-voice.provider';
 import WebSocketMock from 'ws';
 
@@ -110,5 +111,85 @@ describe('GeminiLiveVoiceProvider - backpressure (ws.bufferedAmount)', () => {
 
     expect(ws.send).not.toHaveBeenCalled();
     expect(provider.droppedAudioFrames).toBe(3);
+  });
+});
+
+describe('Flow Gemini Live configuration', () => {
+  it('validates metadata and bounds VAD values', () => {
+    expect(resolveGeminiLiveSettings(null)).toBeUndefined();
+    const result = resolveGeminiLiveSettings({
+      model: 'chat-model',
+      voiceName: 'kore',
+      silenceDurationMs: -1,
+      prefixPaddingMs: Infinity,
+    });
+    expect(result).toMatchObject({
+      model: 'gemini-3.8-live',
+      voiceName: 'Kore',
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          silenceDurationMs: 100,
+          prefixPaddingMs: 100,
+        },
+      },
+    });
+  });
+
+  it('sends Flow model, voice and VAD with compatible Gemini 3.8 tools', () => {
+    const provider = new GeminiLiveVoiceProvider();
+    const tools = [
+      { functionDeclarations: [{ name: 'lookup', description: 'Lookup' }] },
+    ];
+    provider.connect({
+      apiKey: 'test-key',
+      systemPrompt: 'Prompt',
+      model: 'gemini-3.1-flash-live-preview',
+      thinkingLevel: 'high',
+      geminiLive: {
+        model: 'gemini-3.8-live',
+        voiceName: 'Kore',
+        silenceDurationMs: 600,
+        prefixPaddingMs: 120,
+        startSensitivity: 'low',
+        allowInterruption: false,
+      },
+      tools,
+    });
+    const ws = (WebSocketMock as any).instances.slice(-1)[0];
+    ws.on.mock.calls.find(([event]: [string]) => event === 'open')[1]();
+    const setup = JSON.parse(ws.send.mock.calls[0][0]).setup;
+    expect(setup.model).toBe('models/gemini-3.8-live');
+    expect(
+      setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig
+        .voiceName,
+    ).toBe('Kore');
+    expect(setup.realtimeInputConfig).toMatchObject({
+      activityHandling: 'NO_INTERRUPTION',
+      automaticActivityDetection: {
+        disabled: false,
+        silenceDurationMs: 600,
+        prefixPaddingMs: 120,
+        startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
+      },
+    });
+    expect(setup.generationConfig.thinkingConfig).toBeUndefined();
+    expect(setup.tools[0].functionDeclarations[0].behavior).toBe('BLOCKING');
+    expect(tools[0].functionDeclarations[0]).not.toHaveProperty('behavior');
+    expect(setup.inputAudioTranscription).toEqual({});
+    expect(setup.outputAudioTranscription).toEqual({});
+  });
+
+  it('preserves legacy setup when Flow settings are absent', () => {
+    const provider = new GeminiLiveVoiceProvider();
+    provider.connect({
+      apiKey: 'test-key',
+      systemPrompt: 'Prompt',
+      model: 'gemini-3.1-flash-live-preview',
+    });
+    const ws = (WebSocketMock as any).instances.slice(-1)[0];
+    ws.on.mock.calls.find(([event]: [string]) => event === 'open')[1]();
+    const setup = JSON.parse(ws.send.mock.calls[0][0]).setup;
+    expect(setup.model).toBe('models/gemini-3.1-flash-live-preview');
+    expect(setup.realtimeInputConfig).toBeUndefined();
   });
 });

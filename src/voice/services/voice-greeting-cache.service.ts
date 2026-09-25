@@ -15,6 +15,10 @@ export interface GreetingCacheKeyOptions {
   voiceId: string;
   template: string;
   customerName?: string;
+  modelId?: string;
+  language?: string;
+  sampleRate?: number;
+  endpoint?: string;
 }
 
 export interface ResolveGreetingAudioOptions extends GreetingCacheKeyOptions {
@@ -59,7 +63,15 @@ export class VoiceGreetingCacheService {
     const agent = options.agentId || 'default';
     const provider = (options.provider || 'cartesia').toLowerCase().trim();
     const voiceId = (options.voiceId || 'default').toLowerCase().trim();
-    const templateHash = createGreetingTemplateHash(options.template || '');
+    const templateHash = createGreetingTemplateHash(
+      JSON.stringify([
+        options.template || '',
+        options.modelId || '',
+        options.language || '',
+        options.sampleRate || 24000,
+        options.endpoint || '',
+      ]),
+    );
     const sanitizedName = sanitizeCustomerName(options.customerName);
     const nameKey = sanitizedName
       ? sanitizedName.toLowerCase().replace(/\s+/g, '_')
@@ -146,8 +158,18 @@ export class VoiceGreetingCacheService {
       agentId: options.agentId,
       provider: options.provider,
       voiceId: options.voiceId,
-      template: options.template,
+      template: text,
       customerName: sanitizedName,
+      modelId:
+        options.modelId ||
+        (options.provider === 'google'
+          ? 'gemini-3.8-flash-tts'
+          : options.provider === 'cartesia'
+            ? 'sonic-3.6'
+            : undefined),
+      language: options.language || 'pt',
+      sampleRate: options.sampleRate || 24000,
+      endpoint: options.customTts?.baseUrl,
     };
 
     // 1. Tentativa de HIT no Cache
@@ -173,6 +195,7 @@ export class VoiceGreetingCacheService {
     const audioBuffer = await synth.synthesize(text, {
       apiKey: options.apiKey,
       voiceId: options.voiceId,
+      modelId: options.modelId,
       sampleRate: options.sampleRate || 24000,
       language: options.language || 'pt',
       customTts: options.customTts,

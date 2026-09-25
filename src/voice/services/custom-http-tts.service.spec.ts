@@ -10,7 +10,10 @@ function jsonResponse(payload: Record<string, unknown>) {
   });
 }
 
-function binaryResponse(body: Buffer, contentType = 'application/octet-stream') {
+function binaryResponse(
+  body: Buffer,
+  contentType = 'application/octet-stream',
+) {
   return new Response(new Uint8Array(body), {
     status: 200,
     headers: { 'content-type': contentType },
@@ -97,7 +100,10 @@ describe('CustomHttpTtsService', () => {
     header.write('WAVE', 8);
     header.writeUInt32LE(24000, 24); // sample rate no header
     fetchMock.mockResolvedValue(
-      binaryResponse(Buffer.concat([header, Buffer.alloc(2400, 3)]), 'audio/wav'),
+      binaryResponse(
+        Buffer.concat([header, Buffer.alloc(2400, 3)]),
+        'audio/wav',
+      ),
     );
 
     service

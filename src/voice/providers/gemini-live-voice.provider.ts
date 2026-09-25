@@ -8,6 +8,7 @@ export interface GeminiLiveToolDeclaration {
 }
 
 export interface GeminiLiveConnectOptions {
+  geminiLive?: unknown;
   apiKey: string;
   systemPrompt: string;
   model?: string;
@@ -70,6 +71,13 @@ export const VALID_GEMINI_LIVE_VOICES = new Set([
   'Leda',
   'Orus',
   'Zephyr',
+  'Autonoe',
+  'Enceladus',
+  'Iapetus',
+  'Umbriel',
+  'Algieba',
+  'Despina',
+  'Callirrhoe',
 ]);
 
 export function resolveLiveVoice(voice?: string | null): string {
@@ -82,9 +90,48 @@ export function resolveLiveVoice(voice?: string | null): string {
   return 'Aoede';
 }
 
-const EXPENSIVE_VOICES_MAP: Record<string, number> = {
-  Flare: 1632, // Nota: Flare consome 1632 tokens de audio fixos por turno vs ~241 de outras vozes
-};
+/** Validates the Flow metadata before forwarding any configuration to Google. */
+export function resolveGeminiLiveSettings(raw: unknown) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const bounded = (
+    input: unknown,
+    fallback: number,
+    min: number,
+    max: number,
+  ) =>
+    typeof input === 'number' && Number.isFinite(input)
+      ? Math.max(min, Math.min(max, Math.round(input)))
+      : fallback;
+  return {
+    model:
+      value.model === 'gemini-3.1-flash-live-preview'
+        ? value.model
+        : 'gemini-3.8-live',
+    voiceName: resolveLiveVoice(
+      typeof value.voiceName === 'string' ? value.voiceName : undefined,
+    ),
+    realtimeInputConfig: {
+      automaticActivityDetection: {
+        disabled: false,
+        startOfSpeechSensitivity:
+          value.startSensitivity === 'low'
+            ? 'START_SENSITIVITY_LOW'
+            : 'START_SENSITIVITY_HIGH',
+        endOfSpeechSensitivity:
+          value.endSensitivity === 'low'
+            ? 'END_SENSITIVITY_LOW'
+            : 'END_SENSITIVITY_HIGH',
+        prefixPaddingMs: bounded(value.prefixPaddingMs, 100, 0, 1000),
+        silenceDurationMs: bounded(value.silenceDurationMs, 800, 100, 2000),
+      },
+      activityHandling:
+        value.allowInterruption === false
+          ? 'NO_INTERRUPTION'
+          : 'START_OF_ACTIVITY_INTERRUPTS',
+    },
+  };
+}
 
 const DEFAULT_WS_BACKPRESSURE_BYTES = 1048576;
 const BACKPRESSURE_LOG_EVERY = 100;
@@ -112,14 +159,15 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
 
   public connect(options: GeminiLiveConnectOptions): void {
     this.options = options;
-    const model = resolveLiveModel(options.model);
-    if (options.model && model !== options.model) {
+    const live = resolveGeminiLiveSettings(options.geminiLive);
+    const model = live?.model ?? resolveLiveModel(options.model);
+    if (!live && options.model && model !== options.model) {
       this.logger.warn(
         `⚠️ [GeminiLive] Modelo "${options.model}" nao suporta bidiGenerateContent (Live); usando "${model}".`,
       );
     }
-    const voice = resolveLiveVoice(options.voiceName);
-    if (options.voiceName && voice !== options.voiceName) {
+    const voice = live?.voiceName ?? resolveLiveVoice(options.voiceName);
+    if (!live && options.voiceName && voice !== options.voiceName) {
       this.logger.warn(
         `⚠️ [GeminiLive] Voz "${options.voiceName}" nao e suportada pela API Google Live; usando voz segura "${voice}".`,
       );
@@ -134,12 +182,6 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
       options.onError?.(err);
       options.onClose?.();
       return;
-    }
-
-    if (EXPENSIVE_VOICES_MAP[voice]) {
-      this.logger.warn(
-        `💸 [GeminiLive] Atenção: a voz '${voice}' consome ~${EXPENSIVE_VOICES_MAP[voice]} tokens fixos de áudio por turno.`,
-      );
     }
 
     const fullUrl = `${GOOGLE_LIVE_API_URL}?key=${options.apiKey}`;
@@ -182,6 +224,9 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
         },
       };
 
+      if (live)
+        setupMessage.setup.realtimeInputConfig = live.realtimeInputConfig;
+
       if (options.contextCompressionEnabled) {
         setupMessage.setup.contextWindowCompression = {
           slidingWindow: {
@@ -191,7 +236,16 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
       }
 
       if (options.tools && options.tools.length > 0) {
-        setupMessage.setup.tools = options.tools;
+        // Keep the existing sequential tool execution contract on Gemini 3.8.
+        setupMessage.setup.tools =
+          model === 'gemini-3.8-live'
+            ? options.tools.map((group) => ({
+                ...group,
+                functionDeclarations: group.functionDeclarations.map(
+                  (tool) => ({ ...tool, behavior: 'BLOCKING' }),
+                ),
+              }))
+            : options.tools;
       }
 
       this.ws?.send(JSON.stringify(setupMessage));
@@ -273,7 +327,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     }
   }
 
-  public sendAudio(base64Pcm16: string, sampleRate = 16000): void {
+  public sendAudio(base64Pcm16: string, _sampleRate = 16000): void {
     if (this.ws?.readyState !== WebSocket.OPEN || !base64Pcm16) return;
     if (this.ws.bufferedAmount > this.backpressureBytes) {
       this.droppedAudioFramesCount++;
@@ -286,10 +340,12 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     }
     const payload = {
       realtimeInput: {
-        audio: {
-          mimeType: `audio/pcm;rate=${sampleRate}`,
-          data: base64Pcm16,
-        },
+        mediaChunks: [
+          {
+            mimeType: 'audio/pcm',
+            data: base64Pcm16,
+          },
+        ],
       },
     };
     this.ws.send(JSON.stringify(payload));
@@ -297,12 +353,20 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
 
   public sendAudioStreamEnd(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      const payload = {
-        realtimeInput: {
-          audioStreamEnd: true,
-        },
-      };
-      this.ws.send(JSON.stringify(payload));
+      this.ws.send(
+        JSON.stringify({
+          realtimeInput: {
+            audioStreamEnd: true,
+          },
+        }),
+      );
+      this.ws.send(
+        JSON.stringify({
+          clientContent: {
+            turnComplete: true,
+          },
+        }),
+      );
     }
   }
 

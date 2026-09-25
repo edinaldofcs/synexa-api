@@ -44,8 +44,8 @@ export class VoiceClientSession {
   model = 'gemini-3.1-flash-live-preview';
   voiceName = 'Aoede';
   voiceEngine: 'hybrid' | 'live_api' = 'hybrid';
-  /** Provedor TTS efetivo ('cartesia' | 'custom') para telemetria da sessão web. */
-  ttsProvider: 'cartesia' | 'custom' = 'cartesia';
+  /** Provedor TTS efetivo ('cartesia' | 'inworld' | 'custom') para telemetria da sessão web. */
+  ttsProvider: 'cartesia' | 'inworld' | 'custom' = 'cartesia';
   holdsSessionSlot = false;
   telemetryPersisted = false;
   state: Record<string, unknown> = {};

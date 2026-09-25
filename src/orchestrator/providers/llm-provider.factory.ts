@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { GeminiProvider } from './gemini.provider';
+import { OpenAiProvider } from './openai.provider';
 import { GroqProvider } from './groq.provider';
 import { OpenRouterProvider } from './openrouter.provider';
 import { MockLlmProvider } from './mock.provider';
@@ -23,10 +24,7 @@ export function getLLMProvider(
 
   if (name === 'mock') return new MockLlmProvider();
   if (name === 'groq') return new GroqProvider(apiKey);
-  // openai usa o mesmo cliente compatível com OpenAI, mas apontando para a API da OpenAI
-  if (name === 'openai') {
-    return new GroqProvider(apiKey, 'https://api.openai.com/v1');
-  }
+  if (name === 'openai') return new OpenAiProvider(apiKey);
   if (name === 'openrouter') return new OpenRouterProvider(apiKey);
   if (name === 'gemini') return new GeminiProvider(apiKey);
 

@@ -1,13 +1,13 @@
 import { VoiceSessionFactory } from './voice-session.factory';
 
-const buildFactory = (maxSessions: number) => {
+const buildFactory = (maxSessions: number, apiKey = '') => {
   const configService = {
     get: jest.fn((key: string) =>
       key === 'VOICE_MAX_SESSIONS' ? maxSessions : undefined,
     ),
   };
   const keyResolver = {
-    resolveApiKey: jest.fn().mockResolvedValue(''),
+    resolveApiKey: jest.fn().mockResolvedValue(apiKey),
   };
   return new VoiceSessionFactory(
     {} as any,
@@ -153,5 +153,106 @@ describe('VoiceSessionFactory - semaforo global de sessoes', () => {
       // A 4ª tentativa volta a ser bloqueada
       expect(factory.tryAcquireSession(botId, maxLimit)).toBe(false);
     });
+  });
+});
+
+describe('Flow Gemini settings in telephony sessions', () => {
+  it('uses the saved Flow engine, model and voice even with a legacy agent engine', async () => {
+    const factory = buildFactory(10);
+    const geminiLive = {
+      model: 'gemini-3.8-live',
+      voiceName: 'Kore',
+      silenceDurationMs: 600,
+    };
+    const { session, liveProvider } = await factory.create(
+      { id: 'flow-call' } as any,
+      {
+        client: {
+          metadata: {
+            voice_engine: 'live_api',
+            gemini_live: geminiLive,
+            voice_behavior: {
+              greetingCacheEnabled: false,
+              idleEnabled: true,
+              turns: [{ text: 'Tchau', waitSeconds: 5, endCall: true }],
+            },
+            voice_settings: { language: 'es' },
+          },
+        },
+        agent: {
+          voice_engine: 'hybrid',
+          model: 'text-model',
+          voice_name: 'cartesia-uuid',
+        },
+      } as any,
+    );
+    expect(liveProvider.constructor.name).toBe('GeminiLiveVoiceProvider');
+    expect((session as any).config).toMatchObject({
+      voiceEngine: 'live_api',
+      model: 'gemini-3.8-live',
+      voiceName: 'Kore',
+      geminiLive,
+      voiceBehavior: { greetingCacheEnabled: false, idleEnabled: true },
+      voiceSettings: { language: 'es' },
+    });
+    factory.releaseSession();
+  });
+});
+
+describe('Inworld telephony wiring', () => {
+  const route = {
+    client_id: 'client-inworld',
+    company_id: 'company',
+    client: {
+      metadata: {
+        voice_engine: 'hybrid',
+        tts_provider: 'inworld',
+        stt_provider: 'inworld',
+        voice_settings: { inworldVoice: 'Mariana' },
+        voice_behavior: { greetingCacheEnabled: true },
+      },
+    },
+    agent: {
+      tts_provider: 'cartesia',
+      stt_provider: 'groq',
+      voice_name: 'legacy',
+    },
+  };
+  it('uses the Flow providers, tenant credential and Inworld voice for SIP', async () => {
+    const factory = buildFactory(10, 'inworld-test-key');
+    const { session, liveProvider } = await factory.create(
+      { id: 'call' } as any,
+      route,
+    );
+    expect((session as any).config).toMatchObject({
+      ttsProvider: 'inworld',
+      sttProvider: 'inworld',
+      inworldApiKey: 'inworld-test-key',
+      voiceName: 'Mariana',
+    });
+    expect((liveProvider as any).ttsSessionFactory.constructor.name).toBe(
+      'InworldVoiceService',
+    );
+    expect((liveProvider as any).sttTranscriber.constructor.name).toBe(
+      'InworldVoiceService',
+    );
+    factory.releaseSession('client-inworld');
+  });
+  it('defaults to Mariana when switching a legacy Flow without a voice override', async () => {
+    const factory = buildFactory(10, 'inworld-test-key');
+    const updated = {
+      ...route,
+      client: { metadata: { ...route.client.metadata, voice_settings: {} } },
+    };
+    const { session } = await factory.create({ id: 'call' } as any, updated);
+    expect((session as any).config.voiceName).toBe('Mariana');
+    factory.releaseSession('client-inworld');
+  });
+  it('fails before connecting when the tenant has no Inworld credential', async () => {
+    const factory = buildFactory(10);
+    await expect(factory.create({ id: 'call' } as any, route)).rejects.toThrow(
+      'chave Inworld',
+    );
+    expect(factory.getActiveSessionsCount()).toBe(0);
   });
 });

@@ -48,10 +48,14 @@ const CANONICAL_SAMPLE_RATE = 24000; // padrão interno do pipeline (48 bytes/ms
 export class CustomHttpTtsService implements StreamingTtsSessionFactory {
   private readonly logger = new Logger(CustomHttpTtsService.name);
 
-  public createSession(options: StreamingTtsSessionOptions): StreamingTtsSession {
+  public createSession(
+    options: StreamingTtsSessionOptions,
+  ): StreamingTtsSession {
     const baseUrl = options.baseUrl || '';
     if (!baseUrl) {
-      throw new Error('[CustomHttpTTS] baseUrl obrigatório para provider custom');
+      throw new Error(
+        '[CustomHttpTTS] baseUrl obrigatório para provider custom',
+      );
     }
     // Valida SSRF na criação da sessão (falha rápido antes da chamada iniciar)
     assertPublicHttpUrl(baseUrl, 'TTS customizado');
@@ -60,7 +64,8 @@ export class CustomHttpTtsService implements StreamingTtsSessionFactory {
     const voice = options.voiceId || '';
     const language = options.language || 'pt';
     const timeoutMs = customHttpTimeout(options.timeoutMs || 10_000);
-    const declaredSampleRate = options.outputSampleRate || CANONICAL_SAMPLE_RATE;
+    const declaredSampleRate =
+      options.outputSampleRate || CANONICAL_SAMPLE_RATE;
 
     const activeContexts = new Map<string, CustomContextState>();
 
@@ -106,9 +111,7 @@ export class CustomHttpTtsService implements StreamingTtsSessionFactory {
           if (contentType.includes('application/json')) {
             const json = (await res.json()) as { audio_base64?: string };
             if (!json.audio_base64) {
-              throw new Error(
-                'TTS customizado retornou JSON sem audio_base64',
-              );
+              throw new Error('TTS customizado retornou JSON sem audio_base64');
             }
             audioBuffer = Buffer.from(json.audio_base64, 'base64');
           } else {

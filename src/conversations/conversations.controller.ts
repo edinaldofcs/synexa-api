@@ -1,3 +1,4 @@
+import { SearchConversationsDto } from './dto/search-conversations.dto';
 import {
   Body,
   Controller,
@@ -38,6 +39,14 @@ export class ConversationsController {
       status,
       track_id: trackId,
     });
+  }
+
+  @Get('search')
+  search(@CurrentUser() user: any, @Query() query: SearchConversationsDto) {
+    return this.conversationsService.searchConversations(
+      extractTenantContext(user).companyId,
+      query,
+    );
   }
 
   @Get(':id')

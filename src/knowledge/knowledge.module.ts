@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { CommonModule } from '../common/common.module';
 import { QueueInfrastructureModule } from '../queue/queue-infrastructure.module';
 import { KnowledgeController } from './knowledge.controller';
@@ -8,7 +9,11 @@ import { MockEmbeddingProvider } from './providers/mock-embedding.provider';
 @Module({
   imports: [CommonModule, QueueInfrastructureModule],
   controllers: [KnowledgeController],
-  providers: [KnowledgeService, MockEmbeddingProvider],
+  providers: [
+    KnowledgeService,
+    MockEmbeddingProvider,
+    ProviderKeyResolverService,
+  ],
   exports: [KnowledgeService, MockEmbeddingProvider],
 })
 export class KnowledgeModule {}

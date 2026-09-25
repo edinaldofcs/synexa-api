@@ -1,7 +1,12 @@
+import { InworldVoiceService } from './inworld-voice.service';
+import { resolveVoiceFlowSettings } from './voice-flow-settings';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ITelephonyAdapter } from '../adapters/telephony-adapter.interface';
-import { GeminiLiveVoiceProvider } from '../providers/gemini-live-voice.provider';
+import {
+  GeminiLiveVoiceProvider,
+  resolveGeminiLiveSettings,
+} from '../providers/gemini-live-voice.provider';
 import { CascadeVoiceProvider } from '../providers/cascade-voice.provider';
 import { IVoiceProvider } from '../providers/voice-provider.interface';
 import {
@@ -173,6 +178,13 @@ export class VoiceSessionFactory {
 
     const rawVoiceEngine =
       overrides?.voiceEngine ||
+      ((resolveGeminiLiveSettings(clientMeta.gemini_live) ||
+        clientMeta.voice_settings ||
+        clientMeta.voice_behavior) &&
+      (clientMeta.voice_engine === 'hybrid' ||
+        clientMeta.voice_engine === 'live_api')
+        ? clientMeta.voice_engine
+        : undefined) ||
       (agent?.voice_engine as string) ||
       (clientMeta.voice_engine as string) ||
       defaultEngine;
@@ -202,19 +214,43 @@ export class VoiceSessionFactory {
 
     // BYO Voice: provedores TTS/STT customizados do cliente (por agente)
     const ttsProviderChoice =
-      (agent.tts_provider as string) ||
       (clientMeta.tts_provider as string) ||
+      (agent.tts_provider as string) ||
       '';
     const sttProviderChoice =
-      (agent.stt_provider as string) ||
       (clientMeta.stt_provider as string) ||
+      (agent.stt_provider as string) ||
       '';
-    const ttsProvider: 'cartesia' | 'custom' =
-      ttsProviderChoice === 'custom' ? 'custom' : 'cartesia';
-    const sttProvider: 'groq' | 'custom' =
-      sttProviderChoice === 'custom' ? 'custom' : 'groq';
+    const ttsProvider: 'cartesia' | 'inworld' | 'custom' =
+      ttsProviderChoice === 'inworld'
+        ? 'inworld'
+        : ttsProviderChoice === 'custom'
+          ? 'custom'
+          : 'cartesia';
+    const sttProvider: 'groq' | 'inworld' | 'custom' =
+      sttProviderChoice === 'inworld'
+        ? 'inworld'
+        : sttProviderChoice === 'custom'
+          ? 'custom'
+          : 'groq';
+    const inworldApiKey =
+      ttsProvider === 'inworld' || sttProvider === 'inworld'
+        ? await this.keyResolver.resolveApiKey(clientId || '', 'inworld')
+        : '';
+    if (
+      voiceEngine === 'hybrid' &&
+      (ttsProvider === 'inworld' || sttProvider === 'inworld') &&
+      !inworldApiKey
+    )
+      throw new Error('Configure a chave Inworld em Provedores.');
     let customTts:
-      | { baseUrl: string; apiKey: string; voice?: string; sampleRate?: number; timeoutMs?: number }
+      | {
+          baseUrl: string;
+          apiKey: string;
+          voice?: string;
+          sampleRate?: number;
+          timeoutMs?: number;
+        }
       | undefined;
     let customStt:
       | { baseUrl: string; apiKey: string; timeoutMs?: number }
@@ -246,7 +282,7 @@ export class VoiceSessionFactory {
             `[VoiceSessionFactory] tts_provider=custom mas config 'tts-custom' ausente (clientId=${clientId}). Usando Cartesia.`,
           );
         }
-      } else if (!cartesiaApiKey && clientId) {
+      } else if (ttsProvider === 'cartesia' && !cartesiaApiKey && clientId) {
         cartesiaApiKey = await this.keyResolver.resolveApiKey(
           clientId,
           'cartesia',
@@ -264,19 +300,23 @@ export class VoiceSessionFactory {
               timeoutMs: settings.timeoutMs,
             }
           : undefined;
-      } else if (!groqApiKey && clientId) {
+      } else if (sttProvider === 'groq' && !groqApiKey && clientId) {
         groqApiKey = await this.keyResolver.resolveApiKey(clientId, 'groq');
       }
-      if (!isUuidVoice) {
+      if (ttsProvider !== 'inworld' && !isUuidVoice) {
         resolvedVoiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
       }
       liveProvider = new CascadeVoiceProvider(
-        ttsProvider === 'custom' && customTts
-          ? this.customHttpTtsService
-          : this.cartesiaTtsService,
-        sttProvider === 'custom' && customStt
-          ? this.customHttpSttService
-          : this.groqWhisperSttService,
+        ttsProvider === 'inworld'
+          ? new InworldVoiceService()
+          : ttsProvider === 'custom' && customTts
+            ? this.customHttpTtsService
+            : this.cartesiaTtsService,
+        sttProvider === 'inworld'
+          ? new InworldVoiceService()
+          : sttProvider === 'custom' && customStt
+            ? this.customHttpSttService
+            : this.groqWhisperSttService,
         this.sileroVadService,
       );
     } else {
@@ -288,13 +328,44 @@ export class VoiceSessionFactory {
       liveProvider = new GeminiLiveVoiceProvider();
     }
 
+    const liveSettings =
+      voiceEngine === 'live_api'
+        ? resolveGeminiLiveSettings(clientMeta.gemini_live)
+        : undefined;
+    if (liveSettings) resolvedVoiceName = liveSettings.voiceName;
+    const flowVoice = resolveVoiceFlowSettings(clientMeta.voice_settings);
+    if (
+      voiceEngine === 'hybrid' &&
+      ttsProvider === 'cartesia' &&
+      flowVoice.cartesiaVoice
+    )
+      resolvedVoiceName = flowVoice.cartesiaVoice;
+    if (customTts && flowVoice.customTtsVoice)
+      customTts.voice = flowVoice.customTtsVoice;
+    if (voiceEngine === 'hybrid' && ttsProvider === 'inworld')
+      resolvedVoiceName =
+        clientMeta.tts_provider === 'inworld' ||
+        (clientMeta.voice_settings as any)?.inworldVoice
+          ? flowVoice.inworldVoice
+          : agent.tts_provider === 'inworld' &&
+              resolvedVoiceName &&
+              !isUuidVoice
+            ? resolvedVoiceName
+            : 'Mariana';
     const config: VoiceCallSessionConfig = {
+      inworldApiKey,
+      voiceBehavior:
+        clientMeta.voice_behavior as VoiceCallSessionConfig['voiceBehavior'],
+      voiceSettings: clientMeta.voice_settings,
+      geminiLive:
+        voiceEngine === 'live_api' ? clientMeta.gemini_live : undefined,
       ...(overrides || {}),
       companyId,
       clientId,
       agentId: (agent.id as string) || undefined,
       selectedAgent: Object.keys(agent).length ? agent : undefined,
       model:
+        liveSettings?.model ||
         overrides?.model ||
         (agent.model as string) ||
         this.configService.get<string>('GEMINI_LIVE_VOICE_MODEL') ||
@@ -303,15 +374,19 @@ export class VoiceSessionFactory {
       voiceEngine: voiceEngine as 'hybrid' | 'live_api',
       // Provider efetivo: só é 'custom' quando a config BYO existe
       ttsProvider:
-        voiceEngine === 'hybrid' && ttsProvider === 'custom' && customTts
-          ? 'custom'
-          : voiceEngine === 'hybrid'
-            ? 'cartesia'
-            : 'google',
+        voiceEngine === 'hybrid' && ttsProvider === 'inworld'
+          ? 'inworld'
+          : voiceEngine === 'hybrid' && ttsProvider === 'custom' && customTts
+            ? 'custom'
+            : voiceEngine === 'hybrid'
+              ? 'cartesia'
+              : 'google',
       sttProvider:
-        voiceEngine === 'hybrid' && sttProvider === 'custom' && customStt
-          ? 'custom'
-          : 'groq',
+        voiceEngine === 'hybrid' && sttProvider === 'inworld'
+          ? 'inworld'
+          : voiceEngine === 'hybrid' && sttProvider === 'custom' && customStt
+            ? 'custom'
+            : 'groq',
       customTts: ttsProvider === 'custom' ? customTts : undefined,
       customStt: sttProvider === 'custom' ? customStt : undefined,
       cartesiaApiKey,
@@ -365,16 +440,13 @@ export class VoiceSessionFactory {
   private async resolveCustomSettings(
     clientId: string,
     provider: 'tts-custom' | 'stt-custom',
-  ): Promise<
-    | {
-        baseUrl: string;
-        apiKey: string;
-        voice?: string;
-        sampleRate?: number;
-        timeoutMs?: number;
-      }
-    | null
-  > {
+  ): Promise<{
+    baseUrl: string;
+    apiKey: string;
+    voice?: string;
+    sampleRate?: number;
+    timeoutMs?: number;
+  } | null> {
     const apiKey = await this.keyResolver.resolveApiKey(clientId, provider);
     const settings = await this.keyResolver.resolveProviderSettings(
       clientId,

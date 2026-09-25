@@ -1,3 +1,4 @@
+import { CallExportsService } from '../../webhooks/services/call-exports.service';
 import { Processor, Process } from '@nestjs/bull';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Job } from 'bull';
@@ -10,7 +11,15 @@ import { WebhooksService } from '../../webhooks/services/webhooks.service';
 export class WebhookProcessor {
   private readonly logger = new Logger(WebhookProcessor.name);
 
-  constructor(private readonly webhooksService: WebhooksService) {}
+  constructor(
+    private readonly webhooksService: WebhooksService,
+    private readonly callExports: CallExportsService,
+  ) {}
+
+  @Process({ name: 'call-export-sweep', concurrency: 1 })
+  async sweepCalls() {
+    await this.callExports.sweep();
+  }
 
   @Process({
     name: JOB_DELIVER_WEBHOOK,

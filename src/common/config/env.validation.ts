@@ -96,6 +96,7 @@ export enum AuthProvider {
 export enum LlmProvider {
   GEMINI = 'gemini',
   GROQ = 'groq',
+  OPENAI = 'openai',
   OPENROUTER = 'openrouter',
   MOCK = 'mock',
 }
@@ -227,6 +228,18 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   OPENROUTER_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  OPENAI_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  INWORLD_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  OPENAI_MODEL?: string;
 
   @IsString()
   @IsOptional()
@@ -480,11 +493,12 @@ export function validateEnv(
     const hasAnyLlmKey =
       Boolean(validatedConfig.GEMINI_API_KEY) ||
       Boolean(validatedConfig.GROQ_API_KEY) ||
+      Boolean(validatedConfig.OPENAI_API_KEY) ||
       Boolean(validatedConfig.OPENROUTER_API_KEY);
 
     if (!hasAnyLlmKey) {
       throw new Error(
-        'At least one LLM API key (GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY) must be configured in production environment',
+        'At least one LLM API key (GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY) must be configured in production environment',
       );
     }
   }

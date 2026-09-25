@@ -1,3 +1,5 @@
+import { promises as fs } from 'fs';
+import { relative, isAbsolute } from 'path';
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join, resolve, normalize } from 'path';
@@ -17,6 +19,24 @@ export class LocalStorageProvider implements StorageProvider {
     if (!existsSync(this.basePath)) {
       mkdirSync(this.basePath, { recursive: true });
       this.logger.log(`Local storage initialized at ${this.basePath}`);
+    }
+  }
+
+  async remove(bucket: string, path: string): Promise<void> {
+    const safe = this.sanitizePath(bucket, path);
+    const target = resolve(this.basePath, safe.dir, safe.file);
+    const rel = relative(this.basePath, target);
+    if (rel.startsWith('..') || isAbsolute(rel))
+      throw new Error('Invalid storage path');
+    try {
+      const real = await fs.realpath(target);
+      const root = await fs.realpath(this.basePath);
+      const realRelative = relative(root, real);
+      if (realRelative.startsWith('..') || isAbsolute(realRelative))
+        throw new Error('Invalid storage path');
+      await fs.unlink(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
 

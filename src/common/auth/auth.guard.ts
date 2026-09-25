@@ -103,6 +103,12 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
       !!sessionUser.company_id;
 
     if (!isImpersonating) return base;
+    // A sessão não pode preservar privilégios revogados no banco.
+    if (
+      user.role !== 'platform_admin' ||
+      user.company_id !== sessionUser.original_company_id
+    )
+      return null;
 
     // Visualização válida somente enquanto a empresa alvo estiver ativa.
     const target = await this.prisma!.companies.findUnique({

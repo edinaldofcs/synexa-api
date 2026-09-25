@@ -1,3 +1,4 @@
+import { InworldVoiceService } from '../voice/services/inworld-voice.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -415,6 +416,8 @@ export class TestChatService {
           model = 'gemini-2.5-flash';
         } else if (provider.toLowerCase() === 'groq') {
           model = 'llama-3.3-70b-versatile';
+        } else if (provider.toLowerCase() === 'openai') {
+          model = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
         } else if (provider.toLowerCase() === 'openrouter') {
           model = 'google/gemini-2.5-flash';
         } else if (provider.toLowerCase() === 'cartesia') {
@@ -449,6 +452,13 @@ export class TestChatService {
       throw new Error(
         `Configuração incompleta ou chave não encontrada para o provedor "${provider || 'desconhecido'}". Verifique a chave de API em Configurações > Provedores de IA.`,
       );
+    }
+
+    if (provider.toLowerCase() === 'inworld') {
+      await InworldVoiceService.validateCredentials(apiKey);
+      return {
+        text: 'Credencial Inworld validada pelo catálogo de vozes. TTS/STT disponíveis para configuração.',
+      };
     }
 
     if (provider.toLowerCase() === 'cartesia') {

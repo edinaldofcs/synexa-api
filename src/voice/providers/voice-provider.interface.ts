@@ -19,13 +19,16 @@ export interface CustomSttConnectConfig {
 }
 
 export interface VoiceProviderConnectOptions {
+  geminiLive?: unknown;
+  voiceSettings?: unknown;
   apiKey: string;
+  inworldApiKey?: string;
   cartesiaApiKey?: string;
   groqApiKey?: string;
   /** 'custom' = TTS BYO via endpoint HTTP do cliente (config em customTts). */
-  ttsProvider?: 'cartesia' | 'custom';
+  ttsProvider?: 'cartesia' | 'inworld' | 'custom';
   /** 'custom' = STT BYO via endpoint HTTP do cliente (config em customStt). */
-  sttProvider?: 'groq' | 'custom';
+  sttProvider?: 'groq' | 'inworld' | 'custom';
   customTts?: CustomTtsConnectConfig;
   customStt?: CustomSttConnectConfig;
   systemPrompt: string;

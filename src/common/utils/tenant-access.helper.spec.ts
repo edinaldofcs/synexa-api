@@ -121,3 +121,21 @@ describe('tenant-access.helper', () => {
     });
   });
 });
+
+describe('effective company resolution', () => {
+  it('uses the visited company without looking up the original user', async () => {
+    const { tenantLocalStorage } = await import('../auth/tenant-context');
+    const { resolveUserCompanyId } = await import('./tenant-access.helper');
+    const prisma = { users: { findUnique: jest.fn() } };
+    await tenantLocalStorage.run(
+      { userId: 'admin', companyId: 'visited', role: 'company_admin' },
+      async () => {
+        expect(await resolveUserCompanyId(prisma, 'admin')).toBe('visited');
+        await expect(
+          resolveUserCompanyId(prisma, 'another-user'),
+        ).rejects.toThrow('Invalid tenant context');
+      },
+    );
+    expect(prisma.users.findUnique).not.toHaveBeenCalled();
+  });
+});

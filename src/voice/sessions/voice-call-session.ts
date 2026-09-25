@@ -1,3 +1,15 @@
+import { VoiceWorkTracker } from '../services/voice-work-tracker';
+import {
+  createVoiceConversation,
+  startVoiceHeartbeat,
+  finalizeVoiceConversation,
+} from '../services/voice-heartbeat';
+import { withFlowGreeting } from '../services/voice-runtime.util';
+import { resolveVoiceFlowSettings } from '../services/voice-flow-settings';
+import {
+  VoiceInactivity,
+  readInactivityTurns,
+} from '../services/voice-inactivity';
 import { Logger } from '@nestjs/common';
 import { ITelephonyAdapter } from '../adapters/telephony-adapter.interface';
 import {
@@ -39,6 +51,15 @@ export interface VoiceGateRuntimeConfig {
 }
 
 export interface VoiceCallSessionConfig {
+  geminiLive?: unknown;
+  voiceBehavior?: {
+    greetingMessage?: string;
+    aiSpeaksFirst?: boolean;
+    greetingCacheEnabled?: boolean;
+    idleEnabled?: boolean;
+    turns?: unknown[];
+  };
+  voiceSettings?: unknown;
   companyId?: string;
   clientId?: string;
   agentId?: string;
@@ -71,6 +92,7 @@ export interface VoiceCallSessionConfig {
     apiKey: string;
     timeoutMs?: number;
   };
+  inworldApiKey?: string;
   cartesiaApiKey?: string;
   groqApiKey?: string;
   /**
@@ -88,6 +110,9 @@ export class VoiceCallSession {
   private readonly logger = new Logger(VoiceCallSession.name);
 
   public readonly id: string;
+  private stopHeartbeat?: () => void;
+  private exportEnabled = false;
+  private readonly pendingWork = new VoiceWorkTracker();
   public conversationId: string | null = null;
   public isAiSpeaking = false;
   public isGreetingPlaying = false;
@@ -98,6 +123,7 @@ export class VoiceCallSession {
   public startTime = 0;
   private isEnded = false;
 
+  private inactivity?: VoiceInactivity;
   private gateSession: AudioGateSession | null = null;
   private telephonyAdapter: ITelephonyAdapter;
   private liveProvider: IVoiceProvider;
@@ -154,6 +180,17 @@ export class VoiceCallSession {
     this.greetingCacheService = options.greetingCacheService;
     this.config = options.config;
     this.id = this.telephonyAdapter.id;
+    this.inactivity = new VoiceInactivity(
+      readInactivityTurns(this.config.voiceBehavior),
+      (text) =>
+        this.liveProvider.sendText(
+          `Fale exatamente a mensagem de inatividade a seguir, sem executar ferramentas: ${JSON.stringify(text)}`,
+        ),
+      () => {
+        void this.executeGracefulTelephonyHangup('inactivity');
+      },
+      () => this.logger.warn('Inactivity speech timed out'),
+    );
   }
 
   private readonly greetingCacheService?: VoiceGreetingCacheService;
@@ -278,7 +315,7 @@ export class VoiceCallSession {
             model: this.config.model,
             voice_name: this.config.voiceName,
           } as Record<string, unknown>;
-          const conv = await this.prisma.conversations.create({
+          const conv = await createVoiceConversation(this.prisma, {
             data: {
               company_id: companyId,
               client_id: clientId,
@@ -288,6 +325,10 @@ export class VoiceCallSession {
             },
           });
           this.conversationId = conv.id;
+          this.exportEnabled = conv.exportEnabled;
+          this.stopHeartbeat = this.exportEnabled
+            ? startVoiceHeartbeat(this.prisma, conv.id)
+            : undefined;
           this.conversationMetadata = convMetadata;
 
           // Persiste variáveis mapeadas no estado da conversa
@@ -302,9 +343,8 @@ export class VoiceCallSession {
             },
           });
         } catch (err: any) {
-          this.logger.error(
-            `Erro ao criar conversa ou estado no banco: ${err.message}`,
-          );
+          this.logger.error(`Erro ao criar conversa ou estado no banco`);
+          throw err;
         }
       }
 
@@ -396,16 +436,21 @@ export class VoiceCallSession {
       // 6. Conecta a IA (Gemini Live Provider)
       await this.liveProvider.connect({
         apiKey: this.config.apiKey || process.env.GEMINI_API_KEY || '',
+        inworldApiKey: this.config.inworldApiKey,
         cartesiaApiKey: this.config.cartesiaApiKey,
         groqApiKey: this.config.groqApiKey,
         ttsProvider:
-          this.config.ttsProvider === 'custom' && this.config.customTts
-            ? 'custom'
-            : 'cartesia',
+          this.config.ttsProvider === 'inworld'
+            ? 'inworld'
+            : this.config.ttsProvider === 'custom' && this.config.customTts
+              ? 'custom'
+              : 'cartesia',
         sttProvider:
-          this.config.sttProvider === 'custom' && this.config.customStt
-            ? 'custom'
-            : 'groq',
+          this.config.sttProvider === 'inworld'
+            ? 'inworld'
+            : this.config.sttProvider === 'custom' && this.config.customStt
+              ? 'custom'
+              : 'groq',
         customTts: this.config.customTts,
         customStt: this.config.customStt,
         model:
@@ -418,6 +463,8 @@ export class VoiceCallSession {
               : 'gemini-2.5-flash-lite'
             : resolveLiveModel(this.config.model),
         voiceName: this.config.voiceName,
+        geminiLive: this.config.geminiLive,
+        voiceSettings: this.config.voiceSettings,
         systemPrompt,
         contextCompressionEnabled:
           this.config.contextCompressionEnabled ?? true,
@@ -429,6 +476,7 @@ export class VoiceCallSession {
             `🎙️ [VoiceCallSession] Provedor de IA conectado para chamada ${this.id}`,
           );
           this.setupCompleted = true;
+          this.inactivity?.start();
           this.config.onEvent?.({
             type: 'flow_telephony_ready',
             channelId: this.id,
@@ -440,11 +488,13 @@ export class VoiceCallSession {
         },
         onAudio: (base64Audio) => {
           const pcm24k = Buffer.from(base64Audio, 'base64');
+          this.inactivity?.outputAudio(pcm24k.length);
           this.isAiSpeaking = true;
           this.gateSession?.notifyAiSpeakingChanged(true);
           this.telephonyAdapter.sendAudio(pcm24k);
         },
         onAiTranscript: async (text) => {
+          if (this.isEnded) return;
           this.config.onEvent?.({
             type: 'flow_telephony_transcript',
             channelId: this.id,
@@ -455,6 +505,9 @@ export class VoiceCallSession {
           await this.appendAiTranscript(companyId, text);
         },
         onUserTranscript: async (text) => {
+          if (this.isEnded) return;
+          this.inactivity?.userActivity();
+          this.inactivity?.outputStarted();
           this.config.onEvent?.({
             type: 'flow_telephony_transcript',
             channelId: this.id,
@@ -473,6 +526,7 @@ export class VoiceCallSession {
           }
           this.isAiSpeaking = false;
           this.interruptedCount++;
+          this.inactivity?.interrupted();
           // Barge-in: descarta o áudio do Gemini ainda enfileirado para que
           // a IA pare de falar imediatamente (evita cauda obsoleta tocando)
           this.telephonyAdapter.clearQueuedAudio?.();
@@ -480,6 +534,7 @@ export class VoiceCallSession {
           void this.flushTranscriptBuffers();
         },
         onTurnComplete: () => {
+          this.inactivity?.outputComplete();
           this.isAiSpeaking = false;
           this.gateSession?.notifyAiSpeakingChanged(false);
           void this.flushTranscriptBuffers();
@@ -490,310 +545,315 @@ export class VoiceCallSession {
             }, 1500);
           }
         },
-        onToolCall: async (functionCalls) => {
-          // O protocolo BidiGenerateContent do Gemini Live paralisa a síntese
-          // de fala até receber toolResponse para CADA call recebida. Qualquer
-          // exceção ou return antecipado que omita o sendToolResponse provoca
-          // deadlock — por isso todo caminho abaixo termina respondendo.
-          const errorResponseFor = (call: any, err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
-            return {
-              id: call.id,
-              name: call.name,
-              response: { ok: false, error: message },
+        onToolCall: (functionCalls) =>
+          this.pendingWork.run(async () => {
+            if (this.isEnded) return;
+            this.inactivity?.outputStarted();
+            // O protocolo BidiGenerateContent do Gemini Live paralisa a síntese
+            // de fala até receber toolResponse para CADA call recebida. Qualquer
+            // exceção ou return antecipado que omita o sendToolResponse provoca
+            // deadlock — por isso todo caminho abaixo termina respondendo.
+            const errorResponseFor = (call: any, err: unknown) => {
+              const message = err instanceof Error ? err.message : String(err);
+              return {
+                id: call.id,
+                name: call.name,
+                response: { ok: false, error: message },
+              };
             };
-          };
 
-          if (!clientId || !selectedAgent?.id) {
-            this.logger.warn(
-              `⚠️ [VoiceCallSession] Tool calls sem clientId/agente (chamada ${this.id})`,
-            );
-            this.liveProvider.sendToolResponse(
-              functionCalls.map((call) =>
-                errorResponseFor(call, 'Client or agent unavailable'),
-              ),
-            );
-            return;
-          }
+            if (!clientId || !selectedAgent?.id) {
+              this.logger.warn(
+                `⚠️ [VoiceCallSession] Tool calls sem clientId/agente (chamada ${this.id})`,
+              );
+              this.liveProvider.sendToolResponse(
+                functionCalls.map((call) =>
+                  errorResponseFor(call, 'Client or agent unavailable'),
+                ),
+              );
+              return;
+            }
 
-          const agentToolsList =
-            clientId && selectedAgent?.id && this.voiceToolsService
-              ? await this.voiceToolsService
-                  .getAgentTools(clientId, selectedAgent.id)
-                  .catch(() => [])
-              : [];
+            const agentToolsList =
+              clientId && selectedAgent?.id && this.voiceToolsService
+                ? await this.voiceToolsService
+                    .getAgentTools(clientId, selectedAgent.id)
+                    .catch(() => [])
+                : [];
 
-          for (const call of functionCalls) {
-            const matchedTool = agentToolsList.find(
-              (candidate) => candidate.name === call.name,
-            );
-            this.config.onEvent?.({
-              type: 'flow_telephony_tool_call',
-              channelId: this.id,
-              clientId: this.config.clientId,
-              name: call.name,
-              toolName: matchedTool?.apiName || call.name,
-              apiId: matchedTool?.id,
-              arguments: call.args || {},
-              agentId: selectedAgent?.id,
-            });
-          }
+            for (const call of functionCalls) {
+              const matchedTool = agentToolsList.find(
+                (candidate) => candidate.name === call.name,
+              );
+              this.config.onEvent?.({
+                type: 'flow_telephony_tool_call',
+                channelId: this.id,
+                clientId: this.config.clientId,
+                name: call.name,
+                toolName: matchedTool?.apiName || call.name,
+                apiId: matchedTool?.id,
+                arguments: call.args || {},
+                agentId: selectedAgent?.id,
+              });
+            }
 
-          let responses: Array<{ id: string; name: string; response: any }>;
-          try {
-            responses = await Promise.all(
-              functionCalls.map(async (call) => {
-                try {
-                  if (call.name === 'finalizar_chamada') {
-                    const despedida =
-                      (call.args?.mensagem_despedida as string) || '';
-                    this.logger.log(
-                      `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}. Aguardando conclusão da fala da IA.`,
-                    );
-                    this.hangupCause = 'ai_requested';
-                    this.pendingAiHangup = true;
-
-                    // Watchdog de segurança para não prender o canal da operadora/Asterisk (16s)
-                    if (this.hangupWatchdogTimer) {
-                      clearTimeout(this.hangupWatchdogTimer);
-                    }
-                    this.hangupWatchdogTimer = setTimeout(() => {
-                      if (this.pendingAiHangup && !this.hangupExecuted) {
-                        void this.executeGracefulTelephonyHangup(
-                          'watchdog_timeout',
-                        );
-                      }
-                    }, VOICE_HANGUP_WATCHDOG_TIMEOUT_MS);
-
-                    return {
-                      id: call.id,
-                      name: call.name,
-                      response: {
-                        ok: true,
-                        message: buildVoiceFarewellToolResponse(),
-                      },
-                    };
-                  }
-
-                  if (call.name === 'set_call_variable') {
-                    const varName = call.args?.name;
-                    const varVal = call.args?.value;
-                    if (
-                      varName &&
-                      varVal &&
-                      this.telephonyAdapter.setVariable
-                    ) {
-                      await this.telephonyAdapter.setVariable(
-                        String(varName),
-                        String(varVal),
+            let responses: Array<{ id: string; name: string; response: any }>;
+            try {
+              responses = await Promise.all(
+                functionCalls.map(async (call) => {
+                  try {
+                    if (call.name === 'finalizar_chamada') {
+                      const despedida =
+                        (call.args?.mensagem_despedida as string) || '';
+                      this.logger.log(
+                        `📞 [VoiceCallSession] IA solicitou encerramento da chamada ${this.id}. Aguardando conclusão da fala da IA.`,
                       );
+                      this.hangupCause = 'ai_requested';
+                      this.pendingAiHangup = true;
+
+                      // Watchdog de segurança para não prender o canal da operadora/Asterisk (16s)
+                      if (this.hangupWatchdogTimer) {
+                        clearTimeout(this.hangupWatchdogTimer);
+                      }
+                      this.hangupWatchdogTimer = setTimeout(() => {
+                        if (this.pendingAiHangup && !this.hangupExecuted) {
+                          void this.executeGracefulTelephonyHangup(
+                            'watchdog_timeout',
+                          );
+                        }
+                      }, VOICE_HANGUP_WATCHDOG_TIMEOUT_MS);
+
                       return {
                         id: call.id,
                         name: call.name,
-                        response: { ok: true, saved: { [varName]: varVal } },
+                        response: {
+                          ok: true,
+                          message: buildVoiceFarewellToolResponse(),
+                        },
                       };
                     }
-                    return {
-                      id: call.id,
-                      name: call.name,
-                      response: {
-                        ok: false,
-                        error: 'Telephony does not support setVariable',
-                      },
-                    };
-                  }
 
-                  if (!this.voiceToolsService) {
-                    return {
-                      id: call.id,
-                      name: call.name,
-                      response: {
-                        ok: false,
-                        error: 'Tools service unavailable',
-                      },
-                    };
-                  }
-
-                  const isSubagent = call.name.startsWith('subagent_');
-                  const toolCallStarted = Date.now();
-                  const response = isSubagent
-                    ? await this.voiceToolsService.executeSubagent(
-                        clientId,
-                        selectedAgent.id,
-                        call.name,
-                        call.args || {},
-                      )
-                    : await this.voiceToolsService.execute(
-                        clientId,
-                        selectedAgent.id,
-                        call.name,
-                        call.args || {},
-                        this.sessionState,
-                      );
-
-                  // Persiste a chamada de tool da voz na tabela tool_calls
-                  // (não-bloqueante: falha de log não pode derrubar a chamada)
-                  if (this.config.companyId) {
-                    void this.prisma.tool_calls
-                      .create({
-                        data: {
-                          company_id: this.config.companyId,
-                          client_id: clientId,
-                          conversation_id: this.conversationId,
-                          tool_name: call.name,
-                          tool_type: isSubagent ? 'subagent' : 'api',
-                          arguments: (call.args || {}) as any,
-                          result: (response || {}) as any,
-                          status:
-                            (response as any)?.ok === false
-                              ? 'failed'
-                              : 'success',
-                          latency_ms: Date.now() - toolCallStarted,
-                          error_message:
-                            (response as any)?.error ||
-                            (response as any)?.message ||
-                            null,
-                        },
-                      })
-                      .catch(() => undefined);
-                  }
-
-                  if (
-                    response &&
-                    typeof response === 'object' &&
-                    (response as Record<string, unknown>).ok !== false
-                  ) {
-                    const apiResponse = response as Record<string, any>;
-                    const returnedState =
-                      apiResponse?.data && typeof apiResponse.data === 'object'
-                        ? apiResponse.data
-                        : Object.fromEntries(
-                            Object.entries(apiResponse).filter(
-                              ([key]) =>
-                                ![
-                                  'ok',
-                                  'status',
-                                  'message',
-                                  'error',
-                                  '_chainTrail',
-                                ].includes(key),
-                            ),
-                          );
-                    this.sessionState = {
-                      ...this.sessionState,
-                      ...returnedState,
-                    };
-
-                    const matchedTool = agentToolsList.find(
-                      (candidate) => candidate.name === call.name,
-                    );
-
-                    this.config.onEvent?.({
-                      type: 'flow_telephony_tool_response',
-                      channelId: this.id,
-                      clientId: this.config.clientId,
-                      name: call.name,
-                      toolName: matchedTool?.apiName || call.name,
-                      apiId: matchedTool?.id,
-                      response,
-                    });
-
-                    // Notifica encadeamento se houver _chainTrail
-                    if (Array.isArray(apiResponse?._chainTrail)) {
-                      for (const step of apiResponse._chainTrail) {
-                        this.config.onEvent?.({
-                          type: 'flow_telephony_chaining',
-                          channelId: this.id,
-                          clientId: this.config.clientId,
-                          from: step.from,
-                          to: step.to,
-                          fromId: step.fromId,
-                          toId: step.toId,
-                          arguments: step.arguments,
-                          response: step.response,
-                          timestamp: step.timestamp,
-                        });
+                    if (call.name === 'set_call_variable') {
+                      const varName = call.args?.name;
+                      const varVal = call.args?.value;
+                      if (
+                        varName &&
+                        varVal &&
+                        this.telephonyAdapter.setVariable
+                      ) {
+                        await this.telephonyAdapter.setVariable(
+                          String(varName),
+                          String(varVal),
+                        );
+                        return {
+                          id: call.id,
+                          name: call.name,
+                          response: { ok: true, saved: { [varName]: varVal } },
+                        };
                       }
+                      return {
+                        id: call.id,
+                        name: call.name,
+                        response: {
+                          ok: false,
+                          error: 'Telephony does not support setVariable',
+                        },
+                      };
                     }
 
-                    // Notifica variáveis de sessão enriquecidas
-                    this.config.onEvent?.({
-                      type: 'flow_telephony_variables',
-                      channelId: this.id,
-                      clientId: this.config.clientId,
-                      variables: this.sessionState,
-                    });
+                    if (!this.voiceToolsService) {
+                      return {
+                        id: call.id,
+                        name: call.name,
+                        response: {
+                          ok: false,
+                          error: 'Tools service unavailable',
+                        },
+                      };
+                    }
 
-                    // Avalia condição de ativação para transição de agente
-                    try {
-                      if (this.config.clientId && this.prisma) {
-                        const otherAgents =
-                          await this.prisma.painel_agents.findMany({
-                            where: {
-                              client_id: this.config.clientId,
-                              id: { not: selectedAgent?.id },
-                              is_active: true,
-                            },
-                            orderBy: { execution_order: 'asc' },
-                          });
+                    const isSubagent = call.name.startsWith('subagent_');
+                    const toolCallStarted = Date.now();
+                    const response = isSubagent
+                      ? await this.voiceToolsService.executeSubagent(
+                          clientId,
+                          selectedAgent.id,
+                          call.name,
+                          call.args || {},
+                        )
+                      : await this.voiceToolsService.execute(
+                          clientId,
+                          selectedAgent.id,
+                          call.name,
+                          call.args || {},
+                          this.sessionState,
+                        );
 
-                        for (const nextAgent of otherAgents) {
-                          const conditions =
-                            nextAgent.activation_conditions as any;
-                          if (conditions) {
-                            const evalResult = evaluateConditionsWithDetails(
-                              conditions,
-                              this.sessionState,
+                    // Persiste a chamada de tool da voz na tabela tool_calls
+                    // (não-bloqueante: falha de log não pode derrubar a chamada)
+                    if (this.config.companyId) {
+                      await this.prisma.tool_calls
+                        .create({
+                          data: {
+                            company_id: this.config.companyId,
+                            client_id: clientId,
+                            conversation_id: this.conversationId,
+                            tool_name: call.name,
+                            tool_type: isSubagent ? 'subagent' : 'api',
+                            arguments: (call.args || {}) as any,
+                            result: (response || {}) as any,
+                            status:
+                              (response as any)?.ok === false
+                                ? 'failed'
+                                : 'success',
+                            latency_ms: Date.now() - toolCallStarted,
+                            error_message:
+                              (response as any)?.error ||
+                              (response as any)?.message ||
+                              null,
+                          },
+                        })
+                        .catch(() => undefined);
+                    }
+
+                    if (
+                      response &&
+                      typeof response === 'object' &&
+                      (response as Record<string, unknown>).ok !== false
+                    ) {
+                      const apiResponse = response as Record<string, any>;
+                      const returnedState =
+                        apiResponse?.data &&
+                        typeof apiResponse.data === 'object'
+                          ? apiResponse.data
+                          : Object.fromEntries(
+                              Object.entries(apiResponse).filter(
+                                ([key]) =>
+                                  ![
+                                    'ok',
+                                    'status',
+                                    'message',
+                                    'error',
+                                    '_chainTrail',
+                                  ].includes(key),
+                              ),
                             );
-                            if (evalResult?.matched) {
-                              this.logger.log(
-                                `🔄 [VoiceCallSession] Transição de agente ativada: ${selectedAgent?.service_step} ➔ ${nextAgent.service_step}`,
+                      this.sessionState = {
+                        ...this.sessionState,
+                        ...returnedState,
+                      };
+
+                      const matchedTool = agentToolsList.find(
+                        (candidate) => candidate.name === call.name,
+                      );
+
+                      this.config.onEvent?.({
+                        type: 'flow_telephony_tool_response',
+                        channelId: this.id,
+                        clientId: this.config.clientId,
+                        name: call.name,
+                        toolName: matchedTool?.apiName || call.name,
+                        apiId: matchedTool?.id,
+                        response,
+                      });
+
+                      // Notifica encadeamento se houver _chainTrail
+                      if (Array.isArray(apiResponse?._chainTrail)) {
+                        for (const step of apiResponse._chainTrail) {
+                          this.config.onEvent?.({
+                            type: 'flow_telephony_chaining',
+                            channelId: this.id,
+                            clientId: this.config.clientId,
+                            from: step.from,
+                            to: step.to,
+                            fromId: step.fromId,
+                            toId: step.toId,
+                            arguments: step.arguments,
+                            response: step.response,
+                            timestamp: step.timestamp,
+                          });
+                        }
+                      }
+
+                      // Notifica variáveis de sessão enriquecidas
+                      this.config.onEvent?.({
+                        type: 'flow_telephony_variables',
+                        channelId: this.id,
+                        clientId: this.config.clientId,
+                        variables: this.sessionState,
+                      });
+
+                      // Avalia condição de ativação para transição de agente
+                      try {
+                        if (this.config.clientId && this.prisma) {
+                          const otherAgents =
+                            await this.prisma.painel_agents.findMany({
+                              where: {
+                                client_id: this.config.clientId,
+                                id: { not: selectedAgent?.id },
+                                is_active: true,
+                              },
+                              orderBy: { execution_order: 'asc' },
+                            });
+
+                          for (const nextAgent of otherAgents) {
+                            const conditions =
+                              nextAgent.activation_conditions as any;
+                            if (conditions) {
+                              const evalResult = evaluateConditionsWithDetails(
+                                conditions,
+                                this.sessionState,
                               );
-                              this.config.onEvent?.({
-                                type: 'flow_telephony_agent_switched',
-                                channelId: this.id,
-                                clientId: this.config.clientId,
-                                fromAgent:
-                                  selectedAgent?.service_step ||
-                                  selectedAgent?.id,
-                                fromAgentId: selectedAgent?.id,
-                                toAgent: nextAgent.service_step || nextAgent.id,
-                                toAgentId: nextAgent.id,
-                                reason:
-                                  'Condição de ativação atendida pelo retorno da API',
-                              });
-                              selectedAgent = nextAgent as any;
-                              break;
+                              if (evalResult?.matched) {
+                                this.logger.log(
+                                  `🔄 [VoiceCallSession] Transição de agente ativada: ${selectedAgent?.service_step} ➔ ${nextAgent.service_step}`,
+                                );
+                                this.config.onEvent?.({
+                                  type: 'flow_telephony_agent_switched',
+                                  channelId: this.id,
+                                  clientId: this.config.clientId,
+                                  fromAgent:
+                                    selectedAgent?.service_step ||
+                                    selectedAgent?.id,
+                                  fromAgentId: selectedAgent?.id,
+                                  toAgent:
+                                    nextAgent.service_step || nextAgent.id,
+                                  toAgentId: nextAgent.id,
+                                  reason:
+                                    'Condição de ativação atendida pelo retorno da API',
+                                });
+                                selectedAgent = nextAgent as any;
+                                break;
+                              }
                             }
                           }
                         }
+                      } catch (e: any) {
+                        this.logger.warn(
+                          `Erro ao avaliar transição de agente telefônico: ${e?.message}`,
+                        );
                       }
-                    } catch (e: any) {
-                      this.logger.warn(
-                        `Erro ao avaliar transição de agente telefônico: ${e?.message}`,
-                      );
                     }
-                  }
 
-                  return { id: call.id, name: call.name, response };
-                } catch (err: any) {
-                  this.logger.warn(
-                    `🛠️ [VoiceCallSession] Tool ${call.name} falhou: ${err.message}`,
-                  );
-                  return errorResponseFor(call, err);
-                }
-              }),
-            );
-          } catch (err: any) {
-            this.logger.error(
-              `❌ [VoiceCallSession] Falha ao processar tool calls: ${err.message}`,
-            );
-            responses = functionCalls.map((call) =>
-              errorResponseFor(call, err),
-            );
-          }
-          this.liveProvider.sendToolResponse(responses);
-        },
+                    return { id: call.id, name: call.name, response };
+                  } catch (err: any) {
+                    this.logger.warn(
+                      `🛠️ [VoiceCallSession] Tool ${call.name} falhou: ${err.message}`,
+                    );
+                    return errorResponseFor(call, err);
+                  }
+                }),
+              );
+            } catch (err: any) {
+              this.logger.error(
+                `❌ [VoiceCallSession] Falha ao processar tool calls: ${err.message}`,
+              );
+              responses = functionCalls.map((call) =>
+                errorResponseFor(call, err),
+              );
+            }
+            if (!this.isEnded) this.liveProvider.sendToolResponse(responses);
+          }),
         onUsageMetadata: (meta) => {
           this.totalTokens = meta.totalTokenCount || 0;
           this.inputTokens = meta.promptTokenCount || 0;
@@ -805,6 +865,7 @@ export class VoiceCallSession {
           );
         },
         onClose: () => {
+          this.inactivity?.stop();
           this.logger.log(
             `🛑 [VoiceCallSession] Sessão IA encerrada para chamada ${this.id}`,
           );
@@ -813,6 +874,7 @@ export class VoiceCallSession {
 
       // 7. Configura o Transporte de Telefonia
       this.telephonyAdapter.onAudio((pcm16k) => {
+        if (!this.isAiSpeaking) this.inactivity?.inputAudio(pcm16k);
         if (this.isEnded) return;
         const result = this.gateSession?.processChunk(
           pcm16k.toString('base64'),
@@ -862,9 +924,13 @@ export class VoiceCallSession {
   private async maybeSendGreeting(): Promise<void> {
     if (this.greetingSent) return;
     if (!this.setupCompleted || !this.transportStarted) return;
-    const agent = this.config.selectedAgent as unknown;
+    const agent = withFlowGreeting(
+      this.config.selectedAgent,
+      this.config.voiceBehavior,
+    );
     if (!aiSpeaksFirstEnabled(agent)) return;
     this.greetingSent = true;
+    this.inactivity?.outputStarted();
 
     this.logger.log(
       `🤖 [VoiceCallSession] IA sauda o cliente primeiro (chamada ${this.id})`,
@@ -872,26 +938,35 @@ export class VoiceCallSession {
 
     // 1. Tenta resolver saudação via VoiceGreetingCacheService se habilitado (opcional)
     const variation = selectVoiceGreetingVariation(agent, this.id);
-    const cacheEnabled = voiceGreetingCacheEnabled(agent);
+    const cacheEnabled =
+      this.config.voiceBehavior?.greetingCacheEnabled ??
+      voiceGreetingCacheEnabled(agent);
 
-    if (variation && cacheEnabled && this.greetingCacheService) {
+    if (
+      variation &&
+      cacheEnabled &&
+      !this.exportEnabled &&
+      this.greetingCacheService
+    ) {
       try {
         const isHybrid = this.config.voiceEngine === 'hybrid';
         const provider =
           this.config.ttsProvider || (isHybrid ? 'cartesia' : 'google');
         const customTts = this.config.customTts;
         const apiKey =
-          provider === 'custom'
-            ? customTts?.apiKey || ''
-            : isHybrid
-              ? this.config.cartesiaApiKey || process.env.CARTESIA_API_KEY || ''
-              : this.config.apiKey || process.env.GEMINI_API_KEY || '';
+          provider === 'inworld'
+            ? this.config.inworldApiKey || ''
+            : provider === 'custom'
+              ? customTts?.apiKey || ''
+              : isHybrid
+                ? this.config.cartesiaApiKey ||
+                  process.env.CARTESIA_API_KEY ||
+                  ''
+                : this.config.apiKey || process.env.GEMINI_API_KEY || '';
 
         const voiceId =
           provider === 'custom'
-            ? customTts?.voice ||
-              this.config.voiceName ||
-              'synexa-custom-voice'
+            ? customTts?.voice || this.config.voiceName || 'synexa-custom-voice'
             : this.config.voiceName ||
               (isHybrid ? 'cb2694c3-715f-4da9-99f3-1c974fff2928' : 'Aoede');
 
@@ -908,6 +983,15 @@ export class VoiceCallSession {
               agentId: this.config.agentId,
               provider,
               voiceId,
+              modelId:
+                provider === 'inworld'
+                  ? 'inworld-tts-2-flash'
+                  : isHybrid
+                    ? resolveVoiceFlowSettings(this.config.voiceSettings)
+                        .cartesiaModel
+                    : undefined,
+              language: resolveVoiceFlowSettings(this.config.voiceSettings)
+                .language,
               template: variation,
               customerName,
               variables: this.sessionState,
@@ -915,6 +999,7 @@ export class VoiceCallSession {
               customTts: provider === 'custom' ? customTts : undefined,
             });
 
+          if (this.isEnded) return;
           if (res.audioBuffer && res.audioBuffer.length > 0) {
             this.logger.log(
               `⚡ [VoiceCallSession] Reproduzindo saudação inicial (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${provider} | Texto: "${res.text}"`,
@@ -924,6 +1009,8 @@ export class VoiceCallSession {
             this.liveProvider.setInterruptionBlocked?.(true);
             this.gateSession?.notifyAiSpeakingChanged(true);
             this.telephonyAdapter.sendAudio(res.audioBuffer);
+            this.inactivity?.outputAudio(res.audioBuffer.length);
+            this.inactivity?.outputComplete();
 
             void this.appendAiTranscript(this.config.companyId || '', res.text);
 
@@ -993,11 +1080,17 @@ export class VoiceCallSession {
       this.logger.warn(`Falha ao solicitar hangup do canal: ${err.message}`);
     }
     try {
-      await this.telephonyAdapter.hangup('ai_requested');
+      await this.telephonyAdapter.hangup(
+        origin === 'inactivity' ? 'inactivity' : 'ai_requested',
+      );
     } catch (err: any) {
       this.logger.warn(`Falha no hangup direto do canal: ${err.message}`);
     }
-    setTimeout(() => void this.end('ai_requested'), 800);
+    setTimeout(
+      () =>
+        void this.end(origin === 'inactivity' ? 'inactivity' : 'ai_requested'),
+      800,
+    );
   }
 
   /**
@@ -1147,9 +1240,13 @@ export class VoiceCallSession {
   public async end(reason?: string): Promise<void> {
     if (this.isEnded) return;
     this.isEnded = true;
+    this.inactivity?.stop();
     // Descarrega os buffers de transcript antes de encerrar para não perder
     // as últimas frases quando o cliente desliga no meio de um turno.
-    await this.flushTranscriptBuffers();
+    await this.pendingWork.drain();
+    await this.flushTranscriptBuffers().catch(() =>
+      this.logger.error('Transcript flush failed'),
+    );
     if (this.maxDurationTimer) {
       clearTimeout(this.maxDurationTimer);
       this.maxDurationTimer = null;
@@ -1168,6 +1265,15 @@ export class VoiceCallSession {
       this.liveProvider.close();
       this.telephonyAdapter.close();
 
+      if (this.conversationId)
+        await this.prisma.conversation_state.upsert({
+          where: { conversation_id: this.conversationId },
+          create: {
+            conversation_id: this.conversationId,
+            state: this.sessionState as any,
+          },
+          update: { state: this.sessionState as any },
+        });
       const durationSeconds = Math.max(
         1,
         Math.round((Date.now() - this.startTime) / 1000),
@@ -1353,7 +1459,13 @@ export class VoiceCallSession {
         `📊 [VoiceCallSession] Chamada ${this.id} finalizada: ${durationSeconds}s | Custo: $${rawCost} | Motivo: ${this.hangupCause || 'normal'}`,
       );
     } catch (err: any) {
-      this.logger.error(`Erro ao finalizar sessão de voz: ${err.message}`);
+      this.logger.error(`Erro ao finalizar sessão de voz`);
+    } finally {
+      this.stopHeartbeat?.();
+      if (this.conversationId)
+        await finalizeVoiceConversation(this.prisma, this.conversationId).catch(
+          () => this.logger.error('Voice finalization persistence failed'),
+        );
     }
   }
 }

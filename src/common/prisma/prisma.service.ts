@@ -33,6 +33,7 @@ export const TENANT_SUPPORTED_MODELS = [
   'credential_audit_logs',
   'painel_interactions',
   'voice_session_telemetry',
+  'call_exports',
   'telephony_endpoints',
 ];
 

@@ -1,3 +1,4 @@
+import { finalizeVoiceConversation } from './voice-heartbeat';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
@@ -186,7 +187,10 @@ export class VoiceTelemetryService {
    * Fecha a conversa omnichannel, registra agent_runs e voice_session_telemetry
    * (uma única vez por sessão).
    */
-  async persistSessionTelemetry(session: VoiceClientSession): Promise<void> {
+  async persistSessionTelemetry(
+    session: VoiceClientSession,
+    reason?: string,
+  ): Promise<void> {
     if (session.telemetryPersisted) return;
     session.telemetryPersisted = true;
 
@@ -307,14 +311,23 @@ export class VoiceTelemetryService {
                 ? 'custom-cascade'
                 : 'cartesia-cascade'
               : 'gemini-live',
-          hangupCause: session.pendingAiHangup ? 'ai_completed' : undefined,
+          hangupCause:
+            reason || (session.pendingAiHangup ? 'ai_completed' : undefined),
           startedAt: new Date(session.startTime),
           endedAt: new Date(),
           status: 'completed',
         });
       }
     } catch (err: any) {
-      this.logger.error(`Erro ao persistir telemetria de voz: ${err.message}`);
+      this.logger.error(`Erro ao persistir telemetria de voz`);
+    } finally {
+      if (session.conversationId)
+        await finalizeVoiceConversation(
+          this.prisma,
+          session.conversationId,
+        ).catch(() =>
+          this.logger.error('Voice finalization persistence failed'),
+        );
     }
   }
 }

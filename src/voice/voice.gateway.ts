@@ -1,3 +1,15 @@
+import { VoiceWorkTracker } from './services/voice-work-tracker';
+import {
+  createVoiceConversation,
+  startVoiceHeartbeat,
+} from './services/voice-heartbeat';
+import { InworldVoiceService } from './services/inworld-voice.service';
+import { withFlowGreeting } from './services/voice-runtime.util';
+import {
+  VoiceInactivity,
+  readInactivityTurns,
+} from './services/voice-inactivity';
+import { resolveVoiceFlowSettings } from './services/voice-flow-settings';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -14,6 +26,7 @@ import { MockVoiceProvider } from './providers/mock-voice.provider';
 import { AudioSocketServerService } from './telephony/audiosocket-server.service';
 import {
   GeminiLiveVoiceProvider,
+  resolveGeminiLiveSettings,
   resolveLiveModel,
   resolveLiveVoice,
 } from './providers/gemini-live-voice.provider';
@@ -139,16 +152,13 @@ export class VoiceGateway
   private async resolveCustomSettings(
     clientId: string,
     provider: 'tts-custom' | 'stt-custom',
-  ): Promise<
-    | {
-        baseUrl: string;
-        apiKey: string;
-        voice?: string;
-        sampleRate?: number;
-        timeoutMs?: number;
-      }
-    | null
-  > {
+  ): Promise<{
+    baseUrl: string;
+    apiKey: string;
+    voice?: string;
+    sampleRate?: number;
+    timeoutMs?: number;
+  } | null> {
     const apiKey = await this.keyResolver.resolveApiKey(clientId, provider);
     const settings = await this.keyResolver.resolveProviderSettings(
       clientId,
@@ -184,6 +194,7 @@ export class VoiceGateway
     // Sinaliza que a sessão de voz foi encerrada; evita criar timers/providers
     // quando um 'start' assíncrono retoma depois do close
     let voiceSessionClosed = false;
+    let inactivity: VoiceInactivity | undefined;
     // Watchdog do tempo limite da chamada (max_call_duration_sec)
     let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
     // Turnos de entrada (handoff/saudação) e watchdog pertencem à PRIMEIRA
@@ -302,8 +313,13 @@ export class VoiceGateway
       await this.telemetryService.persistConversationState(session);
     };
 
-    const closeVoiceSession = async () => {
+    let stopHeartbeat: (() => void) | undefined;
+    let exportEnabled = false;
+    const pendingWork = new VoiceWorkTracker();
+    const closeVoiceSession = async (reason = 'connection_closed') => {
+      if (voiceSessionClosed) return;
       voiceSessionClosed = true;
+      inactivity?.stop();
       if (telemetryTimer) {
         clearInterval(telemetryTimer);
         telemetryTimer = null;
@@ -321,14 +337,22 @@ export class VoiceGateway
         clearTimeout(statePersistTimer);
         statePersistTimer = null;
       }
-      await flushConversationState();
-      if (session.liveProvider) {
-        session.liveProvider.close();
-        session.liveProvider = null;
-        session.isReady = false;
+      try {
+        if (session.liveProvider) {
+          session.liveProvider.close();
+          session.liveProvider = null;
+          session.isReady = false;
+        }
+        await pendingWork.drain();
+        await flushConversationState().catch(() =>
+          this.logger.error('Voice state persistence failed'),
+        );
+        await this.telemetryService.flushAiBuffer(session);
+        await this.telemetryService.persistSessionTelemetry(session, reason);
+      } finally {
+        stopHeartbeat?.();
+        releaseVoiceSlot();
       }
-      await this.telemetryService.persistSessionTelemetry(session);
-      releaseVoiceSlot();
     };
 
     const executeGracefulHangup = (origin: string = 'turn_complete') => {
@@ -345,9 +369,14 @@ export class VoiceGateway
         undefined,
         'success',
       );
-      sendToClient({ type: 'call_ended', reason: 'ai_requested' });
+      sendToClient({
+        type: 'call_ended',
+        reason: origin === 'inactivity' ? 'inactivity' : 'ai_requested',
+      });
       setTimeout(() => {
-        void closeVoiceSession();
+        void closeVoiceSession(
+          origin === 'inactivity' ? 'inactivity' : 'ai_requested',
+        );
         try {
           clientWs.close(1000, 'AI requested hangup completed');
         } catch {
@@ -606,7 +635,7 @@ export class VoiceGateway
             }
 
             // Cria a conversa omnichannel no banco
-            const conversation = await this.prisma.conversations.create({
+            const conversation = await createVoiceConversation(this.prisma, {
               data: {
                 company_id: session.companyId!,
                 client_id: session.clientId,
@@ -620,6 +649,10 @@ export class VoiceGateway
               },
             });
             session.conversationId = conversation.id;
+            exportEnabled = conversation.exportEnabled;
+            stopHeartbeat = exportEnabled
+              ? startVoiceHeartbeat(this.prisma, conversation.id)
+              : undefined;
 
             // Canal Web sob o mesmo contrato ITelephonyAdapter da telefonia:
             // o pipeline de áudio (gate → provider → retorno) é único.
@@ -639,6 +672,7 @@ export class VoiceGateway
             // Áudio do usuário: adapter → Audio Gate → provider (como em
             // VoiceCallSession)
             callAdapter.onAudio((pcm16) => {
+              if (!session.isAiSpeaking) inactivity?.inputAudio(pcm16);
               if (!session.liveProvider) return;
               const base64Audio = pcm16.toString('base64');
 
@@ -724,7 +758,7 @@ export class VoiceGateway
                   break;
                 }
                 const detailMessage = `Condição de ativação não atendida para "${agent.service_step}": ${describeEvaluation(evaluation)}`;
-                this.logger.debug(detailMessage);
+                if (!exportEnabled) this.logger.debug(detailMessage);
                 sendDebug(
                   'session',
                   detailMessage,
@@ -750,7 +784,11 @@ export class VoiceGateway
               text: string,
               generation: number,
             ) => {
-              if (generation !== session.providerGeneration) return;
+              if (
+                voiceSessionClosed ||
+                generation !== session.providerGeneration
+              )
+                return;
               session.state = pruneSessionState({
                 ...session.state,
                 user_transcript: text,
@@ -943,6 +981,29 @@ export class VoiceGateway
                   response = { ok: false, error: err.message };
                 }
 
+                if (
+                  session.companyId &&
+                  session.clientId &&
+                  session.conversationId
+                ) {
+                  await this.prisma.tool_calls
+                    .create({
+                      data: {
+                        company_id: session.companyId,
+                        client_id: session.clientId,
+                        conversation_id: session.conversationId,
+                        tool_name: call.name,
+                        arguments: call.args || {},
+                        result: response || {},
+                        status: response?.ok === false ? 'failed' : 'success',
+                        completed_at: new Date(),
+                      },
+                    })
+                    .catch(() =>
+                      this.logger.error('Voice tool result persistence failed'),
+                    );
+                }
+
                 // Transição pós-API: avalia condições de ativação sobre o
                 // estado enriquecido com o retorno da API/subagente
                 if (
@@ -1062,7 +1123,7 @@ export class VoiceGateway
                 );
               }
 
-              if (requestedAgent) {
+              if (requestedAgent && !voiceSessionClosed) {
                 await switchAgent(
                   requestedAgent,
                   switchReason,
@@ -1120,6 +1181,7 @@ export class VoiceGateway
               handoffText?: string,
               isSwitch = false,
             ) => {
+              if (voiceSessionClosed) return;
               const generation = session.nextGeneration();
               const [voiceTools, voiceSubagents] =
                 agent && session.clientId
@@ -1256,6 +1318,7 @@ export class VoiceGateway
                 serviceStep: agent?.service_step || agentName,
                 model: session.model,
                 voiceName: session.voiceName,
+
                 systemPrompt,
                 rawPrompt,
                 variables: currentVariables,
@@ -1300,7 +1363,11 @@ export class VoiceGateway
                     }
                   },
                   onUserTranscript: (text) => {
-                    if (generation !== session.providerGeneration) return;
+                    if (
+                      voiceSessionClosed ||
+                      generation !== session.providerGeneration
+                    )
+                      return;
                     sendToClient({ type: 'user_transcript', text });
                     void handleUserTranscript(text, generation);
                   },
@@ -1381,18 +1448,39 @@ export class VoiceGateway
               // override em tempo de teste (msg.tts_provider/msg.stt_provider)
               const ttsProviderChoice =
                 (msg.tts_provider as string) ||
-                ((agent as any)?.tts_provider as string) ||
                 (clientMeta.tts_provider as string) ||
+                ((agent as any)?.tts_provider as string) ||
                 '';
               const sttProviderChoice =
                 (msg.stt_provider as string) ||
-                ((agent as any)?.stt_provider as string) ||
                 (clientMeta.stt_provider as string) ||
+                ((agent as any)?.stt_provider as string) ||
                 '';
-              const ttsProvider: 'cartesia' | 'custom' =
-                ttsProviderChoice === 'custom' ? 'custom' : 'cartesia';
-              const sttProvider: 'groq' | 'custom' =
-                sttProviderChoice === 'custom' ? 'custom' : 'groq';
+              const ttsProvider: 'cartesia' | 'inworld' | 'custom' =
+                ttsProviderChoice === 'inworld'
+                  ? 'inworld'
+                  : ttsProviderChoice === 'custom'
+                    ? 'custom'
+                    : 'cartesia';
+              const sttProvider: 'groq' | 'inworld' | 'custom' =
+                sttProviderChoice === 'inworld'
+                  ? 'inworld'
+                  : sttProviderChoice === 'custom'
+                    ? 'custom'
+                    : 'groq';
+              const inworldApiKey =
+                ttsProvider === 'inworld' || sttProvider === 'inworld'
+                  ? await this.keyResolver.resolveApiKey(
+                      session.clientId || '',
+                      'inworld',
+                    )
+                  : '';
+              if (
+                voiceEngine === 'hybrid' &&
+                (ttsProvider === 'inworld' || sttProvider === 'inworld') &&
+                !inworldApiKey
+              )
+                throw new Error('Configure a chave Inworld em Provedores.');
               session.ttsProvider = ttsProvider;
               let customTts:
                 | {
@@ -1421,7 +1509,7 @@ export class VoiceGateway
                     );
                   }
                 }
-                if (ttsProvider !== 'custom' && session.clientId) {
+                if (ttsProvider === 'cartesia' && session.clientId) {
                   cartesiaApiKey = await this.keyResolver.resolveApiKey(
                     session.clientId,
                     'cartesia',
@@ -1440,13 +1528,16 @@ export class VoiceGateway
                     };
                   }
                 }
-                if (sttProvider !== 'custom' && session.clientId) {
+                if (sttProvider === 'groq' && session.clientId) {
                   groqApiKey = await this.keyResolver.resolveApiKey(
                     session.clientId,
                     'groq',
                   );
                 }
-                if (!session.voiceName || session.voiceName.length < 20) {
+                if (
+                  ttsProvider !== 'inworld' &&
+                  (!session.voiceName || session.voiceName.length < 20)
+                ) {
                   session.voiceName = 'cb2694c3-715f-4da9-99f3-1c974fff2928';
                 }
                 if (
@@ -1458,17 +1549,27 @@ export class VoiceGateway
                   session.model = 'gemini-2.5-flash-lite';
                 }
                 provider = new CascadeVoiceProvider(
-                  ttsProvider === 'custom' && customTts
-                    ? this.customHttpTtsService
-                    : this.cartesiaTtsService,
-                  sttProvider === 'custom' && customStt
-                    ? this.customHttpSttService
-                    : this.groqWhisperSttService,
+                  ttsProvider === 'inworld'
+                    ? new InworldVoiceService()
+                    : ttsProvider === 'custom' && customTts
+                      ? this.customHttpTtsService
+                      : this.cartesiaTtsService,
+                  sttProvider === 'inworld'
+                    ? new InworldVoiceService()
+                    : sttProvider === 'custom' && customStt
+                      ? this.customHttpSttService
+                      : this.groqWhisperSttService,
                   this.sileroVadService,
                 );
               } else {
-                session.model = resolveLiveModel(session.model);
-                session.voiceName = resolveLiveVoice(session.voiceName);
+                const liveSettings = resolveGeminiLiveSettings(
+                  clientMeta.gemini_live,
+                );
+                session.model =
+                  liveSettings?.model ?? resolveLiveModel(session.model);
+                session.voiceName =
+                  liveSettings?.voiceName ??
+                  resolveLiveVoice(session.voiceName);
                 provider = new GeminiLiveVoiceProvider();
               }
 
@@ -1478,22 +1579,73 @@ export class VoiceGateway
               }
               session.liveProvider = provider;
 
+              inactivity?.stop();
+              inactivity = new VoiceInactivity(
+                readInactivityTurns(clientMeta.voice_behavior),
+                (text) =>
+                  provider.sendText(
+                    `Fale exatamente a mensagem de inatividade a seguir, sem executar ferramentas: ${JSON.stringify(text)}`,
+                  ),
+                () => executeGracefulHangup('inactivity'),
+                () =>
+                  sendDebug(
+                    'error',
+                    'Tempo limite ao gerar fala de inatividade.',
+                  ),
+              );
+              const flowVoice = resolveVoiceFlowSettings(
+                clientMeta.voice_settings,
+              );
+              if (
+                voiceEngine === 'hybrid' &&
+                ttsProvider === 'cartesia' &&
+                flowVoice.cartesiaVoice
+              )
+                session.voiceName = flowVoice.cartesiaVoice;
+              if (customTts && flowVoice.customTtsVoice)
+                customTts.voice = flowVoice.customTtsVoice;
+              const greetingAgent = withFlowGreeting(
+                agent,
+                clientMeta.voice_behavior,
+              );
+              if (voiceEngine === 'hybrid' && ttsProvider === 'inworld')
+                session.voiceName =
+                  clientMeta.tts_provider === 'inworld' ||
+                  (clientMeta.voice_settings as any)?.inworldVoice
+                    ? flowVoice.inworldVoice
+                    : (agent as any)?.tts_provider === 'inworld' &&
+                        session.voiceName &&
+                        !/^[0-9a-f-]{36}$/i.test(session.voiceName)
+                      ? session.voiceName
+                      : 'Mariana';
               provider.connect({
                 apiKey,
+                inworldApiKey,
                 cartesiaApiKey,
                 groqApiKey,
                 // Provider efetivo: só 'custom' quando a config BYO existe
                 ttsProvider:
-                  ttsProvider === 'custom' && customTts
-                    ? 'custom'
-                    : 'cartesia',
+                  ttsProvider === 'inworld'
+                    ? 'inworld'
+                    : ttsProvider === 'custom' && customTts
+                      ? 'custom'
+                      : 'cartesia',
                 sttProvider:
-                  sttProvider === 'custom' && customStt ? 'custom' : 'groq',
+                  sttProvider === 'inworld'
+                    ? 'inworld'
+                    : sttProvider === 'custom' && customStt
+                      ? 'custom'
+                      : 'groq',
                 customTts: ttsProvider === 'custom' ? customTts : undefined,
                 customStt: sttProvider === 'custom' ? customStt : undefined,
                 model: session.model,
                 voiceName: session.voiceName,
+                voiceSettings: clientMeta.voice_settings,
                 systemPrompt,
+                geminiLive:
+                  voiceEngine === 'live_api'
+                    ? clientMeta.gemini_live
+                    : undefined,
                 contextCompressionEnabled:
                   clientDb?.context_compression_enabled ?? true,
                 contextCompressionTargetTokens:
@@ -1502,8 +1654,15 @@ export class VoiceGateway
                   ? [{ functionDeclarations: voiceToolDeclarations }]
                   : undefined,
                 onSetupComplete: async () => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
                   session.isReady = true;
+                  inactivity?.start();
+                  if (aiSpeaksFirstEnabled(greetingAgent))
+                    inactivity?.outputStarted();
                   sendDebug(
                     'model',
                     voiceEngine === 'hybrid'
@@ -1541,7 +1700,7 @@ export class VoiceGateway
                           type: 'call_ended',
                           reason: 'max_call_duration',
                         });
-                        void closeVoiceSession();
+                        void closeVoiceSession('max_call_duration');
                         try {
                           clientWs.close(1000, 'max_call_duration');
                         } catch {
@@ -1578,40 +1737,56 @@ export class VoiceGateway
                           );
                         }
                       }, 0);
-                    } else if (agent && aiSpeaksFirstEnabled(agent)) {
+                    } else if (
+                      greetingAgent &&
+                      aiSpeaksFirstEnabled(greetingAgent)
+                    ) {
                       introTurnSent = true;
 
                       // 1. Tenta resolver saudação via VoiceGreetingCacheService se habilitado (opcional)
                       const variation = selectVoiceGreetingVariation(
-                        agent,
+                        greetingAgent,
                         session.conversationId || session.agentId || 'web',
                       );
-                      const cacheEnabled = voiceGreetingCacheEnabled(agent);
+                      const cacheEnabled =
+                        (
+                          clientMeta.voice_behavior as
+                            | { greetingCacheEnabled?: boolean }
+                            | undefined
+                        )?.greetingCacheEnabled ??
+                        voiceGreetingCacheEnabled(agent);
 
                       if (
                         variation &&
                         cacheEnabled &&
+                        !exportEnabled &&
                         this.greetingCacheService
                       ) {
                         try {
                           const isHybrid = voiceEngine === 'hybrid';
                           const greetingTtsProvider = isHybrid
-                            ? ttsProvider === 'custom' && customTts
-                              ? 'custom'
-                              : 'cartesia'
+                            ? ttsProvider === 'inworld'
+                              ? 'inworld'
+                              : ttsProvider === 'custom' && customTts
+                                ? 'custom'
+                                : 'cartesia'
                             : 'google';
                           const resolvedApiKey =
-                            greetingTtsProvider === 'custom'
-                              ? customTts?.apiKey || ''
-                              : isHybrid
-                                ? cartesiaApiKey ||
-                                  this.configService.get('CARTESIA_API_KEY') ||
-                                  process.env.CARTESIA_API_KEY ||
-                                  ''
-                                : apiKey ||
-                                  this.configService.get('GEMINI_API_KEY') ||
-                                  process.env.GEMINI_API_KEY ||
-                                  '';
+                            greetingTtsProvider === 'inworld'
+                              ? inworldApiKey
+                              : greetingTtsProvider === 'custom'
+                                ? customTts?.apiKey || ''
+                                : isHybrid
+                                  ? cartesiaApiKey ||
+                                    this.configService.get(
+                                      'CARTESIA_API_KEY',
+                                    ) ||
+                                    process.env.CARTESIA_API_KEY ||
+                                    ''
+                                  : apiKey ||
+                                    this.configService.get('GEMINI_API_KEY') ||
+                                    process.env.GEMINI_API_KEY ||
+                                    '';
 
                           const voiceId =
                             greetingTtsProvider === 'custom'
@@ -1636,6 +1811,13 @@ export class VoiceGateway
                                   companyId: session.companyId!,
                                   agentId: agent.id,
                                   provider: greetingTtsProvider,
+                                  modelId:
+                                    greetingTtsProvider === 'inworld'
+                                      ? 'inworld-tts-2-flash'
+                                      : isHybrid
+                                        ? flowVoice.cartesiaModel
+                                        : undefined,
+                                  language: flowVoice.language,
                                   voiceId,
                                   template: variation,
                                   customerName,
@@ -1652,6 +1834,8 @@ export class VoiceGateway
                               );
 
                             if (res.audioBuffer && res.audioBuffer.length > 0) {
+                              inactivity?.outputAudio(res.audioBuffer.length);
+                              inactivity?.outputComplete();
                               if (generation !== session.providerGeneration) {
                                 return;
                               }
@@ -1765,7 +1949,7 @@ export class VoiceGateway
 
                       // 2. Fallback padrão: envio direto para a LLM / Live Provider
                       const greetingTurn = buildGreetingTurn(
-                        agent,
+                        greetingAgent,
                         session.state as Record<string, unknown>,
                       );
                       setTimeout(() => {
@@ -1781,14 +1965,25 @@ export class VoiceGateway
                   }
                 },
                 onAudio: (base64Audio) => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
                   session.isAiSpeaking = true;
                   session.gateSession?.notifyAiSpeakingChanged(true);
                   // Áudio da IA volta pelo adapter (frame JSON ao navegador)
+                  inactivity?.outputAudio(
+                    Buffer.from(base64Audio, 'base64').length,
+                  );
                   callAdapter.sendAudio(Buffer.from(base64Audio, 'base64'));
                 },
                 onAiTranscript: async (text) => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
                   if (!session.aiResponseStarted) {
                     session.aiResponseStarted = true;
                     sendDebug(
@@ -1805,7 +2000,13 @@ export class VoiceGateway
                   await this.telemetryService.appendAiTranscript(session, text);
                 },
                 onUserTranscript: async (text) => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
+                  inactivity?.userActivity();
+                  inactivity?.outputStarted();
                   sendDebug('audio', 'Fala do usuário transcrita.', { text });
                   sendToClient({ type: 'user_transcript', text });
                   await this.telemetryService.persistUserTranscript(
@@ -1815,7 +2016,11 @@ export class VoiceGateway
                   await handleUserTranscript(text, generation);
                 },
                 onInterrupted: async () => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
                   if (session.isGreetingPlaying) {
                     this.logger.debug(
                       '[VoiceGateway] Interrupção suprimida durante saudação inicial ininterrupta',
@@ -1824,6 +2029,7 @@ export class VoiceGateway
                   }
                   session.isAiSpeaking = false;
                   session.interruptedCount++;
+                  inactivity?.interrupted();
                   session.aiResponseStarted = false;
                   // Preserva o trecho falado antes da interrupção
                   await this.telemetryService.flushAiBuffer(session);
@@ -1835,7 +2041,12 @@ export class VoiceGateway
                   sendToClient({ type: 'interrupted' });
                 },
                 onTurnComplete: async () => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
+                  inactivity?.outputComplete();
                   session.isAiSpeaking = false;
                   session.aiResponseStarted = false;
                   await this.telemetryService.flushAiBuffer(session);
@@ -1856,11 +2067,18 @@ export class VoiceGateway
                     }, 1200);
                   }
                 },
-                onToolCall: async (functionCalls) => {
-                  await handleToolCalls(functionCalls, generation, provider);
-                },
+                onToolCall: (functionCalls) =>
+                  pendingWork.run(async () => {
+                    if (voiceSessionClosed) return;
+                    inactivity?.outputStarted();
+                    await handleToolCalls(functionCalls, generation, provider);
+                  }),
                 onUsageMetadata: (meta) => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
                   session.totalTokens = meta.totalTokenCount || 0;
                   session.inputTokens = meta.promptTokenCount || 0;
                   session.outputTokens = meta.candidatesTokenCount || 0;
@@ -1873,12 +2091,21 @@ export class VoiceGateway
                   sendTelemetry();
                 },
                 onError: (err) => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
                   sendDebug('error', err.message, undefined, 'error');
                   sendToClient({ type: 'error', message: err.message });
                 },
                 onClose: () => {
-                  if (generation !== session.providerGeneration) return;
+                  if (
+                    voiceSessionClosed ||
+                    generation !== session.providerGeneration
+                  )
+                    return;
+                  inactivity?.stop();
                   sendDebug('session', 'Conexão com o Gemini Live encerrada.');
                   sendToClient({ type: 'closed' });
                 },
@@ -2042,7 +2269,7 @@ export class VoiceGateway
               session.mockSession.close();
               session.mockSession = null;
             }
-            await closeVoiceSession();
+            await closeVoiceSession('user_stopped');
             sendToClient({ type: 'stopped' });
             break;
           }

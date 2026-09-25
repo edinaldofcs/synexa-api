@@ -1,3 +1,4 @@
+import { tenantLocalStorage } from '../auth/tenant-context';
 import { ForbiddenException } from '@nestjs/common';
 
 export interface TenantContext {
@@ -37,4 +38,28 @@ export function applyTenantFilter(userCompanyId: string): {
   company_id: string;
 } {
   return { company_id: userCompanyId };
+}
+
+/** Resolve a empresa efetiva sem consultar o usuário original dentro do tenant visitado. */
+export async function resolveUserCompanyId(
+  prisma: {
+    users: {
+      findUnique: (args: any) => Promise<{ company_id: string } | null>;
+    };
+  },
+  userId: string,
+): Promise<string> {
+  const context = tenantLocalStorage.getStore();
+  if (context) {
+    if (context.userId !== userId || !context.companyId) {
+      throw new ForbiddenException('Invalid tenant context');
+    }
+    return context.companyId;
+  }
+  const user = await prisma.users.findUnique({
+    where: { id: userId },
+    select: { company_id: true },
+  });
+  if (!user?.company_id) throw new ForbiddenException('User has no company');
+  return user.company_id;
 }

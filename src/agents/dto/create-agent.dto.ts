@@ -84,13 +84,13 @@ export class CreateAgentDto {
   /** Provedor de síntese de voz: 'cartesia' (padrão) ou 'custom' (BYO HTTP). */
   @IsString()
   @IsOptional()
-  @IsIn(['cartesia', 'custom'])
+  @IsIn(['cartesia', 'inworld', 'custom'])
   tts_provider?: string;
 
   /** Provedor de transcrição: 'groq' (padrão) ou 'custom' (BYO HTTP). */
   @IsString()
   @IsOptional()
-  @IsIn(['groq', 'custom'])
+  @IsIn(['groq', 'inworld', 'custom'])
   stt_provider?: string;
 
   @IsString()

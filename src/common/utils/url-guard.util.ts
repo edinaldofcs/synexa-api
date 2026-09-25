@@ -31,10 +31,7 @@ export const MAX_CUSTOM_RESPONSE_BYTES = 10 * 1024 * 1024;
  * Regras: https obrigatório em produção (http liberado em dev/test),
  * hosts privados/loopback bloqueados — exceto host.docker.internal em dev.
  */
-export function assertPublicHttpUrl(
-  rawUrl: string,
-  label = 'endpoint',
-): URL {
+export function assertPublicHttpUrl(rawUrl: string, label = 'endpoint'): URL {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);

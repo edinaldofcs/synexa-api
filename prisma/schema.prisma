@@ -9,6 +9,7 @@ datasource db {
 }
 
 model companies {
+  call_exports call_exports[]
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name       String
   status     String?    @default("active")
@@ -69,6 +70,8 @@ model conversations {
   last_message_at         DateTime? @db.Timestamptz(6)
   last_inbound_at         DateTime? @db.Timestamptz(6)
   last_outbound_at        DateTime? @db.Timestamptz(6)
+  voice_heartbeat_at DateTime? @db.Timestamptz(6)
+  voice_finalized_at DateTime? @db.Timestamptz(6)
   closed_at               DateTime? @db.Timestamptz(6)
   ai_context              Json?     @db.JsonB
   metadata                Json?     @db.JsonB
@@ -214,6 +217,7 @@ model media_assets {
 }
 
 model painel_clients {
+  call_exports call_exports[]
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id   String    @db.Uuid
   company_name String?
@@ -780,7 +784,7 @@ model voice_session_telemetry {
   id                          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id                  String        @db.Uuid
   client_id                   String?       @db.Uuid
-  conversation_id             String        @unique @db.Uuid
+  conversation_id             String?       @unique @db.Uuid
   asterisk_unique_id          String?
   caller_number               String?
   did_number                  String?
@@ -810,7 +814,7 @@ model voice_session_telemetry {
 
   companies                   companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_clients              painel_clients? @relation(fields: [client_id], references: [id], onDelete: SetNull)
-  conversations               conversations  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  conversations               conversations? @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
   @@index([company_id])
   @@index([client_id])
@@ -951,4 +955,32 @@ model painel_interactions {
   @@index([disposition])
   @@index([call_id])
   @@index([created_at(sort: Desc)])
+}
+
+
+// Temporary, encrypted handoff. No FK to conversations: receipts survive erasure.
+model call_exports {
+  companies companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id String @unique @db.Uuid
+  company_id String @db.Uuid
+  client_id String @db.Uuid
+  endpoint_id String @db.Uuid
+  payload_enc String?
+  destination_enc String?
+  status String @default("pending")
+  attempt Int @default(0)
+  http_status Int?
+  error_code String?
+  expires_at DateTime @db.Timestamptz(6)
+  next_attempt_at DateTime @default(now()) @db.Timestamptz(6)
+  lease_until DateTime? @db.Timestamptz(6)
+  lease_token String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  delivered_at DateTime? @db.Timestamptz(6)
+  purged_at DateTime? @db.Timestamptz(6)
+  @@index([status, next_attempt_at])
+  @@index([client_id, created_at])
+  @@index([company_id])
 }

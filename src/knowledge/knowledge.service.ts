@@ -1,13 +1,15 @@
+import { resolveUserCompanyId } from '../common/utils/tenant-access.helper';
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { decrypt } from '../common/utils/crypto.util';
+import { Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
+import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
 import { QueueService } from '../queue/queue.service';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { CreateKnowledgeDocumentDto } from './dto/create-knowledge-document.dto';
@@ -28,6 +30,7 @@ export class KnowledgeService {
     private readonly queueService: QueueService,
     private readonly configService: ConfigService,
     private readonly mockEmbeddingProvider: MockEmbeddingProvider,
+    private readonly providerKeys: ProviderKeyResolverService,
   ) {}
 
   async createBase(
@@ -57,14 +60,10 @@ export class KnowledgeService {
   }
 
   async listAllBases(userId: string) {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) throw new ForbiddenException('User has no company');
+    const companyId = await resolveUserCompanyId(this.prisma, userId);
 
     return this.prisma.knowledge_bases.findMany({
-      where: { company_id: user.company_id },
+      where: { company_id: companyId },
       orderBy: { created_at: 'desc' },
     });
   }
@@ -150,49 +149,43 @@ export class KnowledgeService {
       const content = String(metadata.raw_content || '').trim();
       if (!content) throw new BadRequestException('Document content is empty');
 
-      await this.prisma.knowledge_chunks.deleteMany({
-        where: { document_id: document.id },
-      });
-
       const chunks = this.chunkText(content);
-
-      for (const [index, chunk] of chunks.entries()) {
-        const createdChunk = await this.prisma.knowledge_chunks.create({
-          data: {
-            company_id: document.company_id,
-            client_id: document.client_id,
-            knowledge_base_id: document.knowledge_base_id,
-            document_id: document.id,
-            content: chunk,
-            chunk_index: index,
-          },
-        });
-
-        const embedding = await this.createEmbedding(chunk, document.client_id);
-        await this.prisma.$executeRawUnsafe(
-          `
-          INSERT INTO knowledge_embeddings
+      // Complete external calls before replacing the searchable document.
+      const result = await this.createEmbeddings(chunks, document.client_id);
+      const rows = chunks.map((content, chunk_index) => ({
+        id: randomUUID(),
+        company_id: document.company_id,
+        client_id: document.client_id,
+        knowledge_base_id: document.knowledge_base_id,
+        document_id: document.id,
+        content,
+        chunk_index,
+      }));
+      await this.prisma.$transaction(
+        async (tx) => {
+          await tx.knowledge_chunks.deleteMany({
+            where: { document_id: document.id },
+          });
+          for (let start = 0; start < rows.length; start += 32) {
+            const batch = rows.slice(start, start + 32);
+            await tx.knowledge_chunks.createMany({ data: batch });
+            const values = batch.map((row, offset) => {
+              const embedding = result.embeddings[start + offset];
+              return Prisma.sql`(gen_random_uuid(), ${row.company_id}::uuid, ${row.client_id}::uuid,
+              ${row.knowledge_base_id}::uuid, ${row.id}::uuid, ${result.provider}, ${result.model},
+              ${embedding.length}, ${this.vectorLiteral(embedding)}::vector, '{}'::jsonb)`;
+            });
+            await tx.$executeRaw(Prisma.sql`INSERT INTO knowledge_embeddings
             (id, company_id, client_id, knowledge_base_id, chunk_id, provider, model, dimensions, embedding, metadata)
-          VALUES
-            (gen_random_uuid(), $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8::vector, '{}'::jsonb)
-          ON CONFLICT (chunk_id, provider, model)
-          DO UPDATE SET embedding = EXCLUDED.embedding, dimensions = EXCLUDED.dimensions
-          `,
-          document.company_id,
-          document.client_id,
-          document.knowledge_base_id,
-          createdChunk.id,
-          'openai',
-          this.embeddingModel,
-          embedding.length,
-          this.vectorLiteral(embedding),
-        );
-      }
-
-      await this.prisma.knowledge_documents.update({
-        where: { id: document.id },
-        data: { status: 'ready' },
-      });
+            VALUES ${Prisma.join(values)}`);
+          }
+          await tx.knowledge_documents.update({
+            where: { id: document.id },
+            data: { status: 'ready' },
+          });
+        },
+        { timeout: 30000 },
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Knowledge ingestion failed';
@@ -208,21 +201,17 @@ export class KnowledgeService {
     clientId: string,
     userId: string,
   ): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) throw new ForbiddenException('User has no company');
+    const companyId = await resolveUserCompanyId(this.prisma, userId);
 
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
       select: { company_id: true },
     });
-    if (!client || client.company_id !== user.company_id) {
+    if (!client || client.company_id !== companyId) {
       throw new NotFoundException('Client not found');
     }
 
-    return user.company_id;
+    return companyId;
   }
 
   private async getAuthorizedBase(baseId: string, userId: string) {
@@ -240,14 +229,25 @@ export class KnowledgeService {
   }
 
   private async createEmbedding(input: string, clientId: string) {
+    return (await this.createEmbeddings([input], clientId)).embeddings[0];
+  }
+
+  private async createEmbeddings(inputs: string[], clientId: string) {
     const isMock =
       this.configService.get<string>('LLM_PROVIDER') === 'mock' ||
       this.configService.get<string>('ENVIRONMENT') === 'development';
 
-    const openai = await this.getOpenAIForClient(clientId);
-    if (!openai) {
+    const mockResult = () => ({
+      provider: 'mock',
+      model: 'mock-1536',
+      embeddings: inputs.map((input) =>
+        this.mockEmbeddingProvider.generateEmbedding(input),
+      ),
+    });
+    const configured = await this.getOpenAIForClient(clientId);
+    if (!configured) {
       if (isMock) {
-        return this.mockEmbeddingProvider.generateEmbedding(input);
+        return mockResult();
       }
       throw new BadRequestException(
         'API Key para openai/openrouter nao configurada. Configure em Configuracoes > Provedores.',
@@ -255,52 +255,63 @@ export class KnowledgeService {
     }
 
     try {
-      const response = await openai.embeddings.create({
-        model: this.embeddingModel,
-        input,
-      });
-      return response.data[0].embedding;
+      const embeddings: number[][] = [];
+      for (let start = 0; start < inputs.length; start += 32) {
+        const input = inputs.slice(start, start + 32);
+        const response = await configured.client.embeddings.create({
+          model: configured.model,
+          input,
+        });
+        const ordered = [...response.data].sort((a, b) => a.index - b.index);
+        if (
+          ordered.length !== input.length ||
+          ordered.some(
+            (item, index) =>
+              item.index !== index ||
+              !item.embedding.length ||
+              item.embedding.some((value) => !Number.isFinite(value)),
+          )
+        ) {
+          throw new BadRequestException('Invalid embedding response');
+        }
+        embeddings.push(...ordered.map((item) => item.embedding));
+      }
+      return {
+        provider: configured.provider,
+        model: configured.model,
+        embeddings,
+      };
     } catch (err) {
       if (isMock) {
-        return this.mockEmbeddingProvider.generateEmbedding(input);
+        return mockResult();
       }
       throw err;
     }
   }
 
-  private async getOpenAIForClient(clientId: string): Promise<OpenAI | null> {
-    const apiKey =
-      (await this.resolveClientApiKey(clientId, 'openai')) ||
-      (await this.resolveClientApiKey(clientId, 'openrouter'));
-    if (!apiKey) return null;
-    return new OpenAI({ apiKey });
-  }
-
-  private async resolveClientApiKey(
-    clientId: string,
-    provider: string,
-  ): Promise<string> {
-    const client = await this.prisma.painel_clients.findUnique({
-      where: { id: clientId },
-      select: { metadata: true },
-    });
-
-    const providers = (client?.metadata as any)?.llm_providers || {};
-    const config = providers[provider];
-    let apiKey = config?.apiKey || '';
-
-    if (apiKey && typeof apiKey === 'string' && apiKey.startsWith('enc:')) {
-      const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
-      if (encryptionKey) {
-        try {
-          apiKey = decrypt(apiKey.slice(4), encryptionKey);
-        } catch {
-          apiKey = '';
-        }
-      }
+  private async getOpenAIForClient(clientId: string) {
+    for (const provider of ['openai', 'openrouter'] as const) {
+      const apiKey = await this.providerKeys.resolveApiKey(clientId, provider);
+      if (!apiKey) continue;
+      const model =
+        provider === 'openrouter' && !this.embeddingModel.includes('/')
+          ? `openai/${this.embeddingModel}`
+          : this.embeddingModel;
+      return {
+        provider,
+        model,
+        client: new OpenAI({
+          apiKey,
+          baseURL:
+            provider === 'openrouter'
+              ? 'https://openrouter.ai/api/v1'
+              : 'https://api.openai.com/v1',
+          timeout: 30000,
+          maxRetries: 2,
+        }),
+      };
     }
-
-    return apiKey;
+    return null;
   }
 
   private chunkText(text: string) {

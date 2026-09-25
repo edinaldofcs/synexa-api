@@ -137,6 +137,32 @@ describe('VoiceGreetingCacheService', () => {
     });
   });
 
+  it('separates rendered variables and model/language settings in the audio cache', async () => {
+    mockRedis.get.mockResolvedValue(null);
+    const options = {
+      apiKey: 'test',
+      provider: 'cartesia',
+      voiceId: 'voice',
+      template: 'Olá {{nome}}, empresa {{empresa}}',
+      customerName: 'Ana',
+    };
+    await service.resolveOrSynthesizeGreeting({
+      ...options,
+      variables: { empresa: 'A' },
+    });
+    await service.resolveOrSynthesizeGreeting({
+      ...options,
+      variables: { empresa: 'B' },
+    });
+    await service.resolveOrSynthesizeGreeting({
+      ...options,
+      variables: { empresa: 'A' },
+      modelId: 'sonic-2',
+    });
+    const keys = mockRedis.get.mock.calls.map(([key]) => key);
+    expect(new Set(keys).size).toBe(3);
+  });
+
   describe('prewarmGreetings', () => {
     it('deve pré-aquecer lista de nomes distintos com controle de concorrência', async () => {
       mockRedis.get.mockResolvedValue(null);

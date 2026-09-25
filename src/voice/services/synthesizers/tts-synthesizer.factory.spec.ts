@@ -26,11 +26,7 @@ describe('TtsSynthesizerFactory', () => {
       synthesize: jest.fn().mockResolvedValue(Buffer.from('custom-audio')),
     } as any;
 
-    factory = new TtsSynthesizerFactory(
-      mockCartesia,
-      mockGoogle,
-      mockCustom,
-    );
+    factory = new TtsSynthesizerFactory(mockCartesia, mockGoogle, mockCustom);
   });
 
   it('deve resolver o sintetizador do Cartesia com sucesso', () => {

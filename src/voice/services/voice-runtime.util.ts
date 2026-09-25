@@ -126,6 +126,25 @@ export function voiceGreetingCacheEnabled(agent: unknown): boolean {
   return readCapability(agent, 'voice_greeting_cache_enabled') === true;
 }
 
+/** Applies Flow opening overrides without mutating the agent or its other capabilities. */
+export function withFlowGreeting(agent: any, behavior: unknown): any {
+  if (!behavior || typeof behavior !== 'object') return agent;
+  const config = behavior as Record<string, unknown>;
+  const greeting =
+    typeof config.greetingMessage === 'string'
+      ? config.greetingMessage.trim().slice(0, 6000)
+      : '';
+  if (!greeting && typeof config.aiSpeaksFirst !== 'boolean') return agent;
+  const capabilities = { ...(agent?.transitions?.capabilities || {}) };
+  if (greeting) {
+    capabilities.greeting_message = greeting;
+    delete capabilities.greeting_variations;
+  }
+  if (typeof config.aiSpeaksFirst === 'boolean')
+    capabilities.ai_speaks_first = config.aiSpeaksFirst;
+  return { ...agent, transitions: { ...agent?.transitions, capabilities } };
+}
+
 /**
  * Lê um valor de `transitions.capabilities` de forma defensiva (o campo
  * `transitions` é JsonB livre no banco).

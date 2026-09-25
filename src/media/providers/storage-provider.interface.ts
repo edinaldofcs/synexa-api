@@ -1,4 +1,6 @@
 export interface StorageProvider {
+  remove?(bucket: string, path: string): Promise<void>;
+
   upload(
     bucket: string,
     path: string,

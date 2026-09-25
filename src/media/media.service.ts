@@ -1,3 +1,5 @@
+import { purgeCallRecordings } from './purge-call-recordings';
+import { resolveUserCompanyId } from '../common/utils/tenant-access.helper';
 import {
   BadRequestException,
   ForbiddenException,
@@ -62,14 +64,71 @@ export class MediaService {
         : null;
   }
 
-  async findAll(userId: string) {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
+  /** Internal, tenant-scoped cleanup for an acknowledged/expired call export. */
+  async purgeConversationAssets(
+    conversationId: string,
+    companyId: string,
+  ): Promise<void> {
+    const conversation = await this.prisma.conversations.findFirst({
+      where: { id: conversationId, company_id: companyId },
+      select: { metadata: true },
     });
-    if (!user?.company_id) throw new ForbiddenException('User has no company');
+    const metadata = (conversation?.metadata || {}) as Record<string, any>;
+    await purgeCallRecordings(
+      [
+        this.configService.get<string>(
+          'RECORDINGS_DIR',
+          '/app/uploads/recordings',
+        ),
+        '/var/spool/asterisk/monitor',
+        '/tmp/recordings',
+      ],
+      [
+        conversationId,
+        metadata.call_id,
+        metadata.channel_id,
+        metadata.context_variables?.channel_id,
+      ],
+    );
+    const assets = await this.prisma.media_assets.findMany({
+      where: {
+        company_id: companyId,
+        messages: { conversation_id: conversationId },
+      },
+      include: { knowledge_documents: { select: { id: true } } },
+    });
+    for (const asset of assets) {
+      if (asset.knowledge_documents.length)
+        throw new Error('Call asset referenced by knowledge base');
+      if (asset.storage_bucket && asset.storage_path) {
+        const shared = await this.prisma.media_assets.count({
+          where: {
+            id: { not: asset.id },
+            storage_bucket: asset.storage_bucket,
+            storage_path: asset.storage_path,
+          },
+        });
+        if (shared) throw new Error('Call asset has shared storage');
+        if (this.storageProvider?.remove)
+          await this.storageProvider.remove(
+            asset.storage_bucket,
+            asset.storage_path,
+          );
+        else if (this.supabase) {
+          const { error } = await this.supabase.storage
+            .from(asset.storage_bucket)
+            .remove([asset.storage_path]);
+          if (error) throw new Error('Storage cleanup failed');
+        } else throw new Error('Storage unavailable');
+      }
+      await this.prisma.media_assets.delete({ where: { id: asset.id } });
+    }
+  }
+
+  async findAll(userId: string) {
+    const companyId = await resolveUserCompanyId(this.prisma, userId);
     return this.prisma.media_assets.findMany({
-      where: { company_id: user.company_id },
+      where: { company_id: companyId },
       orderBy: { created_at: 'desc' },
       take: 100,
     });
@@ -297,11 +356,8 @@ export class MediaService {
       throw new BadRequestException('Media asset has no stored file');
     }
 
-    const requester = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!requester?.company_id || asset.company_id !== requester.company_id) {
+    const companyId = await resolveUserCompanyId(this.prisma, userId);
+    if (asset.company_id !== companyId) {
       throw new ForbiddenException('Asset does not belong to your company');
     }
 
@@ -359,21 +415,17 @@ export class MediaService {
     clientId: string,
     userId: string,
   ): Promise<string> {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { company_id: true },
-    });
-    if (!user?.company_id) throw new ForbiddenException('User has no company');
+    const companyId = await resolveUserCompanyId(this.prisma, userId);
 
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
       select: { company_id: true },
     });
-    if (!client || client.company_id !== user.company_id) {
+    if (!client || client.company_id !== companyId) {
       throw new NotFoundException('Client not found');
     }
 
-    return user.company_id;
+    return companyId;
   }
 
   private async validateMessageAccess(

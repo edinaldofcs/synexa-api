@@ -168,6 +168,19 @@ export class QueueService {
     return String(job.id ?? '');
   }
 
+  async scheduleCallExports(): Promise<void> {
+    await this.webhookQueue.add(
+      'call-export-sweep',
+      {},
+      {
+        jobId: 'call-export-sweep',
+        repeat: { every: 15000 },
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    );
+  }
+
   async addWebhookJob(data: WebhookJobData, delayMs = 0): Promise<string> {
     // Single-shot job: retry bookkeeping lives in webhook_deliveries, so a new
     // row (and therefore a new job) is enqueued for every attempt.

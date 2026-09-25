@@ -2,7 +2,29 @@ import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import { VoiceGateway } from './voice.gateway';
 
+const sockets: FakeClientSocket[] = [];
+const originalFetch = global.fetch;
+beforeEach(() => {
+  global.fetch = jest.fn().mockImplementation(async () => ({
+    ok: true,
+    body: new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    }),
+  }));
+});
+afterEach(async () => {
+  for (const socket of sockets.splice(0))
+    if (socket.readyState === WebSocket.OPEN) socket.close(1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  global.fetch = originalFetch;
+});
 class FakeClientSocket extends EventEmitter {
+  constructor() {
+    super();
+    sockets.push(this);
+  }
   readyState: number = WebSocket.OPEN;
   sent: string[] = [];
   handshakeRequest?: any;
@@ -60,6 +82,8 @@ function makeGateway(
     synthesizeStream: jest.fn(),
     createSession: jest.fn().mockReturnValue({
       sendText: jest.fn(),
+      pushText: jest.fn(),
+      finalizeContext: jest.fn(),
       cancelContext: jest.fn(),
       close: jest.fn(),
     }),
@@ -83,6 +107,18 @@ function makeGateway(
     getDeclarations: jest.fn().mockReturnValue([]),
   };
 
+  if (prismaService) {
+    prismaService.$transaction ??= jest.fn(async (fn: any) =>
+      fn(prismaService),
+    );
+    prismaService.webhook_endpoints ??= {
+      findFirst: jest.fn().mockResolvedValue(null),
+    };
+    if (prismaService.conversations)
+      prismaService.conversations.updateMany ??= jest
+        .fn()
+        .mockResolvedValue({ count: 1 });
+  }
   const gateway = new VoiceGateway(
     voiceService as any,
     voiceAuthService as any,

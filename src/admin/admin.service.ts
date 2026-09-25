@@ -460,8 +460,7 @@ export class AdminService {
     // Mesma trava do createUser: company_admin não pode promover ninguém a
     // company_admin/platform_admin (nem a si mesmo via outro usuário).
     if (
-      (dto.role === ROLES.PLATFORM_ADMIN ||
-        dto.role === ROLES.COMPANY_ADMIN) &&
+      (dto.role === ROLES.PLATFORM_ADMIN || dto.role === ROLES.COMPANY_ADMIN) &&
       !isPlatformAdmin(actor.role)
     ) {
       throw new ForbiddenException(
@@ -508,7 +507,10 @@ export class AdminService {
       select: this.userPublicSelect(),
     });
 
-    if (dto.company_id && dto.company_id !== target.company_id) {
+    if (
+      (dto.company_id && dto.company_id !== target.company_id) ||
+      (dto.role && dto.role !== target.role)
+    ) {
       await this.sessionService?.destroyAllForUser(id);
     }
 

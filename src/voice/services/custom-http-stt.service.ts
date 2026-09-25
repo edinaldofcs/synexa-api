@@ -39,7 +39,9 @@ export class CustomHttpSttService {
     if (!pcmBuffer || pcmBuffer.length === 0) return '';
     const baseUrl = options.baseUrl || '';
     if (!baseUrl) {
-      throw new Error('[CustomHttpSTT] baseUrl obrigatório para provider custom');
+      throw new Error(
+        '[CustomHttpSTT] baseUrl obrigatório para provider custom',
+      );
     }
     assertPublicHttpUrl(baseUrl, 'STT customizado');
 

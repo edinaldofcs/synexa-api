@@ -1,3 +1,6 @@
+import { InworldVoiceService } from '../../voice/services/inworld-voice.service';
+import { DEFAULT_CAPABILITIES } from '../types/capabilities.types';
+import { OpenAiProvider } from '../providers/openai.provider';
 import { Injectable, Logger } from '@nestjs/common';
 import { ProviderKeyResolverService } from './provider-key-resolver.service';
 import {
@@ -86,6 +89,8 @@ export class LlmToolLoopService {
           );
         }
         return this.callGemini(params);
+      case 'openai':
+        return this.callOpenAi(params, nativeRagContext);
       case 'groq':
         return this.callOpenAICompatible(
           'https://api.groq.com/openai/v1',
@@ -107,15 +112,123 @@ export class LlmToolLoopService {
     switch (provider.toLowerCase()) {
       case 'gemini':
         return this.listGeminiModels(apiKey);
+      case 'openai':
+        return this.listOpenAiModels(apiKey);
       case 'groq':
         return this.listGroqModels(apiKey);
       case 'openrouter':
         return this.listOpenRouterModels(apiKey);
+      case 'inworld':
+        await InworldVoiceService.validateCredentials(apiKey);
+        return ['inworld-tts-2-flash', 'inworld/inworld-stt-1'];
       case 'cartesia':
         return this.listCartesiaModels(apiKey);
       default:
         throw new Error(`Provedor desconhecido: ${provider}`);
     }
+  }
+
+  private async listOpenAiModels(apiKey: string): Promise<string[]> {
+    const res = await fetch('https://api.openai.com/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok)
+      throw new Error(`Erro ao listar modelos OpenAI: ${res.status}`);
+    const json = await res.json();
+    return (json.data || [])
+      .map((item: { id?: string }) => item.id)
+      .filter(
+        (id: unknown): id is string =>
+          typeof id === 'string' &&
+          /^(gpt-(4\.1|4o|5|6)|o[134](?:-|$))/.test(id) &&
+          !/audio|realtime|transcrib|tts|image|search|instruct|deep-research|chat-latest/.test(
+            id,
+          ),
+      )
+      .sort();
+  }
+
+  private async callOpenAi(
+    params: LlmToolLoopParams,
+    nativeRagContext: Parameters<
+      ApiToolExecutorService['executeToolCall']
+    >[0]['context']['nativeRagContext'],
+  ): Promise<LlmToolLoopResult> {
+    const provider = new OpenAiProvider(params.apiKey);
+    const toolCalls: ToolCallDebug[] = [];
+    const definitions = this.apiToolExecutor.buildOpenAiTools(params.tools);
+    const audioFiles = (params.files || []).filter((file) =>
+      file.mimeType.startsWith('audio/'),
+    );
+    let transcription: string | undefined;
+    if (audioFiles.length) {
+      const groqKey = await this.providerKeyResolver.resolveApiKey(
+        params.context?.clientId || '',
+        'groq',
+      );
+      if (!groqKey)
+        throw new Error('Configure Groq para transcrever anexos de áudio.');
+      const transcripts: string[] = [];
+      for (const file of audioFiles)
+        transcripts.push(
+          await this.transcribeAudioBuffer(file.data, file.mimeType, groqKey),
+        );
+      transcription = transcripts.join('\n');
+    }
+    const agentParams: import('../providers/llm-provider.interface').AgentChatParams =
+      {
+        systemPrompt: params.systemPrompt || '',
+        agentConfig: { model: params.model },
+        capabilities: DEFAULT_CAPABILITIES,
+        input: {
+          text: [params.message, transcription].filter(Boolean).join('\n'),
+          parts: (params.files || [])
+            .filter((file) => file.mimeType.startsWith('image/'))
+            .map((file) => ({
+              type: 'image',
+              media_url: `data:${file.mimeType};base64,${file.data}`,
+            })),
+        },
+        history: params.history.map((message) => ({
+          role: message.role,
+          parts: [{ type: 'text', text: message.content, order_index: 0 }],
+        })),
+        tools: definitions.map((tool) => tool.function),
+        onToolCall: async (functionName, args) => {
+          const tool = params.tools.find(
+            (candidate) => candidate.functionName === functionName,
+          );
+          const debug = await this.apiToolExecutor.executeToolCall({
+            tool,
+            functionName,
+            args,
+            context: {
+              message: params.message,
+              nativeRagContext,
+              callLlm: (subParams) => this.run(subParams),
+            },
+          });
+          toolCalls.push(debug);
+          const result = debug.result as Record<string, unknown> | undefined;
+          // Only mapped fields may leave the server; never forward a raw API payload.
+          const content =
+            result?.data !== undefined
+              ? {
+                  ok: result.ok !== false,
+                  status: result.status,
+                  ...(typeof result.data === 'object' && result.data !== null
+                    ? result.data
+                    : { resultado: result.data }),
+                }
+              : result;
+          return JSON.parse(truncateToolResult(content ?? {}));
+        },
+      };
+    const output = params.onToken
+      ? await provider.chatWithPartsStream(agentParams, params.onToken)
+      : await provider.chatWithParts(agentParams);
+    return { text: output.text, usage: output.usage, toolCalls, transcription };
   }
 
   // ── OpenAI-compatible com loop de function calling ──────────────

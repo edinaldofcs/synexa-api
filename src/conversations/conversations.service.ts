@@ -1,3 +1,4 @@
+import { SearchConversationsDto } from './dto/search-conversations.dto';
 import {
   Injectable,
   Logger,
@@ -385,12 +386,114 @@ export class ConversationsService {
     });
   }
 
+  async searchConversations(companyId: string, query: SearchConversationsDto) {
+    if (!companyId) throw new BadRequestException('Company is required');
+    if (
+      query.start &&
+      query.end &&
+      new Date(query.start) > new Date(query.end)
+    ) {
+      throw new BadRequestException('Invalid date range');
+    }
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 50;
+    const conditions: Prisma.Sql[] = [Prisma.sql`TRUE`];
+    if (query.filter === 'active' || query.filter === 'closed')
+      conditions.push(Prisma.sql`status = ${query.filter}`);
+    if (query.filter === 'deals' || query.outcome === 'deals')
+      conditions.push(Prisma.sql`deal`);
+    if (query.filter === 'cpc' || query.outcome === 'cpc')
+      conditions.push(Prisma.sql`cpc`);
+    if (query.channel && query.channel !== 'all')
+      conditions.push(Prisma.sql`lower(origin_channel) = ${query.channel}`);
+    if (query.start)
+      conditions.push(
+        Prisma.sql`COALESCE(last_message_at, created_at) >= ${new Date(query.start)}`,
+      );
+    if (query.end)
+      conditions.push(
+        Prisma.sql`COALESCE(last_message_at, created_at) <= ${new Date(query.end)}`,
+      );
+    if (query.search?.trim()) {
+      const term = query.search.trim().toLowerCase();
+      conditions.push(Prisma.sql`strpos(lower(search_text), ${term}) > 0`);
+    }
+    const [result] = await this.prisma.$queryRaw<
+      Array<{
+        ids: string[];
+        total: number;
+        active: number;
+        closed: number;
+        deals: number;
+        cpc: number;
+      }>
+    >(Prisma.sql`
+      WITH source AS (
+        SELECT c.id, c.status, c.origin_channel, c.last_message_at, c.created_at,
+          COALESCE(c.metadata->'session_record', '{}'::jsonb) AS record,
+          COALESCE(c.metadata->'session_data', '{}'::jsonb) AS session_data,
+          CASE WHEN jsonb_typeof(cs.state->'state') = 'object' THEN cs.state->'state'
+               ELSE COALESCE(cs.state, '{}'::jsonb) END AS state,
+          ${
+            query.search?.trim()
+              ? Prisma.sql`concat_ws(' ', c.id::text, eu.name, eu.metadata->>'document_number', eu.metadata->>'cpf',
+            pc.company_name, (SELECT m.content FROM messages m WHERE m.conversation_id = c.id
+                             ORDER BY m.created_at DESC, m.id DESC LIMIT 1))`
+              : Prisma.sql`''::text`
+          } AS search_text
+        FROM conversations c
+        LEFT JOIN conversation_state cs ON cs.conversation_id = c.id
+        LEFT JOIN end_users eu ON eu.id = c.end_user_id
+        LEFT JOIN painel_clients pc ON pc.id = c.client_id
+        WHERE c.company_id = ${companyId}::uuid
+          ${query.client_id ? Prisma.sql`AND c.client_id = ${query.client_id}::uuid` : Prisma.empty}
+      ), flags AS (
+        SELECT *, COALESCE(
+          record->'promessa' = 'true'::jsonb OR record->'acordo' = 'true'::jsonb OR
+          state->'promessa' = 'true'::jsonb OR state->'acordo' = 'true'::jsonb OR state->'promessa_pagamento' = 'true'::jsonb OR
+          strpos(lower(state->>'status_cobranca'), 'acordo') > 0 OR
+          strpos(lower(session_data->>'status'), 'acordo') > 0 OR strpos(lower(session_data->>'status'), 'promessa') > 0 OR
+          COALESCE(record->>'id_acordo', '') NOT IN ('', '0', 'false') OR
+          COALESCE(state->>'id_acordo', '') NOT IN ('', '0', 'false') OR
+          COALESCE(state->>'valor_acordo', '') NOT IN ('', '0', 'false') OR
+          COALESCE(state->>'data_promessa', '') NOT IN ('', '0', 'false'), FALSE) AS deal,
+          COALESCE(record->'cpc' = 'true'::jsonb OR state->'cpc' = 'true'::jsonb OR
+          state->'contato_pessoa_certa' = 'true'::jsonb OR lower(record->>'cpc') = 'sim' OR lower(state->>'cpc') = 'sim', FALSE) AS cpc
+        FROM source
+      ), matched AS (SELECT * FROM flags WHERE ${Prisma.join(conditions, ' AND ')})
+      SELECT ARRAY(SELECT id FROM matched ORDER BY last_message_at DESC, id DESC
+                   LIMIT ${limit} OFFSET ${(page - 1) * limit}) AS ids,
+        (SELECT count(*)::int FROM matched) AS total,
+        count(*) FILTER (WHERE status = 'active')::int AS active,
+        count(*) FILTER (WHERE status = 'closed')::int AS closed,
+        count(*) FILTER (WHERE deal)::int AS deals,
+        count(*) FILTER (WHERE cpc)::int AS cpc FROM flags
+    `);
+    const data = result.ids.length
+      ? await this.listByClient({ companyId, ids: result.ids, limit })
+      : [];
+    return {
+      data,
+      total: result.total,
+      page,
+      limit,
+      counts: {
+        active: result.active,
+        closed: result.closed,
+        deals: result.deals,
+        cpc: result.cpc,
+      },
+    };
+  }
+
   async listByClient(options?: {
     clientId?: string;
     companyId?: string | null;
     mode?: string;
     status?: string;
     track_id?: string;
+    ids?: string[];
+    limit?: number;
   }) {
     const { clientId, companyId, mode, status, track_id } = options || {};
 
@@ -400,11 +503,12 @@ export class ConversationsService {
     if (status) where.status = status;
     if (mode) where.mode = mode;
     if (track_id) where.track_id = track_id;
+    if (options?.ids) where.id = { in: options.ids };
 
     return this.prisma.conversations.findMany({
       where,
-      orderBy: { last_message_at: 'desc' },
-      take: 150,
+      orderBy: [{ last_message_at: 'desc' }, { id: 'desc' }],
+      take: options?.limit ?? 150,
       include: {
         end_users: {
           select: {

@@ -1115,7 +1115,8 @@ export class ClientsService {
           return {
             ok: false,
             latencyMs,
-            error: 'Resposta sem áudio (esperado PCM bruto, WAV ou audio_base64)',
+            error:
+              'Resposta sem áudio (esperado PCM bruto, WAV ou audio_base64)',
           };
         }
         return {
@@ -1154,7 +1155,11 @@ export class ClientsService {
       }
       const raw = await res.text();
       if (raw.length > MAX_CUSTOM_RESPONSE_BYTES / 10) {
-        return { ok: false, latencyMs, error: 'Resposta excessivamente grande' };
+        return {
+          ok: false,
+          latencyMs,
+          error: 'Resposta excessivamente grande',
+        };
       }
       let text = raw.trim();
       try {

@@ -1,3 +1,4 @@
+import { resolveVoiceFlowSettings } from '../services/voice-flow-settings';
 import { Logger } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -64,7 +65,15 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     const customTts = options.customTts;
     const voiceId = options.voiceName || DEFAULT_CARTESIA_VOICE;
 
-    if (customTts?.baseUrl) {
+    if (options.ttsProvider === 'inworld') {
+      this.ttsSession = this.ttsSessionFactory.createSession({
+        apiKey: options.inworldApiKey || '',
+        voiceId:
+          options.voiceName ||
+          resolveVoiceFlowSettings(options.voiceSettings).inworldVoice,
+        sampleRate: 24000,
+      });
+    } else if (customTts?.baseUrl) {
       // BYO TTS: sessão HTTP do cliente (chave/config já resolvidas pelo factory)
       this.logger.log(
         `🎙️ [CascadeVoice] TTS customizado (BYO) ativado: ${customTts.baseUrl}`,
@@ -73,7 +82,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         apiKey: customTts.apiKey,
         voiceId: customTts.voice || voiceId,
         sampleRate: 24000,
-        language: 'pt',
+        language: resolveVoiceFlowSettings(options.voiceSettings).language,
         baseUrl: customTts.baseUrl,
         outputSampleRate: customTts.sampleRate,
         timeoutMs: customTts.timeoutMs,
@@ -90,9 +99,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       this.ttsSession = this.ttsSessionFactory.createSession({
         apiKey: cartesiaKey,
         voiceId,
-        modelId: 'sonic-3.6',
+        modelId: resolveVoiceFlowSettings(options.voiceSettings).cartesiaModel,
         sampleRate: 24000,
-        language: 'pt',
+        language: resolveVoiceFlowSettings(options.voiceSettings).language,
       });
     }
 
@@ -129,7 +138,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
     this.isReady = true;
     this.logger.log(
-      '🎉 [CascadeVoice] Provedor em Cascata conectado (Cartesia Sonic + Groq)',
+      `[CascadeVoice] Cascata conectada: TTS=${options.ttsProvider || 'cartesia'}, STT=${options.sttProvider || 'groq'}`,
     );
     this.options.onSetupComplete?.();
   }
@@ -254,9 +263,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   public sendText(text: string): void {
-    if (!text || !text.trim()) return;
+    if (!this.isReady || !text || !text.trim()) return;
     this.logger.log(
-      `🤖 [CascadeVoice] Enviando texto de entrada (saudação): "${text}"`,
+      `[CascadeVoice] Enviando saudação (${text.length} caracteres)`,
     );
     void this.executeLlmAndSpeak(text);
   }
@@ -279,7 +288,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   public seedGreetingTurn(text: string): void {
     if (!text || !text.trim()) return;
     this.logger.log(
-      `🤖 [CascadeVoice] Saudação inicial registrada no histórico (aguardando usuário): "${text.trim()}"`,
+      `[CascadeVoice] Saudação inicial registrada (${text.trim().length} caracteres)`,
     );
     // Para respeitar o protocolo da API Gemini (onde contents deve iniciar com role 'user'),
     // registramos o par inicial: trigger de início do atendimento -> fala da saudação pela IA.
@@ -303,7 +312,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       response: Record<string, any>;
     }[],
   ): void {
-    if (!functionResponses || functionResponses.length === 0) return;
+    if (!this.isReady || !functionResponses || functionResponses.length === 0)
+      return;
 
     // Adiciona as respostas das ferramentas ao histórico e retoma o LLM
     this.conversationHistory.push({
@@ -371,7 +381,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     }
 
     this.logger.log(
-      `🎙️ [CascadeVoice] Turno de fala fechado (${durationMs}ms, RMS: ${Math.round(rms)}, Peak: ${peak}). Despachando para Groq Whisper...`,
+      `🎙️ [CascadeVoice] Turno de fala fechado (${durationMs}ms, RMS: ${Math.round(rms)}, Peak: ${peak}). Despachando para STT...`,
     );
     await this.processUserSpeech(speechAudio, rms, durationMs);
   }
@@ -484,16 +494,17 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     durationMs: number,
   ): Promise<void> {
     const customStt: CustomSttConfig | undefined = this.options?.customStt;
-    const groqKey = this.options?.groqApiKey || process.env.GROQ_API_KEY || '';
+    const isInworld = this.options?.sttProvider === 'inworld';
+    const groqKey = isInworld
+      ? this.options?.inworldApiKey || ''
+      : this.options?.groqApiKey || process.env.GROQ_API_KEY || '';
 
     if (customStt?.baseUrl) {
       this.logger.log(
         `🎙️ [CascadeVoice] Turno de fala (${durationMs}ms) despachado para STT customizado (BYO)...`,
       );
     } else if (!groqKey) {
-      this.logger.error(
-        '❌ [CascadeVoice] GROQ_API_KEY não configurada para STT',
-      );
+      this.logger.error('Credencial do provedor STT não configurada');
       return;
     }
 
@@ -504,7 +515,15 @@ export class CascadeVoiceProvider implements IVoiceProvider {
             baseUrl: customStt.baseUrl,
             timeoutMs: customStt.timeoutMs,
           }
-        : { apiKey: groqKey };
+        : {
+            apiKey: groqKey,
+            model: resolveVoiceFlowSettings(this.options?.voiceSettings)
+              .groqModel,
+            language: resolveVoiceFlowSettings(this.options?.voiceSettings)
+              .language,
+            prompt: resolveVoiceFlowSettings(this.options?.voiceSettings)
+              .sttPrompt,
+          };
 
       const userText = await this.sttTranscriber.transcribePcm(
         pcmBuffer,
@@ -512,22 +531,23 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       );
 
       if (!userText || !userText.trim()) {
-        this.logger.log(
-          '[CascadeVoice] Whisper retornou texto vazio para o áudio',
-        );
+        this.logger.log('[CascadeVoice] STT retornou texto vazio para o áudio');
         return;
       }
 
       // Filtro Anti-Alucinação do Whisper em áudios de baixa energia/curtos
-      if (this.isWhisperHallucination(userText, rms, durationMs)) {
+      if (
+        !isInworld &&
+        this.isWhisperHallucination(userText, rms, durationMs)
+      ) {
         this.logger.warn(
-          `⚠️ [CascadeVoice] Alucinação do Whisper suprimida: "${userText}" (RMS: ${Math.round(rms)}, Dur: ${durationMs}ms)`,
+          `[CascadeVoice] Alucinação do Whisper suprimida (RMS: ${Math.round(rms)}, Dur: ${durationMs}ms)`,
         );
         return;
       }
 
       this.logger.log(
-        `📝 [CascadeVoice] Fala transcrita pelo Groq Whisper: "${userText}"`,
+        `[CascadeVoice] Transcrição recebida: provider=${this.options?.sttProvider || 'groq'}, caracteres=${userText.length}`,
       );
       this.options?.onUserTranscript?.(userText);
       await this.executeLlmAndSpeak(userText);

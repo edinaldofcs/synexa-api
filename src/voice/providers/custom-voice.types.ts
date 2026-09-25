@@ -51,7 +51,10 @@ export interface SttTranscribeOptions {
 }
 
 export interface SttTranscriber {
-  transcribePcm: (pcmBuffer: Buffer, options: SttTranscribeOptions) => Promise<string>;
+  transcribePcm: (
+    pcmBuffer: Buffer,
+    options: SttTranscribeOptions,
+  ) => Promise<string>;
 }
 
 /** Config BYO de TTS/STT do cliente (não-secreta vem do metadata; chave do BYOK). */

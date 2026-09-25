@@ -159,4 +159,49 @@ describe('AuthGuard', () => {
       'Proteção CSRF inválida',
     );
   });
+  it.each(['operator', 'company_admin'])(
+    'rejects impersonation after demotion to %s',
+    async (role) => {
+      const user = {
+        id: 'admin',
+        role: 'company_admin',
+        company_id: 'target',
+        original_role: 'platform_admin',
+        original_company_id: 'origin',
+      };
+      const sessions = {
+        get: jest.fn().mockResolvedValue({ user }),
+        destroy: jest.fn(),
+      };
+      const prisma = {
+        users: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'admin',
+            role,
+            company_id: 'origin',
+            companies: { status: 'active' },
+          }),
+        },
+      };
+      const request = {
+        method: 'GET',
+        headers: { cookie: 'synexa_session=test' },
+      };
+      const ctx = {
+        getHandler: jest.fn(),
+        getClass: jest.fn(),
+        switchToHttp: () => ({ getRequest: () => request }),
+      } as unknown as ExecutionContext;
+      guard = new AuthGuard(
+        reflector,
+        undefined,
+        prisma as any,
+        sessions as any,
+      );
+      await expect(guard.canActivate(ctx)).rejects.toThrow(
+        'Usuário não autorizado',
+      );
+      expect(sessions.destroy).toHaveBeenCalledWith('test');
+    },
+  );
 });
