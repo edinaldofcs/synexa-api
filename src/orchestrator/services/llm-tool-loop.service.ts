@@ -1037,10 +1037,12 @@ export class LlmToolLoopService {
   }
 
   private async listCartesiaModels(apiKey: string): Promise<string[]> {
-    if (!apiKey) throw new Error('API key da Cartesia não fornecida');
+    const cleanKey = apiKey?.trim();
+    if (!cleanKey) throw new Error('API key da Cartesia não fornecida');
     const res = await fetch('https://api.cartesia.ai/voices', {
       headers: {
-        'X-API-Key': apiKey,
+        'X-API-Key': cleanKey,
+        Authorization: `Bearer ${cleanKey}`,
         'Cartesia-Version': '2024-11-13',
       },
       signal: AbortSignal.timeout(15_000),

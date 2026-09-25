@@ -206,17 +206,7 @@ export class OrchestratorController {
   @Post('list-models')
   async listModels(@Body() body: ListModelsDto) {
     try {
-      let apiKey = body.apiKey;
-      // S43: em production a apiKey do body e ignorada (egress para validar
-      // chaves roubadas); usa apenas a credencial registrada via
-      // provider-key-resolver.
-      if (process.env.ENVIRONMENT === 'production' && apiKey) {
-        this.logger.warn(
-          { provider: body.provider },
-          'ListModels: apiKey no body ignorada em production',
-        );
-        apiKey = undefined;
-      }
+      const apiKey = body.apiKey?.trim();
       const models = await this.testChatService.listModels(
         body.provider,
         apiKey,

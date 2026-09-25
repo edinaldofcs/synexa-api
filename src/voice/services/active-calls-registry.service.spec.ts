@@ -22,7 +22,9 @@ describe('ActiveCallsRegistryService', () => {
       ],
     }).compile();
 
-    service = module.get<ActiveCallsRegistryService>(ActiveCallsRegistryService);
+    service = module.get<ActiveCallsRegistryService>(
+      ActiveCallsRegistryService,
+    );
   });
 
   it('deve registrar e recuperar uma chamada ativa', async () => {

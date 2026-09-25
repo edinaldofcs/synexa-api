@@ -425,19 +425,15 @@ export class TestChatService {
         }
       }
 
-      if (this.isMaskedOrPlaceholder(apiKey) && provider) {
-        apiKey = await this.providerKeyResolver.resolveApiKey(
-          clientId || '',
-          provider,
-        );
-      } else if (provider && !this.isMaskedOrPlaceholder(apiKey)) {
-        // Prioriza a chave cadastrada pelo cliente no painel (provider_credentials
-        // / metadata com descriptografia); a chave recebida é apenas fallback
-        const registeredKey = await this.providerKeyResolver.resolveApiKey(
-          clientId,
-          provider,
-        );
-        if (registeredKey) apiKey = registeredKey;
+      if (this.isMaskedOrPlaceholder(apiKey)) {
+        if (provider) {
+          apiKey = await this.providerKeyResolver.resolveApiKey(
+            clientId || '',
+            provider,
+          );
+        }
+      } else {
+        apiKey = apiKey?.trim();
       }
     }
 
@@ -462,10 +458,12 @@ export class TestChatService {
     }
 
     if (provider.toLowerCase() === 'cartesia') {
+      const cleanKey = apiKey?.trim();
       const startMs = Date.now();
       const res = await fetch('https://api.cartesia.ai/voices', {
         headers: {
-          'X-API-Key': apiKey,
+          'X-API-Key': cleanKey,
+          Authorization: `Bearer ${cleanKey}`,
           'Cartesia-Version': '2024-11-13',
         },
         signal: AbortSignal.timeout(15_000),

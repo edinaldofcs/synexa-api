@@ -116,7 +116,9 @@ export class ActiveCallsRegistryService {
     this.statusUpdateCallback?.({ type: 'monitoring_call_ended', call });
   }
 
-  public async getActiveCalls(companyId: string): Promise<ActiveCallDescriptor[]> {
+  public async getActiveCalls(
+    companyId: string,
+  ): Promise<ActiveCallDescriptor[]> {
     const results: ActiveCallDescriptor[] = [];
     const seen = new Set<string>();
 
@@ -150,11 +152,15 @@ export class ActiveCallsRegistryService {
     return this.calls.get(callId);
   }
 
-  public async getCallFromRedis(callId: string): Promise<ActiveCallDescriptor | undefined> {
+  public async getCallFromRedis(
+    callId: string,
+  ): Promise<ActiveCallDescriptor | undefined> {
     const inMem = this.calls.get(callId);
     if (inMem) return inMem;
     try {
-      const fromRedis = await this.redis.get<ActiveCallDescriptor>(`synexa:call:${callId}`);
+      const fromRedis = await this.redis.get<ActiveCallDescriptor>(
+        `synexa:call:${callId}`,
+      );
       return fromRedis || undefined;
     } catch {
       return undefined;

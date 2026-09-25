@@ -17,8 +17,9 @@ export class CartesiaTtsSynthesizer implements ITtsSynthesizer {
     text: string,
     options: TtsSynthesizeOptions,
   ): Promise<Buffer> {
-    const apiKey = options.apiKey || process.env.CARTESIA_API_KEY || '';
-    if (!apiKey) {
+    const rawKey = options.apiKey || process.env.CARTESIA_API_KEY || '';
+    const cleanKey = rawKey.trim();
+    if (!cleanKey) {
       throw new Error('CARTESIA_API_KEY não configurada para síntese');
     }
 
@@ -45,7 +46,8 @@ export class CartesiaTtsSynthesizer implements ITtsSynthesizer {
     const response = await fetch('https://api.cartesia.ai/tts/bytes', {
       method: 'POST',
       headers: {
-        'X-API-Key': apiKey,
+        'X-API-Key': cleanKey,
+        Authorization: `Bearer ${cleanKey}`,
         'Cartesia-Version': CARTESIA_VERSION,
         'Content-Type': 'application/json',
       },
