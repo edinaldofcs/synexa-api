@@ -419,13 +419,14 @@ export class VoiceGateway
           case 'monitoring_subscribe': {
             clearIdentificationTimer();
             const companyId = msg.companyId || msg.company_id;
+            const snapshot =
+              this.activeCallsRegistry && companyId
+                ? await this.activeCallsRegistry.getActiveCalls(companyId)
+                : [];
             sendToClient({
               type: 'monitoring_subscribed',
               status: 'ok',
-              snapshot:
-                this.activeCallsRegistry && companyId
-                  ? this.activeCallsRegistry.getActiveCalls(companyId)
-                  : [],
+              snapshot,
             });
             return;
           }
