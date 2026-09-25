@@ -116,7 +116,7 @@ export class ActiveCallsRegistryService {
     this.statusUpdateCallback?.({ type: 'monitoring_call_ended', call });
   }
 
-  public getActiveCalls(companyId: string): ActiveCallDescriptor[] {
+  public async getActiveCalls(companyId: string): Promise<ActiveCallDescriptor[]> {
     const results: ActiveCallDescriptor[] = [];
     const seen = new Set<string>();
 
@@ -126,11 +126,39 @@ export class ActiveCallsRegistryService {
         results.push(call);
       }
     }
-    return results;
+
+    if (results.length > 0) {
+      return results;
+    }
+
+    // Fallback para Redis (quando consultado pelo container da API)
+    try {
+      const fromRedis = await this.redis.get<ActiveCallDescriptor[]>(
+        `synexa:active_calls:${companyId}`,
+      );
+      if (Array.isArray(fromRedis)) {
+        return fromRedis;
+      }
+    } catch (e: any) {
+      this.logger.debug(`Falha ao ler chamadas ativas do Redis: ${e?.message}`);
+    }
+
+    return [];
   }
 
   public getCall(callId: string): ActiveCallDescriptor | undefined {
     return this.calls.get(callId);
+  }
+
+  public async getCallFromRedis(callId: string): Promise<ActiveCallDescriptor | undefined> {
+    const inMem = this.calls.get(callId);
+    if (inMem) return inMem;
+    try {
+      const fromRedis = await this.redis.get<ActiveCallDescriptor>(`synexa:call:${callId}`);
+      return fromRedis || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   public subscribeAudio(

@@ -36,7 +36,7 @@ describe('ActiveCallsRegistryService', () => {
       didNumber: '2000',
     });
 
-    const activeCalls = service.getActiveCalls('comp-1');
+    const activeCalls = await service.getActiveCalls('comp-1');
     expect(activeCalls).toHaveLength(1);
     expect(activeCalls[0].callId).toBe('call-123');
     expect(activeCalls[0].callerNumber).toBe('+5511999998888');
@@ -72,7 +72,7 @@ describe('ActiveCallsRegistryService', () => {
     });
 
     await service.unregisterCall('call-123');
-    expect(service.getActiveCalls('comp-1')).toHaveLength(0);
+    expect(await service.getActiveCalls('comp-1')).toHaveLength(0);
     expect(service.getCall('call-123')).toBeUndefined();
   });
 

@@ -5,7 +5,9 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { VoiceService } from './voice.service';
 import type { VoiceConfigResponse } from './voice.service';
@@ -208,12 +210,20 @@ export class VoiceController {
    * Retorna as chamadas ativas de telefonia e o limite de concorrência da empresa.
    */
   @Get('monitoring/active-calls')
-  async getActiveCalls(@CurrentUser() user: { company_id: string }) {
+  async getActiveCalls(
+    @CurrentUser() user?: { company_id: string },
+    @Query('companyId') queryCompanyId?: string,
+  ) {
+    const companyId = user?.company_id || queryCompanyId;
+    if (!companyId) {
+      throw new UnauthorizedException('Sessão expirada ou não autenticada');
+    }
+
     const calls =
-      this.activeCallsRegistry?.getActiveCalls(user.company_id) || [];
+      (await this.activeCallsRegistry?.getActiveCalls(companyId)) || [];
 
     const client = await this.prisma.painel_clients.findFirst({
-      where: { company_id: user.company_id },
+      where: { company_id: companyId },
       select: { max_concurrent_calls: true },
     });
 
@@ -243,10 +253,19 @@ export class VoiceController {
   @Post('monitoring/hangup/:callId')
   async hangupActiveCall(
     @Param('callId') callId: string,
-    @CurrentUser() user: { company_id: string },
+    @CurrentUser() user?: { company_id: string },
+    @Query('companyId') queryCompanyId?: string,
   ) {
-    const call = this.activeCallsRegistry?.getCall(callId);
-    if (!call || call.companyId !== user.company_id) {
+    const companyId = user?.company_id || queryCompanyId;
+    if (!companyId) {
+      throw new UnauthorizedException('Sessão expirada ou não autenticada');
+    }
+
+    let call = this.activeCallsRegistry?.getCall(callId);
+    if (!call) {
+      call = await this.activeCallsRegistry?.getCallFromRedis(callId);
+    }
+    if (!call || call.companyId !== companyId) {
       throw new NotFoundException('Chamada não encontrada ou já encerrada');
     }
 
