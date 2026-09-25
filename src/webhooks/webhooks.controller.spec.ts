@@ -31,16 +31,14 @@ it('preserves the export policy on a partial enabled update', async () => {
   };
   const prisma = {
     webhook_endpoints: {
-      findFirst: jest
-        .fn()
-        .mockResolvedValue({
-          id: 'endpoint',
-          client_id: 'client',
-          events: ['message.sent'],
-          url: 'https://example.com',
-          enabled: true,
-          retry_policy: policy,
-        }),
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'endpoint',
+        client_id: 'client',
+        events: ['message.sent'],
+        url: 'https://example.com',
+        enabled: true,
+        retry_policy: policy,
+      }),
       update: jest.fn().mockResolvedValue({}),
     },
   };

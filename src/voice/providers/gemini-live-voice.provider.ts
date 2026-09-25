@@ -30,6 +30,7 @@ export interface GeminiLiveConnectOptions {
     totalTokenCount?: number;
     promptTokenCount?: number;
     candidatesTokenCount?: number;
+    responseTokenCount?: number;
     thoughtsTokenCount?: number;
     promptTokensDetails?: any[];
     candidatesTokensDetails?: any[];
@@ -40,7 +41,7 @@ export interface GeminiLiveConnectOptions {
 
 const GOOGLE_LIVE_API_URL =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
-export const DEFAULT_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
+export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live';
 
 /**
  * Somente modelos Live (bidiGenerateContent) são aceitos na Live API —
@@ -145,6 +146,10 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
   private options: GeminiLiveConnectOptions | null = null;
   private readonly backpressureBytes: number;
   private droppedAudioFramesCount = 0;
+  private pendingModelText: string[] = [];
+  private outputTranscriptionSeen = false;
+  private pendingBeforeSetup: string[] = [];
+  private pendingBeforeSetupBytes = 0;
 
   constructor() {
     this.backpressureBytes =
@@ -159,6 +164,11 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
 
   public connect(options: GeminiLiveConnectOptions): void {
     this.options = options;
+    this.pendingModelText = [];
+    this.outputTranscriptionSeen = false;
+    this.pendingBeforeSetup = [];
+    this.pendingBeforeSetupBytes = 0;
+    this.isReady = false;
     const live = resolveGeminiLiveSettings(options.geminiLive);
     const model = live?.model ?? resolveLiveModel(options.model);
     if (!live && options.model && model !== options.model) {
@@ -197,8 +207,11 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
       options.onClose?.();
       return;
     }
+    const socket = this.ws;
+    let errorReported = false;
 
-    this.ws.on('open', () => {
+    socket.on('open', () => {
+      if (this.ws !== socket) return;
       this.logger.log(
         `✅ [GeminiLive] Conectado ao Google Live API | model=${model} | voice=${voice}`,
       );
@@ -248,10 +261,11 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
             : options.tools;
       }
 
-      this.ws?.send(JSON.stringify(setupMessage));
+      socket.send(JSON.stringify(setupMessage));
     });
 
-    this.ws.on('message', (raw: WebSocket.RawData) => {
+    socket.on('message', (raw: WebSocket.RawData) => {
+      if (this.ws !== socket) return;
       try {
         const message = JSON.parse(raw.toString());
         this.handleMessage(message);
@@ -262,16 +276,29 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
       }
     });
 
-    this.ws.on('error', (err: Error) => {
+    socket.on('error', (err: Error) => {
+      if (this.ws !== socket) return;
+      errorReported = true;
       this.logger.error(`❌ [GeminiLive] Erro de conexão: ${err.message}`);
       options.onError?.(err);
     });
 
-    this.ws.on('close', (code: number, reason: Buffer) => {
+    socket.on('close', (code: number, reason: Buffer) => {
+      if (this.ws !== socket) return;
+      this.ws = null;
       this.isReady = false;
-      this.logger.log(
-        `🔴 [GeminiLive] Conexão encerrada (${code}): ${reason.toString()}`,
+      this.pendingBeforeSetup = [];
+      this.pendingBeforeSetupBytes = 0;
+      this.logger.warn(
+        `🔴 [GeminiLive] Conexão encerrada (${code})${reason.length ? '; motivo remoto omitido' : ''}`,
       );
+      if (code !== 1000 && !errorReported) {
+        options.onError?.(
+          new Error(
+            `Gemini Live encerrou a conexão (código ${code}). Verifique modelo, voz e ferramentas configurados.`,
+          ),
+        );
+      }
       options.onClose?.();
     });
   }
@@ -280,6 +307,12 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     if (message.setupComplete) {
       this.isReady = true;
       this.logger.log('🎉 [GeminiLive] Handshake & Setup concluído');
+      for (const payload of this.pendingBeforeSetup) {
+        if (this.ws?.readyState !== WebSocket.OPEN) break;
+        this.ws.send(payload);
+      }
+      this.pendingBeforeSetup = [];
+      this.pendingBeforeSetupBytes = 0;
       this.options?.onSetupComplete?.();
       return;
     }
@@ -292,17 +325,19 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     if (serverContent) {
       if (serverContent.interrupted) {
         this.logger.debug('⚡ [GeminiLive] Interrupção (barge-in) detectada');
+        this.pendingModelText = [];
+        this.outputTranscriptionSeen = false;
         this.options?.onInterrupted?.();
       }
 
       const modelTurn = serverContent.modelTurn;
       if (modelTurn?.parts) {
         for (const part of modelTurn.parts) {
-          if (part.inlineData?.data) {
+          if (!serverContent.interrupted && part.inlineData?.data) {
             this.options?.onAudio?.(part.inlineData.data);
           }
-          if (part.text) {
-            this.options?.onAiTranscript?.(part.text);
+          if (!serverContent.interrupted && part.text) {
+            this.pendingModelText.push(part.text);
           }
         }
       }
@@ -311,10 +346,16 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
         this.options?.onUserTranscript?.(serverContent.inputTranscription.text);
       }
       if (serverContent.outputTranscription?.text) {
+        this.outputTranscriptionSeen = true;
         this.options?.onAiTranscript?.(serverContent.outputTranscription.text);
       }
 
       if (serverContent.turnComplete) {
+        if (!this.outputTranscriptionSeen && this.pendingModelText.length) {
+          this.options?.onAiTranscript?.(this.pendingModelText.join(''));
+        }
+        this.pendingModelText = [];
+        this.outputTranscriptionSeen = false;
         this.options?.onTurnComplete?.();
       }
     }
@@ -327,8 +368,37 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     }
   }
 
-  public sendAudio(base64Pcm16: string, _sampleRate = 16000): void {
-    if (this.ws?.readyState !== WebSocket.OPEN || !base64Pcm16) return;
+  private sendClientMessage(payload: unknown): void {
+    if (
+      !this.ws ||
+      (this.ws.readyState !== WebSocket.CONNECTING &&
+        this.ws.readyState !== WebSocket.OPEN)
+    )
+      return;
+    const serialized = JSON.stringify(payload);
+    if (!this.isReady) {
+      const bytes = Buffer.byteLength(serialized);
+      if (this.pendingBeforeSetupBytes + bytes > this.backpressureBytes) {
+        this.droppedAudioFramesCount++;
+        this.logger.warn(
+          '[GeminiLive] Buffer pré-handshake cheio; mensagem de áudio descartada',
+        );
+        return;
+      }
+      this.pendingBeforeSetup.push(serialized);
+      this.pendingBeforeSetupBytes += bytes;
+      return;
+    }
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(serialized);
+  }
+
+  public sendAudio(base64Pcm16: string, sampleRate = 16000): void {
+    if (!this.ws || !base64Pcm16) return;
+    if (
+      this.ws.readyState !== WebSocket.CONNECTING &&
+      this.ws.readyState !== WebSocket.OPEN
+    )
+      return;
     if (this.ws.bufferedAmount > this.backpressureBytes) {
       this.droppedAudioFramesCount++;
       if (this.droppedAudioFramesCount % BACKPRESSURE_LOG_EVERY === 1) {
@@ -340,33 +410,18 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     }
     const payload = {
       realtimeInput: {
-        mediaChunks: [
-          {
-            mimeType: 'audio/pcm',
-            data: base64Pcm16,
-          },
-        ],
+        audio: {
+          mimeType: `audio/pcm;rate=${sampleRate}`,
+          data: base64Pcm16,
+        },
       },
     };
-    this.ws.send(JSON.stringify(payload));
+    this.sendClientMessage(payload);
   }
 
   public sendAudioStreamEnd(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(
-        JSON.stringify({
-          realtimeInput: {
-            audioStreamEnd: true,
-          },
-        }),
-      );
-      this.ws.send(
-        JSON.stringify({
-          clientContent: {
-            turnComplete: true,
-          },
-        }),
-      );
+    if (this.ws) {
+      this.sendClientMessage({ realtimeInput: { audioStreamEnd: true } });
     }
   }
 
@@ -383,7 +438,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
           turnComplete: true,
         },
       };
-      this.ws.send(JSON.stringify(payload));
+      this.sendClientMessage(payload);
     }
   }
 
@@ -408,7 +463,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
           turnComplete: false,
         },
       };
-      this.ws.send(JSON.stringify(payload));
+      this.sendClientMessage(payload);
     }
   }
 
@@ -428,7 +483,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
           functionResponses,
         },
       };
-      this.ws.send(JSON.stringify(payload));
+      this.sendClientMessage(payload);
     }
   }
 
@@ -458,5 +513,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
       }
     }
     this.isReady = false;
+    this.pendingBeforeSetup = [];
+    this.pendingBeforeSetupBytes = 0;
   }
 }

@@ -9,6 +9,7 @@ import WebSocketMock from 'ws';
 
 jest.mock('ws', () => {
   class MockWebSocket {
+    static CONNECTING = 0;
     static OPEN = 1;
     static instances: any[] = [];
     readyState = 1;
@@ -36,6 +37,7 @@ const buildConnectedProvider = () => {
     systemPrompt: 'prompt',
   });
   const ws = (WebSocketMock as any).instances.slice(-1)[0] as MockWsInstance;
+  (provider as any).handleMessage({ setupComplete: {} });
   return { provider, ws };
 };
 
@@ -97,7 +99,23 @@ describe('GeminiLiveVoiceProvider - backpressure (ws.bufferedAmount)', () => {
     provider.sendAudio('aGVsbG8=');
 
     expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({
+      realtimeInput: {
+        audio: { data: 'aGVsbG8=', mimeType: 'audio/pcm;rate=16000' },
+      },
+    });
     expect(provider.droppedAudioFrames).toBe(0);
+  });
+
+  it('fecha o stream de áudio sem enviar clientContent que interromperia a resposta', () => {
+    const { provider, ws } = buildConnectedProvider();
+
+    provider.sendAudioStreamEnd();
+
+    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({
+      realtimeInput: { audioStreamEnd: true },
+    });
   });
 
   it('descarta o frame e conta quando o buffer excede o teto (env VOICE_WS_BACKPRESSURE_BYTES)', () => {
@@ -192,4 +210,101 @@ describe('Flow Gemini Live configuration', () => {
     expect(setup.model).toBe('models/gemini-3.1-flash-live-preview');
     expect(setup.realtimeInputConfig).toBeUndefined();
   });
+});
+
+describe('Gemini Live output events', () => {
+  it('encaminha todos os chunks de áudio e evita duplicar texto com outputTranscription', () => {
+    const provider = new GeminiLiveVoiceProvider();
+    const onAudio = jest.fn();
+    const onAiTranscript = jest.fn();
+    provider.connect({
+      apiKey: 'test-key',
+      systemPrompt: 'Prompt',
+      onAudio,
+      onAiTranscript,
+    });
+
+    (provider as any).handleMessage({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { inlineData: { data: 'chunk-1' }, text: 'texto-' },
+            { inlineData: { data: 'chunk-2' }, text: 'duplicado' },
+          ],
+        },
+        outputTranscription: { text: 'fala transcrita' },
+        turnComplete: true,
+      },
+    });
+
+    expect(onAudio.mock.calls).toEqual([['chunk-1'], ['chunk-2']]);
+    expect(onAiTranscript.mock.calls).toEqual([['fala transcrita']]);
+  });
+
+  it('descarta áudio residual no evento de interrupção', () => {
+    const provider = new GeminiLiveVoiceProvider();
+    const onAudio = jest.fn();
+    const onInterrupted = jest.fn();
+    provider.connect({
+      apiKey: 'test-key',
+      systemPrompt: 'Prompt',
+      onAudio,
+      onInterrupted,
+    });
+
+    (provider as any).handleMessage({
+      serverContent: {
+        interrupted: true,
+        modelTurn: { parts: [{ inlineData: { data: 'audio-obsoleto' } }] },
+        turnComplete: true,
+      },
+    });
+
+    expect(onInterrupted).toHaveBeenCalledTimes(1);
+    expect(onAudio).not.toHaveBeenCalled();
+  });
+});
+
+it('aguarda setupComplete antes de enviar o áudio inicial e preserva a ordem', () => {
+  const provider = new GeminiLiveVoiceProvider();
+  provider.connect({ apiKey: 'test-key', systemPrompt: 'Prompt' });
+  const ws = (WebSocketMock as any).instances.slice(-1)[0];
+  ws.readyState = 0;
+  provider.sendAudio('YXVkaW8=');
+  expect(ws.send).not.toHaveBeenCalled();
+
+  ws.readyState = 1;
+  ws.on.mock.calls.find(([event]: [string]) => event === 'open')[1]();
+
+  provider.sendAudioStreamEnd();
+  expect(ws.send).toHaveBeenCalledTimes(1);
+
+  (provider as any).handleMessage({ setupComplete: {} });
+
+  expect(ws.send).toHaveBeenCalledTimes(3);
+  expect(JSON.parse(ws.send.mock.calls[1][0])).toMatchObject({
+    realtimeInput: { audio: { data: 'YXVkaW8=' } },
+  });
+  expect(JSON.parse(ws.send.mock.calls[2][0])).toEqual({
+    realtimeInput: { audioStreamEnd: true },
+  });
+});
+
+it('informa falha de setup sem expor o motivo bruto do provedor ao cliente', () => {
+  const provider = new GeminiLiveVoiceProvider();
+  const onError = jest.fn();
+  provider.connect({ apiKey: 'test-key', systemPrompt: 'Prompt', onError });
+  const ws = (WebSocketMock as any).instances.slice(-1)[0];
+
+  ws.on.mock.calls.find(([event]: [string]) => event === 'close')[1](
+    1007,
+    Buffer.from('detalhe interno'),
+  );
+
+  expect(onError).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringContaining('código 1007'),
+    }),
+  );
+  expect(onError.mock.calls[0][0].message).not.toContain('detalhe interno');
 });

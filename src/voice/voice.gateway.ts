@@ -16,7 +16,13 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Logger, Optional, Inject, forwardRef } from '@nestjs/common';
+import {
+  Logger,
+  Optional,
+  Inject,
+  forwardRef,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { VoiceGreetingCacheService } from './services/voice-greeting-cache.service';
 import { WebSocket, WebSocketServer as WsServer } from 'ws';
@@ -24,8 +30,10 @@ import { VoiceService } from './voice.service';
 import { VoiceAuthService } from './voice-auth.service';
 import { MockVoiceProvider } from './providers/mock-voice.provider';
 import { AudioSocketServerService } from './telephony/audiosocket-server.service';
+import { ActiveCallsRegistryService } from './services/active-calls-registry.service';
 import {
   GeminiLiveVoiceProvider,
+  isLiveCapableModel,
   resolveGeminiLiveSettings,
   resolveLiveModel,
   resolveLiveVoice,
@@ -100,7 +108,10 @@ function pruneSessionState(
 
 @WebSocketGateway({ path: '/ws/voice' })
 export class VoiceGateway
-  implements OnGatewayConnection<WebSocket>, OnGatewayDisconnect<WebSocket>
+  implements
+    OnGatewayConnection<WebSocket>,
+    OnGatewayDisconnect<WebSocket>,
+    OnModuleInit
 {
   private readonly logger = new Logger(VoiceGateway.name);
   private sessions = new Map<WebSocket, VoiceClientSession>();
@@ -131,7 +142,22 @@ export class VoiceGateway
     @Optional()
     @Inject(forwardRef(() => AudioSocketServerService))
     private readonly audioSocketServerService?: AudioSocketServerService,
+    @Optional()
+    @Inject(forwardRef(() => ActiveCallsRegistryService))
+    private readonly activeCallsRegistry?: ActiveCallsRegistryService,
   ) {}
+
+  public onModuleInit(): void {
+    if (this.activeCallsRegistry) {
+      this.activeCallsRegistry.onCallEvent((event) => {
+        this.broadcast({
+          type: event.type,
+          call: event.call,
+          companyId: event.call.companyId,
+        });
+      });
+    }
+  }
 
   public broadcast(data: Record<string, any>): void {
     if (!this.server?.clients) return;
@@ -229,6 +255,7 @@ export class VoiceGateway
 
     const session = new VoiceClientSession(clientWs);
     this.sessions.set(clientWs, session);
+    const audioUnsubscribers = new Map<string, () => void>();
 
     const sendToClient = (payload: any) => {
       if (clientWs.readyState === WebSocket.OPEN) {
@@ -389,6 +416,60 @@ export class VoiceGateway
       try {
         const msg = JSON.parse(raw.toString());
         switch (msg.type) {
+          case 'monitoring_subscribe': {
+            clearIdentificationTimer();
+            const companyId = msg.companyId || msg.company_id;
+            sendToClient({
+              type: 'monitoring_subscribed',
+              status: 'ok',
+              snapshot:
+                this.activeCallsRegistry && companyId
+                  ? this.activeCallsRegistry.getActiveCalls(companyId)
+                  : [],
+            });
+            return;
+          }
+          case 'subscribe_live_audio': {
+            clearIdentificationTimer();
+            const callId = msg.callId;
+            if (callId && this.activeCallsRegistry) {
+              const unsubscribe = this.activeCallsRegistry.subscribeAudio(
+                callId,
+                (chunk) => {
+                  sendToClient({
+                    type: 'live_audio_chunk',
+                    callId,
+                    role: chunk.role,
+                    pcm: chunk.pcmBase64,
+                    sampleRate: chunk.sampleRate,
+                  });
+                },
+              );
+              audioUnsubscribers.set(callId, unsubscribe);
+              sendToClient({
+                type: 'live_audio_subscribed',
+                callId,
+                status: 'ok',
+              });
+            }
+            return;
+          }
+          case 'unsubscribe_live_audio': {
+            const callId = msg.callId;
+            if (callId) {
+              const unsub = audioUnsubscribers.get(callId);
+              if (unsub) {
+                unsub();
+                audioUnsubscribers.delete(callId);
+              }
+              sendToClient({
+                type: 'live_audio_unsubscribed',
+                callId,
+                status: 'ok',
+              });
+            }
+            return;
+          }
           case 'flow_listener_subscribe': {
             clearIdentificationTimer();
             sendToClient({ type: 'flow_listener_subscribed', status: 'ok' });
@@ -1565,11 +1646,22 @@ export class VoiceGateway
                 const liveSettings = resolveGeminiLiveSettings(
                   clientMeta.gemini_live,
                 );
+                const requestedVoice =
+                  typeof agent?.voice_name === 'string'
+                    ? agent.voice_name.trim()
+                    : '';
+                const agentVoice = resolveLiveVoice(requestedVoice);
                 session.model =
-                  liveSettings?.model ?? resolveLiveModel(session.model);
+                  isSwitch && isLiveCapableModel(agent?.model)
+                    ? agent.model
+                    : (liveSettings?.model ?? resolveLiveModel(session.model));
                 session.voiceName =
-                  liveSettings?.voiceName ??
-                  resolveLiveVoice(session.voiceName);
+                  isSwitch &&
+                  requestedVoice &&
+                  agentVoice.toLowerCase() === requestedVoice.toLowerCase()
+                    ? agentVoice
+                    : (liveSettings?.voiceName ??
+                      resolveLiveVoice(session.voiceName));
                 provider = new GeminiLiveVoiceProvider();
               }
 
@@ -1644,7 +1736,19 @@ export class VoiceGateway
                 systemPrompt,
                 geminiLive:
                   voiceEngine === 'live_api'
-                    ? clientMeta.gemini_live
+                    ? isSwitch &&
+                      clientMeta.gemini_live &&
+                      typeof clientMeta.gemini_live === 'object' &&
+                      !Array.isArray(clientMeta.gemini_live)
+                      ? {
+                          ...(clientMeta.gemini_live as Record<
+                            string,
+                            unknown
+                          >),
+                          model: session.model,
+                          voiceName: session.voiceName,
+                        }
+                      : clientMeta.gemini_live
                     : undefined,
                 contextCompressionEnabled:
                   clientDb?.context_compression_enabled ?? true,
@@ -2031,6 +2135,8 @@ export class VoiceGateway
                   session.interruptedCount++;
                   inactivity?.interrupted();
                   session.aiResponseStarted = false;
+                  callAdapter.clearQueuedAudio?.();
+                  sendToClient({ type: 'interrupted' });
                   // Preserva o trecho falado antes da interrupção
                   await this.telemetryService.flushAiBuffer(session);
                   session.gateSession?.notifyAiSpeakingChanged(false);
@@ -2038,7 +2144,6 @@ export class VoiceGateway
                     'audio',
                     'Resposta da IA interrompida pelo usuário.',
                   );
-                  sendToClient({ type: 'interrupted' });
                 },
                 onTurnComplete: async () => {
                   if (
@@ -2081,7 +2186,8 @@ export class VoiceGateway
                     return;
                   session.totalTokens = meta.totalTokenCount || 0;
                   session.inputTokens = meta.promptTokenCount || 0;
-                  session.outputTokens = meta.candidatesTokenCount || 0;
+                  session.outputTokens =
+                    meta.responseTokenCount ?? meta.candidatesTokenCount ?? 0;
                   sendDebug('model', 'Uso de tokens atualizado.', {
                     promptTokenCount: session.inputTokens,
                     candidatesTokenCount: session.outputTokens,
@@ -2115,22 +2221,33 @@ export class VoiceGateway
             switchAgent = async (targetAgent, reason, handoffText) => {
               if (!targetAgent || targetAgent.id === session.agentId) return;
               const previousAgentId = session.agentId;
-              let previousAgentName = 'Agente';
-              if (previousAgentId) {
-                const voiceAgents = await findVoiceAgents();
-                const found = voiceAgents.find((a) => a.id === previousAgentId);
-                if (found) {
-                  previousAgentName = found.service_step || found.id;
-                }
-              }
               const previousProvider = session.liveProvider;
               session.nextGeneration();
               session.isReady = false;
+              // Corte a saída antiga antes de qualquer consulta de banco ou setup.
+              session.callAdapter?.clearQueuedAudio?.();
+              sendToClient({ type: 'audio_reset' });
               previousProvider?.close();
               session.liveProvider = null;
               if (session.mockSession) {
                 session.mockSession.close();
                 session.mockSession = null;
+              }
+              let previousAgentName = 'Agente';
+              if (previousAgentId) {
+                let voiceAgents: Awaited<ReturnType<typeof findVoiceAgents>> =
+                  [];
+                try {
+                  voiceAgents = await findVoiceAgents();
+                } catch (error) {
+                  this.logger.warn(
+                    `Falha ao buscar nome do agente anterior: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                }
+                const found = voiceAgents.find((a) => a.id === previousAgentId);
+                if (found) {
+                  previousAgentName = found.service_step || found.id;
+                }
               }
               session.agentId = targetAgent.id;
               if (session.voiceEngine === 'hybrid') {
@@ -2283,6 +2400,10 @@ export class VoiceGateway
 
     clientWs.on('close', async () => {
       this.logger.log('🔴 [VoiceGateway] Cliente desconectado');
+      for (const unsub of audioUnsubscribers.values()) {
+        unsub();
+      }
+      audioUnsubscribers.clear();
       clearIdentificationTimer();
       if (session.mockSession) {
         session.mockSession.close();

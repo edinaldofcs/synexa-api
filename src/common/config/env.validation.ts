@@ -358,7 +358,7 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
-  GEMINI_LIVE_VOICE_MODEL?: string = 'gemini-3.1-flash-live-preview';
+  GEMINI_LIVE_VOICE_MODEL?: string = 'gemini-3.8-live';
 
   @IsString()
   @IsOptional()

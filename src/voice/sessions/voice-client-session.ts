@@ -41,7 +41,7 @@ export class VoiceClientSession {
   hybridSttUtterances = 0;
   hybridSttFallbacks = 0;
   aiResponseStarted = false;
-  model = 'gemini-3.1-flash-live-preview';
+  model = 'gemini-3.8-live';
   voiceName = 'Aoede';
   voiceEngine: 'hybrid' | 'live_api' = 'hybrid';
   /** Provedor TTS efetivo ('cartesia' | 'inworld' | 'custom') para telemetria da sessão web. */

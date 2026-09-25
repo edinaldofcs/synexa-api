@@ -5,6 +5,7 @@ import {
   OnModuleInit,
   Inject,
   forwardRef,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as net from 'net';
@@ -17,6 +18,7 @@ import {
 } from './fastagi-server.service';
 import { AsteriskAmiService } from './asterisk-ami.service';
 import { VoiceGateway } from '../voice.gateway';
+import { ActiveCallsRegistryService } from '../services/active-calls-registry.service';
 
 /**
  * Ingresso de transporte AudioSocket do Asterisk.
@@ -58,6 +60,9 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
     private readonly amiService: AsteriskAmiService,
     @Inject(forwardRef(() => VoiceGateway))
     private readonly voiceGateway?: VoiceGateway,
+    @Optional()
+    @Inject(forwardRef(() => ActiveCallsRegistryService))
+    private readonly activeCallsRegistry?: ActiveCallsRegistryService,
   ) {
     this.port = this.configService.get<number>('AUDIOSOCKET_PORT') || 8090;
     this.enabled =
@@ -439,6 +444,9 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
           await this.amiService.hangupChannel(asteriskChannel || channelId);
         },
         onSessionEnd: () => {
+          if (this.activeCallsRegistry) {
+            void this.activeCallsRegistry.unregisterCall(String(channelId));
+          }
           if (isTestRoute) {
             const current = this.testSessions.get(String(channelId));
             if (current) current.broadcastCallEnd('session_end');
@@ -461,11 +469,47 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
         if (current) current.session = session;
       }
 
+      adapter.onCallEnd(() => {
+        if (this.activeCallsRegistry) {
+          void this.activeCallsRegistry.unregisterCall(String(channelId));
+        }
+      });
+
+      if (this.activeCallsRegistry && route.company_id) {
+        void this.activeCallsRegistry.registerCall({
+          callId: String(channelId),
+          channelId: String(channelId),
+          asteriskChannel: asteriskChannel || undefined,
+          companyId: route.company_id,
+          clientId: route.client_id || '',
+          agentId: route.agent?.id ? String(route.agent.id) : undefined,
+          agentName:
+            (route.agent as any)?.service_step ||
+            (route.agent as any)?.name ||
+            'Agente de Produção',
+          callerNumber: callerNumber || 'Desconhecido',
+          callerName: callerDisplayName || 'Chamador',
+          didNumber: didNumber || '2000',
+          status: 'connecting',
+        });
+
+        session.onSpeakingStateChange = (state) => {
+          this.activeCallsRegistry?.updateCallStatus(String(channelId), state);
+        };
+
+        session.setLiveAudioTap((role, chunk, sampleRate) => {
+          this.activeCallsRegistry?.pushAudioChunk(
+            String(channelId),
+            role,
+            chunk,
+            sampleRate,
+          );
+        });
+      }
+
       this.logger.log(
         `📞 [AudioSocket] Sessão de Produção iniciada | canal=${channelId} | canal_asterisk=${asteriskChannel ?? 'n/d'} | cliente=${route.client_id} | agente=${route.agent?.id ?? 'default'}`,
       );
-
-      // Chamadas de produção rodam no fluxo regular com a IA e não emitem eventos visuais para o Flow Studio
 
       await session.start();
     } catch (err: any) {

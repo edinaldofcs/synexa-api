@@ -24,7 +24,7 @@ export class VoiceService {
   getDefaultModel(): string {
     return (
       this.configService.get<string>('GEMINI_LIVE_VOICE_MODEL') ||
-      'gemini-3.1-flash-live-preview'
+      'gemini-3.8-live'
     );
   }
 

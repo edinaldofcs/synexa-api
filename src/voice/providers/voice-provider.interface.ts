@@ -51,6 +51,7 @@ export interface VoiceProviderConnectOptions {
     totalTokenCount?: number;
     promptTokenCount?: number;
     candidatesTokenCount?: number;
+    responseTokenCount?: number;
     thoughtsTokenCount?: number;
     promptTokensDetails?: any[];
     candidatesTokensDetails?: any[];

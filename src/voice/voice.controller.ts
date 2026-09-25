@@ -16,6 +16,8 @@ import { Optional, Inject, forwardRef } from '@nestjs/common';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { resolveVoiceGreetingVariations } from './services/voice-runtime.util';
 import { AudioSocketServerService } from './telephony/audiosocket-server.service';
+import { ActiveCallsRegistryService } from './services/active-calls-registry.service';
+import { AsteriskAmiService } from './telephony/asterisk-ami.service';
 
 export interface PrewarmGreetingsDto {
   agentId: string;
@@ -32,6 +34,12 @@ export class VoiceController {
     @Optional()
     @Inject(forwardRef(() => AudioSocketServerService))
     private readonly audioSocketServerService?: AudioSocketServerService,
+    @Optional()
+    @Inject(forwardRef(() => ActiveCallsRegistryService))
+    private readonly activeCallsRegistry?: ActiveCallsRegistryService,
+    @Optional()
+    @Inject(forwardRef(() => AsteriskAmiService))
+    private readonly amiService?: AsteriskAmiService,
   ) {}
 
   @Get('config')
@@ -194,5 +202,61 @@ export class VoiceController {
         agentId,
       );
     return { ok: true, agentId, invalidated };
+  }
+
+  /**
+   * Retorna as chamadas ativas de telefonia e o limite de concorrência da empresa.
+   */
+  @Get('monitoring/active-calls')
+  async getActiveCalls(@CurrentUser() user: { company_id: string }) {
+    const calls =
+      this.activeCallsRegistry?.getActiveCalls(user.company_id) || [];
+
+    const client = await this.prisma.painel_clients.findFirst({
+      where: { company_id: user.company_id },
+      select: { max_concurrent_calls: true },
+    });
+
+    const maxConcurrent = client?.max_concurrent_calls ?? 50;
+
+    return {
+      totalActive: calls.length,
+      maxConcurrent,
+      calls: calls.map((c) => ({
+        callId: c.callId,
+        channelId: c.channelId,
+        callerNumber: c.callerNumber,
+        callerName: c.callerName,
+        didNumber: c.didNumber,
+        agentName: c.agentName,
+        agentId: c.agentId,
+        startedAt: c.startedAt,
+        durationSeconds: Math.floor((Date.now() - c.startedAt) / 1000),
+        status: c.status,
+      })),
+    };
+  }
+
+  /**
+   * Encerra remotamente uma chamada ativa a partir do painel de monitoramento.
+   */
+  @Post('monitoring/hangup/:callId')
+  async hangupActiveCall(
+    @Param('callId') callId: string,
+    @CurrentUser() user: { company_id: string },
+  ) {
+    const call = this.activeCallsRegistry?.getCall(callId);
+    if (!call || call.companyId !== user.company_id) {
+      throw new NotFoundException('Chamada não encontrada ou já encerrada');
+    }
+
+    if (this.amiService) {
+      await this.amiService.hangupChannel(
+        call.asteriskChannel || call.channelId,
+      );
+    }
+    await this.activeCallsRegistry?.unregisterCall(callId);
+
+    return { ok: true, callId };
   }
 }

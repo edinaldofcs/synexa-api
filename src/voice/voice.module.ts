@@ -32,6 +32,7 @@ import { GoogleTtsSynthesizer } from './services/synthesizers/google-tts.synthes
 import { CustomTtsSynthesizer } from './services/synthesizers/custom-tts.synthesizer';
 import { TtsSynthesizerFactory } from './services/synthesizers/tts-synthesizer.factory';
 import { VoiceGreetingCacheService } from './services/voice-greeting-cache.service';
+import { ActiveCallsRegistryService } from './services/active-calls-registry.service';
 
 // No standalone (SERVICE_ROLE=voice) o VoiceModule nao passa pelo AppModule,
 // que registra o ThrottlerGuard global — aqui registramos o Throttler apenas
@@ -76,6 +77,7 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     CustomTtsSynthesizer,
     TtsSynthesizerFactory,
     VoiceGreetingCacheService,
+    ActiveCallsRegistryService,
     ...(voiceStandalone
       ? [
           {
@@ -103,6 +105,7 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     SileroVadService,
     TtsSynthesizerFactory,
     VoiceGreetingCacheService,
+    ActiveCallsRegistryService,
   ],
 })
 export class VoiceModule {}

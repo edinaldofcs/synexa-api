@@ -128,7 +128,8 @@ O Flow salva modelo, voz e detecção automática de fala em `metadata.gemini_li
 do cliente. A seleção explícita do Flow prevalece sobre o motor legado do agente;
 overrides internos de telefonia continuam tendo prioridade. As configurações são
 aplicadas nas próximas chamadas após salvar, tanto no navegador quanto na telefonia.
-Clientes sem essa configuração mantêm o comportamento anterior.
+Clientes sem modelo Live explícito usam `gemini-3.8-live`; clientes que salvaram o
+modelo legado continuam nele até alterarem a seleção no Flow.
 
 O seletor oferece `gemini-3.8-live` e o legado `gemini-3.1-flash-live-preview`.
 O backend valida e limita os valores de VAD antes de montar o setup. Transcrições
@@ -137,6 +138,12 @@ de entrada e saída permanecem ativas para o histórico. Gemini 3.8 não recebe
 As ferramentas usam `behavior: BLOCKING` para preservar a execução sequencial
 existente. A variante Extended Thinking não é oferecida: sua execução assíncrona
 exige adaptar o acompanhamento de interação antes de habilitá-la.
+
+O áudio de entrada é enviado como `realtimeInput.audio` PCM 16 kHz após
+`setupComplete`; frames recebidos durante o handshake aguardam em fila limitada.
+O fechamento de fala usa somente `audioStreamEnd`; enviar `clientContent.turnComplete` junto
+interrompe a geração ativa. Nas transições de agente, o áudio pendente é
+descartado antes de conectar o novo prompt, voz e conjunto de ferramentas.
 
 Referências consultadas em 24/09/2026:
 [modelo e migração](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live?hl=pt-br)
