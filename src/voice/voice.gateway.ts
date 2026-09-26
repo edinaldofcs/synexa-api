@@ -1,3 +1,7 @@
+import {
+  CompanyVoiceQuotaService,
+  VoiceSlotLease,
+} from './services/company-voice-quota.service';
 import { VoiceWorkTracker } from './services/voice-work-tracker';
 import {
   createVoiceConversation,
@@ -114,6 +118,8 @@ export class VoiceGateway
     OnModuleInit
 {
   private readonly logger = new Logger(VoiceGateway.name);
+  @Inject(CompanyVoiceQuotaService)
+  private readonly companyQuota: CompanyVoiceQuotaService;
   private sessions = new Map<WebSocket, VoiceClientSession>();
   private disconnectHandlers = new WeakMap<WebSocket, () => Promise<void>>();
 
@@ -335,6 +341,7 @@ export class VoiceGateway
       sendToClient({ type: 'telemetry', telemetry: payload });
     };
 
+    let companyLease: VoiceSlotLease | undefined;
     const acquireVoiceSlot = (
       clientId?: string,
       maxLimit?: number | null,
@@ -364,6 +371,8 @@ export class VoiceGateway
     };
 
     const releaseVoiceSlot = () => {
+      void companyLease?.release();
+      companyLease = undefined;
       if (!session.holdsSessionSlot) return;
       session.holdsSessionSlot = false;
       this.voiceSessionFactory.releaseSession(session.clientId);
@@ -424,6 +433,8 @@ export class VoiceGateway
       }
       closingPromise = (async () => {
         try {
+          session.mockSession?.close();
+          session.mockSession = null;
           if (session.liveProvider) {
             session.liveProvider.close();
             session.liveProvider = null;
@@ -1562,6 +1573,39 @@ export class VoiceGateway
                 );
               }
 
+              if (!companyLease) {
+                let lease: VoiceSlotLease;
+                try {
+                  lease = await this.companyQuota.acquire(
+                    session.authorizedCompanyId,
+                    () => {
+                      void closeVoiceSession('capacity_lease_lost');
+                      clientWs.close(1013, 'Voice capacity unavailable');
+                    },
+                  );
+                } catch (error) {
+                  sendToClient({
+                    type: 'error',
+                    code: 'VOICE_CAPACITY_UNAVAILABLE',
+                    message:
+                      error instanceof Error
+                        ? error.message
+                        : 'Controle de chamadas indisponível.',
+                  });
+                  clientWs.close(1013, 'Voice capacity unavailable');
+                  return;
+                }
+                if (
+                  voiceSessionClosed ||
+                  generation !== session.providerGeneration ||
+                  clientWs.readyState !== WebSocket.OPEN
+                ) {
+                  await lease.release();
+                  return;
+                }
+                companyLease = lease;
+              }
+
               if (voiceProvider === 'mock') {
                 this.logger.log(
                   '🤖 [VoiceGateway] Iniciando Voice Provider em Modo MOCK',
@@ -1610,6 +1654,7 @@ export class VoiceGateway
                   type: 'error',
                   message: 'GEMINI_API_KEY não configurada no backend',
                 });
+                await closeVoiceSession('provider_configuration_error');
                 return;
               }
 
@@ -2562,6 +2607,9 @@ export class VoiceGateway
           code: 'VOICE_ACCESS_DENIED',
           message: 'Solicitação de voz inválida ou não autorizada.',
         });
+        await closeVoiceSession('request_rejected').catch(() =>
+          this.logger.error('Voice cleanup failed'),
+        );
         this.logger.warn('Voice message rejected');
       }
     });

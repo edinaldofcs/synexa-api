@@ -28,6 +28,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { AuthSession } from './session.service';
+import { isPlatformOwner } from './platform-owner.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -100,7 +101,15 @@ export class AuthController {
 
   @Get('me')
   me(@CurrentUser() user: SessionUser) {
-    return { user };
+    return {
+      user: {
+        ...user,
+        is_platform_owner: isPlatformOwner(
+          user,
+          this.configService.get<string>('PLATFORM_OWNER_USER_ID'),
+        ),
+      },
+    };
   }
 
   /**

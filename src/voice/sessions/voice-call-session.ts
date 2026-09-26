@@ -220,6 +220,7 @@ export class VoiceCallSession {
    * Inicia a sessão completa de voz e IA.
    */
   public async start(): Promise<void> {
+    if (this.isEnded) return;
     try {
       this.startTime = Date.now();
       const {
@@ -557,7 +558,12 @@ export class VoiceCallSession {
           providerOptions.tools = toolsDeclarations.length
             ? [{ functionDeclarations: toolsDeclarations }]
             : undefined;
+          if (this.isEnded) return;
           await this.liveProvider.connect(providerOptions);
+          if (this.isEnded) {
+            this.liveProvider.close();
+            return;
+          }
         } finally {
           agentSwitchInProgress = false;
         }
@@ -1043,7 +1049,12 @@ export class VoiceCallSession {
           );
         },
       };
+      if (this.isEnded) return;
       await this.liveProvider.connect(providerOptions);
+      if (this.isEnded) {
+        this.liveProvider.close();
+        return;
+      }
 
       // 7. Configura o Transporte de Telefonia
       this.telephonyAdapter.onAudio((pcm16k) => {
@@ -1307,7 +1318,11 @@ export class VoiceCallSession {
   private releaseSessionSlot(): void {
     if (this.sessionSlotReleased) return;
     this.sessionSlotReleased = true;
-    this.config.onSessionEnd?.();
+    try {
+      this.config.onSessionEnd?.();
+    } catch {
+      this.logger.error('Voice session cleanup callback failed');
+    }
   }
 
   /** Transcript da IA: cria 1x e atualiza a mesma linha com throttle 1s. */
@@ -1422,6 +1437,17 @@ export class VoiceCallSession {
   public async end(reason?: string): Promise<void> {
     if (this.isEnded) return;
     this.isEnded = true;
+    // Stop media immediately; persistence may be unavailable during quota loss.
+    try {
+      this.liveProvider.close();
+    } catch {
+      this.logger.error('Voice provider close failed');
+    }
+    try {
+      this.telephonyAdapter.close();
+    } catch {
+      this.logger.error('Telephony adapter close failed');
+    }
     this.inactivity?.stop();
     this.pendingAiHangup = false;
     if (this.pendingHangupTimer) {
@@ -1432,6 +1458,7 @@ export class VoiceCallSession {
       clearTimeout(this.hangupGraceTimer);
       this.hangupGraceTimer = null;
     }
+    this.releaseSessionSlot();
     // Descarrega os buffers de transcript antes de encerrar para não perder
     // as últimas frases quando o cliente desliga no meio de um turno.
     await this.pendingWork.drain();
@@ -1447,15 +1474,11 @@ export class VoiceCallSession {
       this.hangupWatchdogTimer = null;
     }
     if (reason) this.hangupCause = String(reason);
-    this.releaseSessionSlot();
     const channelId = this.telephonyAdapter.metadata.channelId as
       | string
       | undefined;
 
     try {
-      this.liveProvider.close();
-      this.telephonyAdapter.close();
-
       if (this.conversationId)
         await this.prisma.conversation_state.upsert({
           where: { conversation_id: this.conversationId },

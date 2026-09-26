@@ -9,6 +9,7 @@ datasource db {
 }
 
 model companies {
+  max_concurrent_calls Int @default(5)
   call_exports call_exports[]
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name       String
@@ -45,6 +46,7 @@ model users {
   name          String?
   email         String?   @unique
   password_hash String?
+  invitation_pending Boolean @default(false)
   role          String    @default("operator")
   created_at    DateTime? @default(now()) @db.Timestamptz(6)
   updated_at    DateTime? @default(now()) @db.Timestamptz(6)

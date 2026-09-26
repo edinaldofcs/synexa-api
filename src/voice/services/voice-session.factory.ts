@@ -1,6 +1,7 @@
+import { CompanyVoiceQuotaService } from './company-voice-quota.service';
 import { InworldVoiceService } from './inworld-voice.service';
 import { resolveVoiceFlowSettings } from './voice-flow-settings';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ITelephonyAdapter } from '../adapters/telephony-adapter.interface';
 import {
@@ -47,6 +48,8 @@ export interface SessionSlotCheck {
 @Injectable()
 export class VoiceSessionFactory {
   private readonly logger = new Logger(VoiceSessionFactory.name);
+  @Inject(CompanyVoiceQuotaService)
+  private readonly companyQuota: CompanyVoiceQuotaService;
   private activeSessions = 0;
   private readonly botActiveSessions = new Map<string, number>();
   private readonly maxSessions: number;
@@ -408,29 +411,52 @@ export class VoiceSessionFactory {
       );
     }
 
-    this.tryAcquireSession(clientId, maxConcurrentCalls);
-
-    const session = new VoiceCallSession({
-      telephonyAdapter: adapter,
-      liveProvider,
-      audioGateService: this.audioGateService,
-      pricingService: this.pricingService,
-      prisma: this.prisma,
-      voiceToolsService: this.voiceToolsService,
-      greetingCacheService: this.greetingCacheService,
-      config: {
-        ...config,
-        // Compõe em vez de sobrescrever: o ingresso (AudioSocket/FastAGI) usa
-        // onSessionEnd para transmitir o fim visual da chamada ao Flow Studio;
-        // o factory precisa também liberar o slot global de sessões.
-        onSessionEnd: () => {
-          overrides?.onSessionEnd?.();
-          this.releaseSession(clientId);
-        },
-      },
+    let session: VoiceCallSession | undefined;
+    const lease = await this.companyQuota.acquire(companyId, () => {
+      void session
+        ?.end('capacity_lease_lost')
+        .catch(() => this.logger.error('Voice capacity cleanup failed'));
     });
+    if (!this.tryAcquireSession(clientId, maxConcurrentCalls)) {
+      await lease.release();
+      throw new Error('Limite de chamadas simultâneas atingido.');
+    }
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.releaseSession(clientId);
+      void lease.release();
+    };
+    try {
+      session = new VoiceCallSession({
+        telephonyAdapter: adapter,
+        liveProvider,
+        audioGateService: this.audioGateService,
+        pricingService: this.pricingService,
+        prisma: this.prisma,
+        voiceToolsService: this.voiceToolsService,
+        greetingCacheService: this.greetingCacheService,
+        config: {
+          ...config,
+          // Compõe em vez de sobrescrever: o ingresso (AudioSocket/FastAGI) usa
+          // onSessionEnd para transmitir o fim visual da chamada ao Flow Studio;
+          // o factory precisa também liberar o slot global de sessões.
+          onSessionEnd: () => {
+            try {
+              overrides?.onSessionEnd?.();
+            } finally {
+              release();
+            }
+          },
+        },
+      });
 
-    return { session, liveProvider };
+      return { session, liveProvider };
+    } catch (error) {
+      release();
+      throw error;
+    }
   }
 
   /**

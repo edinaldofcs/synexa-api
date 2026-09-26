@@ -143,6 +143,7 @@ export class AuthService {
 
     if (
       !user?.password_hash ||
+      user.invitation_pending ||
       user.companies.status !== 'active' ||
       !passwordMatches
     ) {
@@ -182,7 +183,12 @@ export class AuthService {
       },
     });
 
-    if (!user || !user.company_id || user.companies.status !== 'active') {
+    if (
+      !user ||
+      user.invitation_pending ||
+      !user.company_id ||
+      user.companies.status !== 'active'
+    ) {
       throw new UnauthorizedException('Usuário não autorizado');
     }
 
@@ -283,7 +289,12 @@ export class AuthService {
       include: { companies: { select: { status: true } } },
     });
 
-    if (!user || !user.company_id || user.companies.status !== 'active') {
+    if (
+      !user ||
+      user.invitation_pending ||
+      !user.company_id ||
+      user.companies.status !== 'active'
+    ) {
       return;
     }
 

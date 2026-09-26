@@ -146,6 +146,11 @@ function makeGateway(
     keyResolver as any,
     greetingCacheService,
   );
+  (gateway as any).companyQuota = {
+    acquire: jest
+      .fn()
+      .mockResolvedValue({ release: jest.fn().mockResolvedValue(undefined) }),
+  };
   return {
     gateway,
     voiceAuthService,

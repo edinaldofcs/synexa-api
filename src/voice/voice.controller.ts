@@ -235,12 +235,12 @@ export class VoiceController {
     const calls =
       (await this.activeCallsRegistry?.getActiveCalls(companyId)) || [];
 
-    const client = await this.prisma.painel_clients.findFirst({
-      where: { company_id: companyId },
+    const company = await this.prisma.companies.findUnique({
+      where: { id: companyId },
       select: { max_concurrent_calls: true },
     });
 
-    const maxConcurrent = client?.max_concurrent_calls ?? 50;
+    const maxConcurrent = company?.max_concurrent_calls ?? 5;
 
     return {
       totalActive: calls.length,

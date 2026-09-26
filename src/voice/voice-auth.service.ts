@@ -102,11 +102,16 @@ export class VoiceAuthService {
         id: true,
         company_id: true,
         role: true,
+        invitation_pending: true,
         companies: { select: { status: true } },
       },
     });
 
-    if (!user?.company_id || user.companies.status !== 'active') {
+    if (
+      !user?.company_id ||
+      user.invitation_pending ||
+      user.companies.status !== 'active'
+    ) {
       throw new UnauthorizedException('Usuário de voz não autorizado');
     }
 

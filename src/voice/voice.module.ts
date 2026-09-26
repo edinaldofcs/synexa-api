@@ -1,3 +1,4 @@
+import { CompanyVoiceQuotaService } from './services/company-voice-quota.service';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -62,6 +63,7 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     TelephonyAdapterFactory,
     TelephonyEndpointResolverService,
     VoiceSessionFactory,
+    CompanyVoiceQuotaService,
     VoiceTelemetryService,
     InteractionSyncService,
     ModelPricingService,

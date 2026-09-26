@@ -288,3 +288,30 @@ describe('Telephony agent transition', () => {
     );
   });
 });
+
+it('stops media and releases capacity before waiting for pending persistence', async () => {
+  let complete!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  const provider = { close: jest.fn() };
+  const adapter = { id: 'quota-call', metadata: {}, close: jest.fn() };
+  const release = jest.fn();
+  const session = new VoiceCallSession({
+    telephonyAdapter: adapter as any,
+    liveProvider: provider as any,
+    audioGateService: {} as any,
+    pricingService: { calculateVoiceLiveCost: () => 0 } as any,
+    prisma: {} as any,
+    config: { onSessionEnd: release },
+  });
+  (session as any).pendingWork = { drain: () => pending };
+  const ending = session.end('capacity_lease_lost');
+  expect(provider.close).toHaveBeenCalledTimes(1);
+  expect(adapter.close).toHaveBeenCalledTimes(1);
+  expect(release).toHaveBeenCalledTimes(1);
+  await session.end('remote_hangup');
+  complete();
+  await ending;
+  expect(release).toHaveBeenCalledTimes(1);
+});

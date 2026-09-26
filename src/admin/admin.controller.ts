@@ -20,6 +20,7 @@ import { ROLES } from '../common/auth/roles.constants';
 import { AdminCreateCompanyDto } from './dto/create-company.dto';
 import { AdminCreateUserDto } from './dto/create-user.dto';
 import { AdminUpdateUserDto } from './dto/update-user.dto';
+import { PlatformOwnerGuard } from '../common/auth/platform-owner.guard';
 
 @UseGuards(RolesGuard)
 @Throttle({ default: { limit: 20, ttl: 60000 } })
@@ -30,6 +31,7 @@ export class AdminController {
   // ── Companies: exclusivo da plataforma ─────────────────────────────────
 
   @Post('companies')
+  @UseGuards(PlatformOwnerGuard)
   @Roles(ROLES.PLATFORM_ADMIN)
   async createCompany(@Body() body: AdminCreateCompanyDto) {
     return this.adminService.createCompany(body);
@@ -42,6 +44,7 @@ export class AdminController {
   }
 
   @Patch('companies/:id')
+  @UseGuards(PlatformOwnerGuard)
   @Roles(ROLES.PLATFORM_ADMIN)
   async updateCompany(
     @Param('id', ParseUUIDPipe) id: string,
@@ -51,6 +54,7 @@ export class AdminController {
   }
 
   @Delete('companies/:id')
+  @UseGuards(PlatformOwnerGuard)
   @Roles(ROLES.PLATFORM_ADMIN)
   async deleteCompany(
     @Param('id', ParseUUIDPipe) id: string,

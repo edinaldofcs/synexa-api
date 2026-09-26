@@ -9,7 +9,7 @@ const buildFactory = (maxSessions: number, apiKey = '') => {
   const keyResolver = {
     resolveApiKey: jest.fn().mockResolvedValue(apiKey),
   };
-  return new VoiceSessionFactory(
+  const factory = new VoiceSessionFactory(
     {} as any,
     configService as any,
     {} as any,
@@ -22,6 +22,12 @@ const buildFactory = (maxSessions: number, apiKey = '') => {
     {} as any,
     {} as any,
   );
+  (factory as any).companyQuota = {
+    acquire: jest
+      .fn()
+      .mockResolvedValue({ release: jest.fn().mockResolvedValue(undefined) }),
+  };
+  return factory;
 };
 
 describe('VoiceSessionFactory - semaforo global de sessoes', () => {
@@ -255,4 +261,37 @@ describe('Inworld telephony wiring', () => {
     );
     expect(factory.getActiveSessionsCount()).toBe(0);
   });
+});
+
+it('reserves the route company across agents and releases even when an ingress callback fails', async () => {
+  const factory = buildFactory(50);
+  const release = jest.fn().mockResolvedValue(undefined);
+  const acquire = jest.fn().mockResolvedValue({ release });
+  (factory as any).companyQuota = { acquire };
+  const { session } = await factory.create(
+    { id: 'call', metadata: {} } as any,
+    { company_id: 'company-a', client_id: 'operation-b' } as any,
+    {
+      onSessionEnd: () => {
+        throw new Error('ingress unavailable');
+      },
+    },
+  );
+  expect(acquire).toHaveBeenCalledWith('company-a', expect.any(Function));
+  expect(() => (session as any).config.onSessionEnd()).toThrow(
+    'ingress unavailable',
+  );
+  expect(release).toHaveBeenCalledTimes(1);
+  expect(factory.getActiveSessionsCount()).toBe(0);
+});
+
+it('does not allocate a local call when company admission fails', async () => {
+  const factory = buildFactory(50);
+  (factory as any).companyQuota.acquire.mockRejectedValue(
+    new Error('Company limit reached'),
+  );
+  await expect(
+    factory.create({ id: 'call' } as any, { company_id: 'company-a' } as any),
+  ).rejects.toThrow('Company limit');
+  expect(factory.getActiveSessionsCount()).toBe(0);
 });

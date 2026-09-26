@@ -81,12 +81,14 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
         email: true,
         name: true,
         role: true,
+        invitation_pending: true,
         company_id: true,
         companies: { select: { name: true, status: true } },
       },
     });
 
-    if (!user || user.companies.status !== 'active') return null;
+    if (!user || user.invitation_pending || user.companies.status !== 'active')
+      return null;
 
     const base = {
       id: user.id,
@@ -172,13 +174,18 @@ export class AuthGuard extends PassportAuthGuard('jwt') {
           where: { id: data.user.id },
           select: {
             role: true,
+            invitation_pending: true,
             company_id: true,
             companies: { select: { status: true } },
           },
         })
       : null;
 
-    if (!dbUser || dbUser.companies.status !== 'active') {
+    if (
+      !dbUser ||
+      dbUser.invitation_pending ||
+      dbUser.companies.status !== 'active'
+    ) {
       throw new UnauthorizedException('Usuário não autorizado');
     }
 
