@@ -59,7 +59,7 @@ export class ActivatePartnerDto {
 
   @IsOptional()
   @IsString()
-  @Matches(/^[a-f0-9]{64}$/i)
+  @Matches(/^(?:[a-f0-9]{56}|[a-f0-9]{64})$/i)
   tokenHash?: string;
 
   @IsOptional()
