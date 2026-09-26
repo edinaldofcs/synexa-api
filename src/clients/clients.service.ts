@@ -146,6 +146,9 @@ export class ClientsService {
       ...rest
     } = createClientDto;
 
+    // Legacy per-operation limits are accepted for compatibility but never applied.
+    delete rest.max_concurrent_calls;
+
     // Se informado ramal de teste, guarda no metadata do cliente
     const meta = (rest.metadata as Record<string, any>) || {};
     if (test_sip_extension?.trim()) {
@@ -155,6 +158,7 @@ export class ClientsService {
 
     const client = await this.clientsRepository.create({
       ...rest,
+      max_concurrent_calls: null,
       company_id: companyId,
     });
 
@@ -252,6 +256,8 @@ export class ClientsService {
     return {
       ...client,
       sip_extension: sip_extension?.trim() || null,
+      company_max_concurrent_calls:
+        client.companies?.max_concurrent_calls ?? null,
       test_sip_extension: test_sip_extension?.trim() || null,
       telephony_provider: provider,
       audio_format: codec,
@@ -262,6 +268,7 @@ export class ClientsService {
     const clients = await this.prisma.painel_clients.findMany({
       where: { company_id: companyId },
       include: {
+        companies: { select: { max_concurrent_calls: true } },
         telephony_endpoints: {
           select: {
             id: true,
@@ -288,6 +295,7 @@ export class ClientsService {
       const meta = (c.metadata as Record<string, any>) || {};
       return {
         ...c,
+        company_max_concurrent_calls: c.companies?.max_concurrent_calls ?? null,
         sip_extension: prodEndpoint?.did_number || null,
         test_sip_extension:
           testEndpoint?.did_number || meta.test_sip_extension || null,
@@ -310,7 +318,7 @@ export class ClientsService {
       },
       include: {
         companies: {
-          select: { id: true, name: true },
+          select: { id: true, name: true, max_concurrent_calls: true },
         },
         telephony_endpoints: {
           select: {
@@ -337,6 +345,7 @@ export class ClientsService {
       const meta = (c.metadata as Record<string, any>) || {};
       return {
         ...c,
+        company_max_concurrent_calls: c.companies?.max_concurrent_calls ?? null,
         // company_name NUNCA é mutado aqui: o sufixo "(Empresa)" era
         // absorvido pelo formData do painel e persistido a cada save
         // (duplicava "(Synexa Admin) (Synexa Admin)"). A associação com a
@@ -359,6 +368,7 @@ export class ClientsService {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id },
       include: {
+        companies: { select: { max_concurrent_calls: true } },
         telephony_endpoints: {
           select: {
             id: true,
@@ -388,6 +398,8 @@ export class ClientsService {
     const meta = (client.metadata as Record<string, any>) || {};
     return {
       ...client,
+      company_max_concurrent_calls:
+        client.companies?.max_concurrent_calls ?? null,
       sip_extension: prodEndpoint?.did_number || null,
       test_sip_extension:
         testEndpoint?.did_number || meta.test_sip_extension || null,
@@ -413,6 +425,9 @@ export class ClientsService {
       audio_format,
       ...restDto
     } = updateClientDto;
+
+    // Only the owner-only company limits endpoint changes call capacity.
+    delete restDto.max_concurrent_calls;
 
     // Provider credentials are edited through llm-config. A Flow tab opened
     // before a credential change must not restore stale provider metadata.

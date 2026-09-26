@@ -80,6 +80,7 @@ describe('ClientsService', () => {
       ),
     ).resolves.toEqual({
       id: 'client-1',
+      company_max_concurrent_calls: null,
       sip_extension: null,
       test_sip_extension: null,
       telephony_provider: 'audiosocket',
@@ -90,6 +91,7 @@ describe('ClientsService', () => {
       company_id: 'company-1',
       company_name: 'ACME',
       metadata: {},
+      max_concurrent_calls: null,
     });
     expect(metadata.refresh).toHaveBeenCalledWith('client-1');
   });
@@ -116,6 +118,7 @@ describe('ClientsService', () => {
       id: 'client-2',
       company_name: 'ACME 2',
       agent_name: 'Ana',
+      company_max_concurrent_calls: null,
       sip_extension: '2000',
       test_sip_extension: null,
       telephony_provider: 'audiosocket',
@@ -438,5 +441,41 @@ describe('ClientsService', () => {
       expect(result[0].company_label).toBe('Synexa Admin');
       expect(String(result[0].company_name)).not.toContain('(Synexa Admin)');
     });
+  });
+  it('ignores legacy operation capacity on create and update', async () => {
+    clientsRepository.create.mockResolvedValue({ id: 'client-1' });
+    await service.create(
+      { company_name: 'ACME', max_concurrent_calls: 999 } as any,
+      companyId,
+    );
+    expect(
+      clientsRepository.create.mock.calls[0][0].max_concurrent_calls,
+    ).toBeNull();
+    clientsRepository.update.mockResolvedValue({
+      id: 'client-1',
+      company_id: companyId,
+    });
+    await service.update(
+      'client-1',
+      { max_concurrent_calls: 999 } as any,
+      companyId,
+    );
+    expect(clientsRepository.update).toHaveBeenCalledWith('client-1', {});
+  });
+
+  it('returns the authoritative company quota separately from the retired operation field', async () => {
+    prisma.painel_clients.findUnique.mockResolvedValueOnce({
+      id: 'client-1',
+      company_id: companyId,
+      max_concurrent_calls: 50,
+      companies: { max_concurrent_calls: 5 },
+      telephony_endpoints: [],
+    });
+    const result = await service.findOne(
+      'client-1',
+      companyId,
+      'company_admin',
+    );
+    expect(result.company_max_concurrent_calls).toBe(5);
   });
 });

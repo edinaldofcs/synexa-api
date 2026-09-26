@@ -6,7 +6,10 @@ export class ClientsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(payload: Record<string, unknown>) {
-    return this.prisma.painel_clients.create({ data: payload as any });
+    return this.prisma.painel_clients.create({
+      data: payload as any,
+      include: { companies: { select: { max_concurrent_calls: true } } },
+    });
   }
 
   async findAll() {
