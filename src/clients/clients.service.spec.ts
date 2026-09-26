@@ -478,4 +478,134 @@ describe('ClientsService', () => {
     );
     expect(result.company_max_concurrent_calls).toBe(5);
   });
+  describe('custom voice credential boundary', () => {
+    const url = 'https://voice.example.com/tts';
+    const originalFetch = global.fetch;
+    beforeEach(() => {
+      configService.get.mockReturnValue('12345678901234567890123456789012');
+      clientsRepository.findOne.mockResolvedValue({
+        metadata: { llm_providers: { 'tts-custom': { baseUrl: url } } },
+      });
+      prisma.provider_credentials.findFirst.mockResolvedValue({
+        status: 'active',
+        api_key_enc:
+          'enc:' +
+          encrypt('saved-test-key', '12345678901234567890123456789012'),
+      });
+      global.fetch = jest.fn().mockResolvedValue(
+        new Response(new Uint8Array([0, 0]), {
+          headers: { 'content-type': 'audio/pcm' },
+        }),
+      );
+    });
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it('uses a stored key only for its registered URL without returning it', async () => {
+      const result = await service.testVoiceProvider(
+        'client-1',
+        { kind: 'tts', baseUrl: url },
+        companyId,
+      );
+      expect(result.ok).toBe(true);
+      expect(global.fetch).toHaveBeenCalledWith(
+        url,
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer saved-test-key',
+          }),
+        }),
+      );
+      expect(JSON.stringify(result)).not.toContain('saved-test-key');
+    });
+
+    it('blocks sending a saved key to a changed URL', async () => {
+      const result = await service.testVoiceProvider(
+        'client-1',
+        { kind: 'tts', baseUrl: 'https://other.example.com' },
+        companyId,
+      );
+      expect(result.ok).toBe(false);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('allows an explicitly supplied draft key at the new URL', async () => {
+      const result = await service.testVoiceProvider(
+        'client-1',
+        {
+          kind: 'tts',
+          baseUrl: 'https://other.example.com',
+          apiKey: 'draft-test-key',
+        },
+        companyId,
+      );
+      expect(result.ok).toBe(true);
+      expect(prisma.provider_credentials.findFirst).not.toHaveBeenCalled();
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://other.example.com/',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer draft-test-key',
+          }),
+        }),
+      );
+    });
+
+    it('rejects another company before looking up keys or calling the endpoint', async () => {
+      await expect(
+        service.testVoiceProvider(
+          'client-1',
+          { kind: 'tts', baseUrl: url },
+          'other-company',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.provider_credentials.findFirst).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('never reuses a revoked credential', async () => {
+      prisma.provider_credentials.findFirst.mockResolvedValue({
+        status: 'revoked',
+        api_key_enc: 'revoked-key',
+      });
+      await service.testVoiceProvider(
+        'client-1',
+        { kind: 'tts', baseUrl: url },
+        companyId,
+      );
+      expect(global.fetch).toHaveBeenCalledWith(
+        url,
+        expect.objectContaining({
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    });
+
+    it('preserves URL and voice settings for integrations without a key record', async () => {
+      prisma.provider_credentials.findMany.mockResolvedValue([]);
+      clientsRepository.findOne.mockResolvedValue({
+        company_id: companyId,
+        metadata: {
+          llm_providers: {
+            'tts-custom': {
+              baseUrl: url,
+              voice: 'voz',
+              output_sample_rate: 16000,
+              timeout_ms: 8000,
+            },
+          },
+        },
+      });
+      const result = await service.getLlmConfig('client-1', companyId, userId);
+      expect(result.providers['tts-custom']).toEqual(
+        expect.objectContaining({
+          baseUrl: url,
+          voice: 'voz',
+          output_sample_rate: 16000,
+          timeout_ms: 8000,
+        }),
+      );
+    });
+  });
 });

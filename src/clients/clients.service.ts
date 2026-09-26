@@ -1,4 +1,4 @@
-import { publicFetch } from '../common/utils/public-http';
+import { testCustomVoiceEndpoint } from './voice-provider-test';
 import {
   ClientDuplicationService,
   DuplicationActor,
@@ -20,12 +20,7 @@ import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
 import { TestVoiceProviderDto } from './dto/test-voice-provider.dto';
-import {
-  assertPublicHttpUrl,
-  customHttpTimeout,
-  MAX_CUSTOM_RESPONSE_BYTES,
-} from '../common/utils/url-guard.util';
-import { pcmToWav } from '../common/utils/pcm-wav.util';
+import { assertPublicHttpUrl } from '../common/utils/url-guard.util';
 import { ClientsRepository } from './repositories/clients.repository';
 import { encrypt, decrypt } from '../common/utils/crypto.util';
 import { CredentialAuditService } from '../common/services/credential-audit.service';
@@ -701,6 +696,10 @@ export class ClientsService {
           hasStoredKey,
           apiKey: hasStoredKey ? this.maskApiKey(rawKey) : '',
           enabledModels: config?.enabledModels || [],
+          baseUrl: config?.baseUrl || config?.base_url || '',
+          voice: config?.voice || '',
+          output_sample_rate: config?.output_sample_rate || undefined,
+          timeout_ms: config?.timeout_ms || undefined,
           healthStatus: 'unknown',
           lastTestedAt: null,
           lastUsedAt: null,
@@ -983,11 +982,7 @@ export class ClientsService {
     return this.clientsRepository.update(clientId, { metadata });
   }
 
-  /**
-   * Testa conectividade/auth/formato de um endpoint BYO de TTS ou STT.
-   * TTS: sintetiza uma frase curta e valida áudio PCM/WAV na resposta.
-   * STT: envia um WAV de 1s (tom 440Hz) e valida resposta com texto.
-   */
+  /** Tests custom voice without exposing the saved credential or persisting audio. */
   async testVoiceProvider(
     clientId: string,
     dto: TestVoiceProviderDto,
@@ -995,129 +990,57 @@ export class ClientsService {
     role?: string,
   ) {
     await this.validateClientAccess(clientId, companyId, role);
-
-    let url: URL;
-    try {
-      url = assertPublicHttpUrl(
-        dto.baseUrl,
-        dto.kind === 'tts' ? 'TTS customizado' : 'STT customizado',
-      );
-    } catch (err: any) {
-      return { ok: false, error: err.message };
-    }
-
-    const timeoutMs = customHttpTimeout(dto.timeoutMs);
-    const startMs = Date.now();
-
-    try {
-      if (dto.kind === 'tts') {
-        const res = await publicFetch(url.toString(), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${dto.apiKey || ''}`,
-          },
-          body: JSON.stringify({
-            text: 'Teste de voz do Synexa.',
-            voice: dto.voice || undefined,
-            language: 'pt',
-            format: 'pcm_s16le',
-            sample_rate: dto.outputSampleRate || 24000,
-          }),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        const latencyMs = Date.now() - startMs;
-        if (!res.ok) {
-          return {
-            ok: false,
-            latencyMs,
-            error: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
-          };
-        }
-        const contentType = res.headers.get('content-type') || '';
-        let bytes = 0;
-        if (contentType.includes('application/json')) {
-          const json = (await res.json()) as { audio_base64?: string };
-          bytes = json.audio_base64
-            ? Buffer.byteLength(json.audio_base64, 'base64')
-            : 0;
-        } else {
-          const buf = Buffer.from(await res.arrayBuffer());
-          bytes = buf.length;
-        }
-        if (bytes === 0) {
-          return {
-            ok: false,
-            latencyMs,
-            error:
-              'Resposta sem áudio (esperado PCM bruto, WAV ou audio_base64)',
-          };
-        }
-        return {
-          ok: true,
-          latencyMs,
-          bytes,
-          message: `TTS respondeu ${bytes} bytes de áudio em ${latencyMs}ms`,
-        };
-      }
-
-      // STT: WAV mono 16kHz de 1s com tom 440Hz
-      const sampleRate = 16000;
-      const pcm = Buffer.alloc(sampleRate * 2);
-      for (let i = 0; i < sampleRate; i++) {
-        pcm.writeInt16LE(
-          Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 8000),
-          i * 2,
-        );
-      }
-      const res = await publicFetch(url.toString(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'audio/wav',
-          Authorization: `Bearer ${dto.apiKey || ''}`,
-        },
-        body: new Uint8Array(pcmToWav(pcm, sampleRate)),
-        signal: AbortSignal.timeout(timeoutMs),
+    let apiKey = dto.apiKey?.trim() || '';
+    if (!apiKey) {
+      const provider = dto.kind + '-custom';
+      const client = await this.clientsRepository.findOne(clientId);
+      const metadata = client.metadata as Record<string, any> | null;
+      const saved = metadata?.llm_providers?.[provider];
+      const credential = await this.prisma.provider_credentials.findFirst({
+        where: { client_id: clientId, provider, label: 'default' },
       });
-      const latencyMs = Date.now() - startMs;
-      if (!res.ok) {
-        return {
-          ok: false,
-          latencyMs,
-          error: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
-        };
+      const encrypted = credential
+        ? credential.status === 'active'
+          ? credential.api_key_enc
+          : ''
+        : saved?.apiKey || '';
+      if (encrypted) {
+        // A draft URL must not redirect an existing secret to another endpoint.
+        const savedUrl = saved?.baseUrl || saved?.base_url;
+        try {
+          if (!savedUrl || new URL(savedUrl).href !== new URL(dto.baseUrl).href)
+            throw new Error();
+        } catch {
+          return {
+            ok: false,
+            error:
+              'A URL mudou. Informe uma chave para testar o novo endpoint; a chave salva só é usada na URL cadastrada.',
+          };
+        }
+        try {
+          apiKey = encrypted.startsWith('enc:')
+            ? decrypt(
+                encrypted.slice(4),
+                this.configService.get<string>('ENCRYPTION_KEY') || '',
+              )
+            : encrypted;
+        } catch {
+          return {
+            ok: false,
+            error:
+              'Não foi possível ler a chave salva. Informe uma nova chave.',
+          };
+        }
       }
-      const raw = await res.text();
-      if (raw.length > MAX_CUSTOM_RESPONSE_BYTES / 10) {
-        return {
-          ok: false,
-          latencyMs,
-          error: 'Resposta excessivamente grande',
-        };
-      }
-      let text = raw.trim();
-      try {
-        const json = JSON.parse(raw) as {
-          text?: string;
-          transcript?: string;
-          result?: string;
-        };
-        text = (json.text || json.transcript || json.result || '').trim();
-      } catch {
-        // resposta texto puro
-      }
-      return {
-        ok: true,
-        latencyMs,
-        text,
-        message: `STT respondeu em ${latencyMs}ms: "${text || '(sem texto para o tom de teste — normal)'}"`,
-      };
-    } catch (err: any) {
-      return {
-        ok: false,
-        latencyMs: Date.now() - startMs,
-        error: err.message || 'Falha na conexão',
-      };
     }
+    const result = await testCustomVoiceEndpoint(dto, apiKey);
+    this.logger.log({
+      event: 'custom_voice_provider_test',
+      clientId,
+      kind: dto.kind,
+      ok: result.ok,
+      latencyMs: result.latencyMs,
+    });
+    return result;
   }
 }
