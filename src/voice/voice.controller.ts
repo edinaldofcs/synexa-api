@@ -1,3 +1,4 @@
+import { isUuid } from '../common/utils/uuid.helper';
 import {
   Controller,
   Get,
@@ -5,7 +6,7 @@ import {
   Delete,
   Body,
   Param,
-  Query,
+  BadRequestException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -53,7 +54,22 @@ export class VoiceController {
    * Encerra chamadas de teste de telefonia ativas do Flow Studio (MicroSIP / Asterisk).
    */
   @Post('telephony/hangup')
-  async hangupTestCall(@Body() body: { clientId?: string }) {
+  async hangupTestCall(
+    @Body() body: { clientId?: string },
+    @CurrentUser() user?: { company_id: string },
+  ) {
+    if (!user?.company_id) throw new UnauthorizedException();
+    if (
+      !body?.clientId ||
+      typeof body.clientId !== 'string' ||
+      !isUuid(body.clientId)
+    )
+      throw new BadRequestException('clientId obrigatório');
+    const client = await this.prisma.painel_clients.findFirst({
+      where: { id: body.clientId, company_id: user.company_id },
+      select: { id: true },
+    });
+    if (!client) throw new NotFoundException('Cliente não encontrado');
     if (this.audioSocketServerService) {
       await this.audioSocketServerService.hangupTestCall(body?.clientId);
     }
@@ -210,11 +226,8 @@ export class VoiceController {
    * Retorna as chamadas ativas de telefonia e o limite de concorrência da empresa.
    */
   @Get('monitoring/active-calls')
-  async getActiveCalls(
-    @CurrentUser() user?: { company_id: string },
-    @Query('companyId') queryCompanyId?: string,
-  ) {
-    const companyId = user?.company_id || queryCompanyId;
+  async getActiveCalls(@CurrentUser() user?: { company_id: string }) {
+    const companyId = user?.company_id;
     if (!companyId) {
       throw new UnauthorizedException('Sessão expirada ou não autenticada');
     }
@@ -254,9 +267,8 @@ export class VoiceController {
   async hangupActiveCall(
     @Param('callId') callId: string,
     @CurrentUser() user?: { company_id: string },
-    @Query('companyId') queryCompanyId?: string,
   ) {
-    const companyId = user?.company_id || queryCompanyId;
+    const companyId = user?.company_id;
     if (!companyId) {
       throw new UnauthorizedException('Sessão expirada ou não autenticada');
     }

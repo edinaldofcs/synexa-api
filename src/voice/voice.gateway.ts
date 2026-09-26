@@ -161,14 +161,19 @@ export class VoiceGateway
   }
 
   public broadcast(data: Record<string, any>): void {
-    if (!this.server?.clients) return;
-    const json = JSON.stringify(data);
-    for (const client of this.server.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        try {
-          client.send(json);
-        } catch {}
-      }
+    for (const [client, session] of this.sessions) {
+      const interested = data.clientId
+        ? session.flowClientId === data.clientId
+        : session.monitoringSubscribed &&
+          data.companyId === session.authorizedCompanyId;
+      if (!interested || !session.authorizeDelivery) continue;
+      void session
+        .authorizeDelivery()
+        .then((allowed) => {
+          if (allowed && client.readyState === WebSocket.OPEN)
+            client.send(JSON.stringify(data));
+        })
+        .catch(() => client.close(1008, 'Unauthorized'));
     }
   }
 
@@ -257,6 +262,47 @@ export class VoiceGateway
     const session = new VoiceClientSession(clientWs);
     this.sessions.set(clientWs, session);
     const audioUnsubscribers = new Map<string, () => void>();
+    let authorizationInFlight: Promise<boolean> | undefined;
+    const authorizeDelivery = (): Promise<boolean> => {
+      if (authorizationInFlight) return authorizationInFlight;
+      authorizationInFlight = (async () => {
+        try {
+          const user = await this.voiceAuthService.authenticateSession(
+            clientWs.handshakeRequest
+              ? getSessionId(clientWs.handshakeRequest) || ''
+              : '',
+          );
+          if (clientWs.readyState !== WebSocket.OPEN) return false;
+          if (
+            session.authorizedCompanyId &&
+            session.authorizedCompanyId !== user.company_id
+          ) {
+            throw new Error('Session scope changed');
+          }
+          session.authorizedCompanyId = user.company_id;
+          return true;
+        } catch {
+          session.authorizedCompanyId = undefined;
+          if (clientWs.readyState === WebSocket.OPEN)
+            clientWs.send(
+              JSON.stringify({
+                type: 'error',
+                code: 'VOICE_AUTH_REQUIRED',
+                message: 'Sessão de voz inválida.',
+              }),
+            );
+          clientWs.close(1008, 'Unauthorized');
+          return false;
+        }
+      })().finally(() => {
+        authorizationInFlight = undefined;
+      });
+      return authorizationInFlight;
+    };
+    session.authorizeDelivery = authorizeDelivery;
+    const authorizationTimer = setInterval(() => {
+      if (session.authorizedCompanyId) void authorizeDelivery();
+    }, 5000);
 
     const sendToClient = (payload: any) => {
       if (clientWs.readyState === WebSocket.OPEN) {
@@ -434,11 +480,37 @@ export class VoiceGateway
 
     clientWs.on('message', async (raw: any) => {
       try {
+        if (raw.length > 1024 * 1024) {
+          clientWs.close(1009, 'Message too large');
+          return;
+        }
         const msg = JSON.parse(raw.toString());
+        if (!msg || typeof msg !== 'object') return;
+        if (!(await authorizeDelivery())) {
+          sendToClient({
+            type: 'error',
+            code: 'VOICE_AUTH_REQUIRED',
+            message: 'Sessão de voz inválida.',
+          });
+          return;
+        }
+        if (clientWs.readyState !== WebSocket.OPEN) return;
         switch (msg.type) {
           case 'monitoring_subscribe': {
             clearIdentificationTimer();
-            const companyId = msg.companyId || msg.company_id;
+            const companyId = session.authorizedCompanyId!;
+            if (
+              (msg.companyId && msg.companyId !== companyId) ||
+              (msg.company_id && msg.company_id !== companyId)
+            ) {
+              sendToClient({
+                type: 'error',
+                code: 'VOICE_ACCESS_DENIED',
+                message: 'Empresa não autorizada.',
+              });
+              return;
+            }
+            session.monitoringSubscribed = true;
             const snapshot =
               this.activeCallsRegistry && companyId
                 ? await this.activeCallsRegistry.getActiveCalls(companyId)
@@ -453,17 +525,34 @@ export class VoiceGateway
           case 'subscribe_live_audio': {
             clearIdentificationTimer();
             const callId = msg.callId;
-            if (callId && this.activeCallsRegistry) {
+            if (typeof callId === 'string' && this.activeCallsRegistry) {
+              const call =
+                this.activeCallsRegistry.getCall(callId) ||
+                (await this.activeCallsRegistry.getCallFromRedis(callId));
+              if (!call || call.companyId !== session.authorizedCompanyId) {
+                sendToClient({
+                  type: 'error',
+                  code: 'VOICE_ACCESS_DENIED',
+                  message: 'Chamada não autorizada.',
+                });
+                return;
+              }
+              audioUnsubscribers.get(callId)?.();
               const unsubscribe = this.activeCallsRegistry.subscribeAudio(
                 callId,
                 (chunk) => {
-                  sendToClient({
-                    type: 'live_audio_chunk',
-                    callId,
-                    role: chunk.role,
-                    pcm: chunk.pcmBase64,
-                    sampleRate: chunk.sampleRate,
-                  });
+                  void authorizeDelivery()
+                    .then((allowed) => {
+                      if (!allowed || !audioUnsubscribers.has(callId)) return;
+                      sendToClient({
+                        type: 'live_audio_chunk',
+                        callId,
+                        role: chunk.role,
+                        pcm: chunk.pcmBase64,
+                        sampleRate: chunk.sampleRate,
+                      });
+                    })
+                    .catch(() => clientWs.close(1008, 'Unauthorized'));
                 },
               );
               audioUnsubscribers.set(callId, unsubscribe);
@@ -492,14 +581,27 @@ export class VoiceGateway
             return;
           }
           case 'flow_listener_subscribe': {
+            if (typeof msg.clientId !== 'string' || !msg.clientId)
+              throw new Error('Client required');
+            session.flowClientId = await this.voiceAuthService.resolveClientId(
+              session.authorizedCompanyId!,
+              msg.clientId,
+            );
             clearIdentificationTimer();
             sendToClient({ type: 'flow_listener_subscribed', status: 'ok' });
             return;
           }
           case 'flow_telephony_hangup': {
+            if (typeof msg.clientId !== 'string' || !msg.clientId)
+              throw new Error('Client required');
+            const targetClient = await this.voiceAuthService.resolveClientId(
+              session.authorizedCompanyId!,
+              msg.clientId,
+            );
+            if (!targetClient) throw new Error('Client required');
             clearIdentificationTimer();
             if (this.audioSocketServerService) {
-              await this.audioSocketServerService.hangupTestCall(msg.clientId);
+              await this.audioSocketServerService.hangupTestCall(targetClient);
             }
             sendToClient({ type: 'flow_telephony_hangup_ack', status: 'ok' });
             return;
@@ -509,7 +611,6 @@ export class VoiceGateway
             return;
           }
           case 'start': {
-            clearIdentificationTimer();
             clearIdentificationTimer();
             let authenticatedUser;
             try {
@@ -2455,10 +2556,13 @@ export class VoiceGateway
             break;
           }
         }
-      } catch (err: any) {
-        this.logger.warn(
-          `Erro no processamento de mensagem de voz: ${err.message}`,
-        );
+      } catch {
+        sendToClient({
+          type: 'error',
+          code: 'VOICE_ACCESS_DENIED',
+          message: 'Solicitação de voz inválida ou não autorizada.',
+        });
+        this.logger.warn('Voice message rejected');
       }
     });
 
@@ -2466,6 +2570,8 @@ export class VoiceGateway
     const disconnect = () => {
       if (disconnectPromise) return disconnectPromise;
       disconnectPromise = (async () => {
+        clearInterval(authorizationTimer);
+        session.authorizeDelivery = undefined;
         this.logger.log('🔴 [VoiceGateway] Cliente desconectado');
         try {
           for (const unsub of audioUnsubscribers.values()) {

@@ -1,3 +1,5 @@
+import { AuthModule } from './common/auth/auth.module';
+import { MailModule } from './common/mail/mail.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { validateEnv } from './common/config/env.validation';
@@ -13,6 +15,8 @@ import { VoiceModule } from './voice/voice.module';
       validationOptions: { allowUnknown: true, abortEarly: false },
     }),
     CommonModule,
+    MailModule,
+    AuthModule.forRoot(),
     VoiceModule,
   ],
 })

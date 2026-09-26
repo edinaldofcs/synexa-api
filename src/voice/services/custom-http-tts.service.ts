@@ -1,3 +1,4 @@
+import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import {
   assertPublicHttpUrl,
@@ -83,7 +84,7 @@ export class CustomHttpTtsService implements StreamingTtsSessionFactory {
 
         try {
           const startMs = Date.now();
-          const res = await fetch(baseUrl, {
+          const res = await publicFetch(baseUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',

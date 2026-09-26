@@ -68,7 +68,9 @@ export class GroqWhisperSttService {
 
     const json = (await res.json()) as { text?: string };
     const text = (json.text || '').trim();
-    this.logger.debug(`🎙️ [GroqSTT] Transcrito em ${latencyMs}ms: "${text}"`);
+    this.logger.debug(
+      `[GroqSTT] duration_ms=${latencyMs} characters=${text.length}`,
+    );
     return text;
   }
 

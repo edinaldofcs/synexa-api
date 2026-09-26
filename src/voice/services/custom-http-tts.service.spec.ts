@@ -1,3 +1,6 @@
+jest.mock('../../common/utils/public-http', () => ({
+  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+}));
 import { CustomHttpTtsService } from './custom-http-tts.service';
 
 const PRIVATE_URL = 'http://localhost:9090/tts';

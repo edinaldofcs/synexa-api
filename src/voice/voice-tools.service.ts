@@ -1,3 +1,4 @@
+import { publicFetch } from '../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -281,7 +282,10 @@ export class VoiceToolsService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await fetch(url, { ...init, signal: controller.signal });
+      const response = await publicFetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
       const contentType = response.headers.get('content-type') || '';
       const raw = contentType.includes('application/json')
         ? await response.json()
@@ -500,7 +504,7 @@ export class VoiceToolsService {
           ? JSON.stringify(args.context_data)
           : 'Nenhum dado adicional fornecido.';
     const model = subagent.model || 'gemini-2.0-flash-lite';
-    const response = await fetch(
+    const response = await publicFetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         method: 'POST',

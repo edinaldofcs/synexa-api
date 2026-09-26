@@ -711,14 +711,15 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
    * Encerra chamadas ativas de teste do Flow Studio (MicroSIP / Asterisk),
    * liberando canais no PBX e notificando o frontend.
    */
-  public async hangupTestCall(clientId?: string): Promise<boolean> {
+  public async hangupTestCall(clientId: string): Promise<boolean> {
+    if (!clientId) throw new Error('clientId is required');
     this.logger.log(
       `📞 [AudioSocket] Solicitação de encerramento manual de chamada de teste (cliente=${clientId || 'todos'})`,
     );
     let hungUp = false;
     const targets = Array.from(this.testSessions.values());
     for (const item of targets) {
-      if (!clientId || item.clientId === clientId) {
+      if (item.clientId === clientId) {
         try {
           if (item.asteriskChannel) {
             await this.amiService.hangupChannel(item.asteriskChannel);

@@ -1,3 +1,4 @@
+import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import {
   assertPublicHttpUrl,
@@ -49,7 +50,7 @@ export class CustomHttpSttService {
     const wavBuffer = pcmToWav(pcmBuffer, sampleRate, 1, 16);
 
     const startMs = Date.now();
-    const res = await fetch(baseUrl, {
+    const res = await publicFetch(baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'audio/wav',
@@ -82,7 +83,7 @@ export class CustomHttpSttService {
     }
 
     this.logger.debug(
-      `📝 [CustomHttpSTT] Transcrito em ${Date.now() - startMs}ms: "${text}"`,
+      `[CustomHttpSTT] duration_ms=${Date.now() - startMs} characters=${text.length}`,
     );
     return text;
   }

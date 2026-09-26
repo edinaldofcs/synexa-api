@@ -23,7 +23,26 @@ export class VoiceAuthService {
     if (!session) {
       throw new UnauthorizedException('Sessão de voz inválida');
     }
-    return this.loadUser(session.user.id);
+    const user = await this.loadUser(session.user.id);
+    if (session.user.original_role && session.user.original_company_id) {
+      if (!session.user.company_id) throw new UnauthorizedException();
+      if (
+        user.role !== 'platform_admin' ||
+        user.company_id !== session.user.original_company_id
+      )
+        throw new UnauthorizedException();
+      const target = await this.prisma.companies.findUnique({
+        where: { id: session.user.company_id },
+        select: { status: true },
+      });
+      if (target?.status !== 'active') throw new UnauthorizedException();
+      return {
+        ...user,
+        company_id: session.user.company_id,
+        role: session.user.role,
+      };
+    }
+    return user;
   }
 
   async resolveClientId(

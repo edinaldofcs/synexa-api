@@ -1,3 +1,6 @@
+jest.mock('../../common/utils/public-http', () => ({
+  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+}));
 import { MediaProcessor } from './media.processor';
 
 describe('MediaProcessor - guarda de tamanho (MAX_MEDIA_BYTES)', () => {

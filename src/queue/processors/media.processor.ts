@@ -1,3 +1,4 @@
+import { publicFetch } from '../../common/utils/public-http';
 import { Processor, Process } from '@nestjs/bull';
 import type { Job } from 'bull';
 import { BadRequestException, Logger, Inject } from '@nestjs/common';
@@ -465,7 +466,7 @@ export class MediaProcessor {
 
     if (asset.source_url) {
       await validateWebhookUrl(asset.source_url, this.isDevelopment);
-      const response = await fetch(asset.source_url);
+      const response = await publicFetch(asset.source_url);
       if (!response.ok)
         throw new BadRequestException(`Source URL returned ${response.status}`);
       return Buffer.from(await response.arrayBuffer());

@@ -1,3 +1,4 @@
+import { publicFetch } from '../common/utils/public-http';
 import {
   ClientDuplicationService,
   DuplicationActor,
@@ -982,7 +983,7 @@ export class ClientsService {
 
     try {
       if (dto.kind === 'tts') {
-        const res = await fetch(url.toString(), {
+        const res = await publicFetch(url.toString(), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1041,7 +1042,7 @@ export class ClientsService {
           i * 2,
         );
       }
-      const res = await fetch(url.toString(), {
+      const res = await publicFetch(url.toString(), {
         method: 'POST',
         headers: {
           'Content-Type': 'audio/wav',

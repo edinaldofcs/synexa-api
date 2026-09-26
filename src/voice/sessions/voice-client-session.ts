@@ -29,6 +29,10 @@ export class VoiceClientSession {
   isReady = false;
   isAiSpeaking = false;
   isGreetingPlaying = false;
+  authorizedCompanyId?: string;
+  monitoringSubscribed = false;
+  flowClientId?: string;
+  authorizeDelivery?: () => Promise<boolean>;
   companyId?: string;
   clientId?: string;
   agentId?: string;

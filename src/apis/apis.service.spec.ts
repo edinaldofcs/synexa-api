@@ -1,3 +1,6 @@
+jest.mock('../common/utils/public-http', () => ({
+  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+}));
 import { BadRequestException } from '@nestjs/common';
 import { ApisService } from './apis.service';
 

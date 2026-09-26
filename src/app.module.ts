@@ -1,3 +1,4 @@
+import { PromptTemplatesModule } from './prompt-templates/prompt-templates.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -47,6 +48,7 @@ import { AppService } from './app.service';
     AdminModule,
     ChatModule,
     ClientsModule,
+    PromptTemplatesModule,
     AgentsModule,
     SubagentsModule,
     TracksModule,

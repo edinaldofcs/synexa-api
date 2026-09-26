@@ -1,3 +1,4 @@
+import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
@@ -245,7 +246,7 @@ export class WebhooksService {
             .digest('hex')
         : undefined;
 
-      const response = await fetch(url, {
+      const response = await publicFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

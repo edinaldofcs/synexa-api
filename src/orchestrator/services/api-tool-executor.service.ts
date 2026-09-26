@@ -1,3 +1,4 @@
+import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { RagSearchService } from './rag-search.service';
@@ -607,7 +608,7 @@ export class ApiToolExecutorService {
       }
     }
 
-    const response = await fetch(url, init);
+    const response = await publicFetch(url, init);
     const contentType = response.headers.get('content-type') || '';
     // Respostas 204/corpo vazio não têm JSON válido: ler como texto e só
     // então tentar parse evita exceção em No Content / corpo vazio.

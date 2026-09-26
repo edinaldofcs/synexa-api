@@ -1,3 +1,4 @@
+import { publicFetch } from '../common/utils/public-http';
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
@@ -129,7 +130,7 @@ export class ChatService {
           .update(body)
           .digest('hex');
       }
-      await fetch(webhookUrl, {
+      await publicFetch(webhookUrl, {
         method: 'POST',
         headers,
         body,

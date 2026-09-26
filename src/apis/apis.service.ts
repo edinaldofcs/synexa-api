@@ -1,3 +1,4 @@
+import { publicFetch } from '../common/utils/public-http';
 import {
   Injectable,
   NotFoundException,
@@ -118,7 +119,7 @@ export class ApisService {
             : JSON.stringify(payload.body)
           : undefined;
 
-      const response = await fetch(payload.url, {
+      const response = await publicFetch(payload.url, {
         method: payload.method || 'GET',
         headers: {
           'User-Agent': 'Synexa-Api-Tester/1.0',

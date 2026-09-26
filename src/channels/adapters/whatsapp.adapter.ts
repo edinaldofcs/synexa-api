@@ -1,3 +1,4 @@
+import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -90,7 +91,7 @@ export class WhatsappAdapter implements ChannelAdapter {
 
     const url = `${baseUrl}/message/sendText/${instanceId}`;
     await validateWebhookUrl(url, this.allowLocalInDev);
-    const response = await fetch(url, {
+    const response = await publicFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -129,7 +130,7 @@ export class WhatsappAdapter implements ChannelAdapter {
     }
 
     const url = `https://api.z-api.io/instances/${instanceId}/token/${clientToken}/send-text`;
-    const response = await fetch(url, {
+    const response = await publicFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: message.to, message: message.text }),

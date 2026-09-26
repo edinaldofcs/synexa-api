@@ -211,7 +211,7 @@ describe('VoiceGateway security', () => {
     expect(client.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'error',
       code: 'VOICE_AUTH_REQUIRED',
-      message: 'Autenticação necessária para iniciar a sessão de voz.',
+      message: 'Sessão de voz inválida.',
     });
     expect(client.close).toHaveBeenCalledWith(1008, 'Unauthorized');
   });
@@ -625,5 +625,131 @@ describe('VoiceGateway security', () => {
     expect(audioMsg).toBeDefined();
     expect(transcriptMsg).toBeDefined();
     expect(transcriptMsg.text).toBe('Olá Edinaldo, tudo bem?');
+  });
+});
+
+describe('VoiceGateway subscription authorization', () => {
+  const turn = () => new Promise((resolve) => setImmediate(resolve));
+  function setup(authenticated = true) {
+    const { gateway, voiceAuthService } = makeGateway();
+    if (authenticated)
+      voiceAuthService.authenticateSession.mockResolvedValue({
+        id: 'user',
+        company_id: 'tenant-a',
+        role: 'member',
+      });
+    voiceAuthService.resolveClientId.mockImplementation(
+      async (_company, client) => {
+        if (client !== 'own-client') throw new Error('denied');
+        return client;
+      },
+    );
+    const registry = {
+      getActiveCalls: jest.fn().mockResolvedValue([]),
+      getCall: jest.fn(),
+      getCallFromRedis: jest.fn().mockResolvedValue(null),
+      subscribeAudio: jest.fn().mockReturnValue(jest.fn()),
+    };
+    const hangup = jest.fn();
+    (gateway as any).activeCallsRegistry = registry;
+    (gateway as any).audioSocketServerService = { hangupTestCall: hangup };
+    const socket = new FakeClientSocket();
+    gateway.handleConnection(socket as any);
+    return { gateway, voiceAuthService, registry, hangup, socket };
+  }
+  it.each([
+    'monitoring_subscribe',
+    'subscribe_live_audio',
+    'flow_listener_subscribe',
+    'flow_telephony_hangup',
+  ])('rejects unauthenticated %s', async (type) => {
+    const { socket, registry, hangup, voiceAuthService } = setup(false);
+    socket.emit(
+      'message',
+      JSON.stringify({ type, clientId: 'own-client', callId: 'call' }),
+    );
+    await turn();
+    expect(voiceAuthService.authenticateSession).toHaveBeenCalled();
+    expect(registry.getActiveCalls).not.toHaveBeenCalled();
+    expect(registry.subscribeAudio).not.toHaveBeenCalled();
+    expect(hangup).not.toHaveBeenCalled();
+    expect(socket.close).toHaveBeenCalledWith(1008, 'Unauthorized');
+  });
+  it('derives monitoring tenant from session and blocks a foreign scope', async () => {
+    const { socket, registry } = setup();
+    socket.emit('message', JSON.stringify({ type: 'monitoring_subscribe' }));
+    await turn();
+    expect(registry.getActiveCalls).toHaveBeenCalledWith('tenant-a');
+    socket.emit(
+      'message',
+      JSON.stringify({ type: 'monitoring_subscribe', companyId: 'tenant-b' }),
+    );
+    await turn();
+    expect(registry.getActiveCalls).toHaveBeenCalledTimes(1);
+  });
+  it('blocks foreign calls and cancels a duplicate audio subscription', async () => {
+    const { socket, registry } = setup();
+    registry.getCall.mockReturnValue({ companyId: 'tenant-b' });
+    socket.emit(
+      'message',
+      JSON.stringify({ type: 'subscribe_live_audio', callId: 'call' }),
+    );
+    await turn();
+    expect(registry.subscribeAudio).not.toHaveBeenCalled();
+    registry.getCall.mockReturnValue({ companyId: 'tenant-a' });
+    socket.emit(
+      'message',
+      JSON.stringify({ type: 'subscribe_live_audio', callId: 'call' }),
+    );
+    await turn();
+    socket.emit(
+      'message',
+      JSON.stringify({ type: 'subscribe_live_audio', callId: 'call' }),
+    );
+    await turn();
+    expect(registry.subscribeAudio.mock.results[0].value).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+  it('never hangs up without an owned client identifier', async () => {
+    const { socket, hangup } = setup();
+    for (const clientId of [undefined, 'foreign']) {
+      socket.emit(
+        'message',
+        JSON.stringify({ type: 'flow_telephony_hangup', clientId }),
+      );
+      await turn();
+    }
+    expect(hangup).not.toHaveBeenCalled();
+    socket.emit(
+      'message',
+      JSON.stringify({ type: 'flow_telephony_hangup', clientId: 'own-client' }),
+    );
+    await turn();
+    expect(hangup).toHaveBeenCalledWith('own-client');
+  });
+  it('broadcasts only subscribed tenant events and stops after revocation', async () => {
+    const { socket, gateway, voiceAuthService } = setup();
+    gateway.broadcast({ type: 'call_started', companyId: 'tenant-a' });
+    await turn();
+    expect(socket.sent).toHaveLength(0);
+    socket.emit('message', JSON.stringify({ type: 'monitoring_subscribe' }));
+    await turn();
+    socket.sent = [];
+    gateway.broadcast({ type: 'call_started', companyId: 'tenant-b' });
+    await turn();
+    expect(socket.sent).toHaveLength(0);
+    gateway.broadcast({ type: 'call_started', companyId: 'tenant-a' });
+    await turn();
+    expect(socket.sent).toHaveLength(1);
+    voiceAuthService.authenticateSession.mockRejectedValue(
+      new Error('revoked'),
+    );
+    gateway.broadcast({ type: 'call_updated', companyId: 'tenant-a' });
+    await turn();
+    expect(
+      socket.sent.some((raw) => JSON.parse(raw).type === 'call_updated'),
+    ).toBe(false);
+    expect(socket.close).toHaveBeenCalled();
   });
 });

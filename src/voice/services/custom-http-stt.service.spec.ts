@@ -1,3 +1,6 @@
+jest.mock('../../common/utils/public-http', () => ({
+  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+}));
 import { CustomHttpSttService } from './custom-http-stt.service';
 import { pcmToWav } from '../../common/utils/pcm-wav.util';
 

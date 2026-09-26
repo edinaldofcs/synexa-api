@@ -188,7 +188,7 @@ export class VoiceGreetingCacheService {
 
     // 2. Cache MISS: Síntese sob demanda com o provedor correto
     this.logger.log(
-      `🎙️ [VoiceGreetingCache] MISS. Sintetizando nova saudação via ${options.provider} | Voz: ${options.voiceId} | Texto: "${text}"`,
+      `🎙️ [VoiceGreetingCache] MISS. Sintetizando nova saudação via ${options.provider} | Voz: ${options.voiceId} | Caracteres: ${text.length}`,
     );
 
     const synth = this.synthesizerFactory.get(options.provider);

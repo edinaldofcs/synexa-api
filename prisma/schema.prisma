@@ -984,3 +984,19 @@ model call_exports {
   @@index([client_id, created_at])
   @@index([company_id])
 }
+
+model prompt_templates {
+  id          String
+  company_id  String @db.Uuid
+  client_id   String? @db.Uuid
+  scope       String @default("global")
+  title       String
+  category    String
+  description String @default("")
+  content     String
+  icon        String @default("")
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @updatedAt @db.Timestamptz(6)
+  @@id([company_id, scope, id])
+  @@index([client_id])
+}

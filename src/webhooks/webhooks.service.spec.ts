@@ -1,3 +1,6 @@
+jest.mock('../common/utils/public-http', () => ({
+  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+}));
 import { WebhooksService } from './services/webhooks.service';
 
 jest.mock('../common/utils/ssrf-guard', () => ({

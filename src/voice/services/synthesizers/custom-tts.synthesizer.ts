@@ -1,3 +1,4 @@
+import { publicFetch } from '../../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import {
   assertPublicHttpUrl,
@@ -44,7 +45,7 @@ export class CustomTtsSynthesizer implements ITtsSynthesizer {
     const declaredRate =
       config.sampleRate || options.sampleRate || CANONICAL_SAMPLE_RATE;
 
-    const res = await fetch(config.baseUrl, {
+    const res = await publicFetch(config.baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

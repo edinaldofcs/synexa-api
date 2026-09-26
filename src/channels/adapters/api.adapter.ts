@@ -1,3 +1,4 @@
+import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -64,7 +65,7 @@ export class ApiAdapter implements ChannelAdapter {
     try {
       await validateWebhookUrl(returnUrl, this.allowLocalInDev);
 
-      const response = await fetch(returnUrl, {
+      const response = await publicFetch(returnUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

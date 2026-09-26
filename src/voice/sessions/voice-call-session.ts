@@ -1176,7 +1176,7 @@ export class VoiceCallSession {
           if (this.isEnded) return;
           if (res.audioBuffer && res.audioBuffer.length > 0) {
             this.logger.log(
-              `⚡ [VoiceCallSession] Reproduzindo saudação inicial (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${provider} | Texto: "${res.text}"`,
+              `⚡ [VoiceCallSession] Reproduzindo saudação inicial (${res.fromCache ? 'CACHE 0ms' : 'SÍNTESE'}) | Provedor: ${provider} | Caracteres: ${res.text.length}`,
             );
             this.isAiSpeaking = true;
             this.onSpeakingStateChange?.('speaking_ai');

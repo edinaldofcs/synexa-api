@@ -1,3 +1,6 @@
+jest.mock('../../common/utils/public-http', () => ({
+  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+}));
 import { ApiToolExecutorService } from './api-tool-executor.service';
 
 jest.mock('../../common/utils/api-chaining.util', () => ({

@@ -12,6 +12,7 @@ jest.mock('dns', () => ({
 describe('ssrf-guard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.ENVIRONMENT = 'test';
   });
 
   describe('validateWebhookUrl', () => {
@@ -141,5 +142,35 @@ describe('ssrf-guard', () => {
         validateWebhookUrl('https://10.0.0.1/api', true),
       ).resolves.toBeUndefined();
     });
+  });
+});
+
+describe('SSRF address regressions', () => {
+  it.each([
+    '169.254.169.254',
+    '172.31.0.1',
+    '192.168.1.1',
+    '127.1',
+    '2130706433',
+    '0x7f000001',
+    '[::1]',
+    '[::ffff:c0a8:101]',
+    '[fe80::1]',
+    '[fd00::1]',
+    '[2002:7f00:1::]',
+    '[64:ff9b::7f00:1]',
+  ])('blocks %s', async (host) => {
+    await expect(validateWebhookUrl(`http://${host}/`)).rejects.toThrow();
+  });
+  it('rejects mixed public and private DNS records', async () => {
+    (dns.resolve4 as jest.Mock).mockResolvedValue(['8.8.8.8', '192.168.1.1']);
+    (dns.resolve6 as jest.Mock).mockResolvedValue(['2606:4700:4700::1111']);
+    await expect(validateWebhookUrl('https://mixed.example')).rejects.toThrow();
+  });
+  it('cannot enable local access in production', async () => {
+    process.env.ENVIRONMENT = 'production';
+    await expect(
+      validateWebhookUrl('http://127.0.0.1', true),
+    ).rejects.toThrow();
   });
 });

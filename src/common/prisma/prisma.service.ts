@@ -12,6 +12,7 @@ import { tenantLocalStorage } from '../auth/tenant-context';
  * (ex: client.company_id == tenant.companyId) para manter o isolamento estrito.
  */
 export const TENANT_SUPPORTED_MODELS = [
+  'prompt_templates',
   'users',
   'conversations',
   'messages',
