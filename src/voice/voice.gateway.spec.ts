@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import { VoiceGateway } from './voice.gateway';
+import { GeminiLiveVoiceProvider } from './providers/gemini-live-voice.provider';
 import { buildVoiceFarewellToolResponse } from './services/voice-runtime.util';
 
 const sockets: FakeClientSocket[] = [];
@@ -155,10 +156,59 @@ function makeGateway(
     gateway,
     voiceAuthService,
     configService,
+    audioGateService,
   };
 }
 
 describe('VoiceGateway security', () => {
+  it('keeps native Live audio continuous even when the client enabled the acoustic gate', async () => {
+    const connect = jest
+      .spyOn(GeminiLiveVoiceProvider.prototype, 'connect')
+      .mockImplementation(() => undefined);
+    try {
+      const prisma = {
+        painel_clients: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'bot',
+            audio_gate_enabled: true,
+            metadata: { voice_engine: 'live_api' },
+          }),
+        },
+        painel_agents: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValue({ id: 'agent', interaction_mode: 'voice' }),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+        conversations: {
+          create: jest.fn().mockResolvedValue({ id: 'conversation' }),
+        },
+      };
+      const { gateway, voiceAuthService, audioGateService } = makeGateway(
+        { GEMINI_API_KEY: 'test-key' },
+        undefined,
+        undefined,
+        prisma,
+      );
+      voiceAuthService.authenticateSession.mockResolvedValue({
+        company_id: 'company',
+      });
+      voiceAuthService.resolveClientId.mockResolvedValue('bot');
+      const socket = new FakeClientSocket();
+      gateway.handleConnection(socket as any);
+      socket.emit(
+        'message',
+        JSON.stringify({ type: 'start', clientId: 'bot' }),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(audioGateService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: false, sampleRate: 16000 }),
+      );
+    } finally {
+      connect.mockRestore();
+    }
+  });
+
   it.each(['socket-first', 'nest-first', 'flush-failure'])(
     'centraliza a desconexão e libera o slot uma vez: %s',
     async (order) => {
@@ -756,5 +806,33 @@ describe('VoiceGateway subscription authorization', () => {
       socket.sent.some((raw) => JSON.parse(raw).type === 'call_updated'),
     ).toBe(false);
     expect(socket.close).toHaveBeenCalled();
+  });
+
+  it('bounds audio authorization caching and blocks frames after revocation', async () => {
+    const { socket, gateway, voiceAuthService } = setup();
+    const handleClientAudio = jest.fn();
+    (gateway as any).sessions.get(socket).callAdapter = {
+      handleClientAudio,
+      close: jest.fn(),
+    };
+    const now = jest.spyOn(Date, 'now').mockReturnValue(10000);
+    try {
+      for (let i = 0; i < 50; i++) {
+        socket.emit('message', JSON.stringify({ type: 'audio', data: 'AAA=' }));
+        await turn();
+      }
+      expect(voiceAuthService.authenticateSession).toHaveBeenCalledTimes(1);
+      expect(handleClientAudio).toHaveBeenCalledTimes(50);
+      voiceAuthService.authenticateSession.mockRejectedValue(
+        new Error('revoked'),
+      );
+      now.mockReturnValue(11000);
+      socket.emit('message', JSON.stringify({ type: 'audio', data: 'AAA=' }));
+      await turn();
+      expect(handleClientAudio).toHaveBeenCalledTimes(50);
+      expect(socket.close).toHaveBeenCalledWith(1008, 'Unauthorized');
+    } finally {
+      now.mockRestore();
+    }
   });
 });

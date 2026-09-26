@@ -35,10 +35,13 @@ describe('Telephony farewell tool', () => {
       telephonyAdapter: adapter as any,
       liveProvider: provider as any,
       audioGateService: {
-        createSession: () => ({
-          notifyAiSpeakingChanged: jest.fn(),
-          getStats: jest.fn(),
-        }),
+        createSession: (config: { enabled: boolean }) => {
+          expect(config.enabled).toBe(false);
+          return {
+            notifyAiSpeakingChanged: jest.fn(),
+            getStats: jest.fn(),
+          };
+        },
       } as any,
       pricingService: {
         calculateVoiceLiveCost: jest.fn().mockReturnValue(0),

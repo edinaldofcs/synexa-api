@@ -269,8 +269,18 @@ export class VoiceGateway
     this.sessions.set(clientWs, session);
     const audioUnsubscribers = new Map<string, () => void>();
     let authorizationInFlight: Promise<boolean> | undefined;
-    const authorizeDelivery = (): Promise<boolean> => {
+    let audioAuthorizedUntil = 0;
+    const authorizeDelivery = (allowAudioCache = false): Promise<boolean> => {
       if (authorizationInFlight) return authorizationInFlight;
+      // Only media frames reuse authorization, for at most one second. Commands
+      // and the periodic revocation check always revalidate against the session.
+      if (
+        allowAudioCache &&
+        session.authorizedCompanyId &&
+        Date.now() < audioAuthorizedUntil &&
+        clientWs.readyState === WebSocket.OPEN
+      )
+        return Promise.resolve(true);
       authorizationInFlight = (async () => {
         try {
           const user = await this.voiceAuthService.authenticateSession(
@@ -286,8 +296,10 @@ export class VoiceGateway
             throw new Error('Session scope changed');
           }
           session.authorizedCompanyId = user.company_id;
+          audioAuthorizedUntil = Date.now() + 1000;
           return true;
         } catch {
+          audioAuthorizedUntil = 0;
           session.authorizedCompanyId = undefined;
           if (clientWs.readyState === WebSocket.OPEN)
             clientWs.send(
@@ -497,7 +509,7 @@ export class VoiceGateway
         }
         const msg = JSON.parse(raw.toString());
         if (!msg || typeof msg !== 'object') return;
-        if (!(await authorizeDelivery())) {
+        if (!(await authorizeDelivery(msg.type === 'audio'))) {
           sendToClient({
             type: 'error',
             code: 'VOICE_AUTH_REQUIRED',
@@ -922,6 +934,9 @@ export class VoiceGateway
             // Inicializa Audio Gate Session (config compartilhada com telefonia)
             session.gateSession = this.audioGateService.createSession({
               ...resolveAudioGateConfig(clientDb),
+              // Native Live VAD needs the continuous waveform, including pauses.
+              // Avoid premature audioStreamEnd signals during natural pauses.
+              ...(voiceEngine === 'live_api' ? { enabled: false } : {}),
               sampleRate: 16000,
             });
 

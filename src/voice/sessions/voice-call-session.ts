@@ -448,7 +448,12 @@ export class VoiceCallSession {
 
       // 5. Configura o Audio Gate (VAD / Supressão de Ruído)
       this.gateSession = this.audioGateService.createSession({
-        enabled: this.config.gateConfig?.enabled ?? true,
+        // Gemini performs native VAD; preserve silence instead of repeatedly
+        // ending its audio stream before server-side speech detection finishes.
+        enabled:
+          this.config.voiceEngine === 'hybrid'
+            ? (this.config.gateConfig?.enabled ?? true)
+            : false,
         threshold: this.config.gateConfig?.threshold ?? 500,
         hangoverMarginMs: this.config.gateConfig?.hangoverMarginMs ?? 500,
         prerollMs: this.config.gateConfig?.prerollMs ?? 300,
