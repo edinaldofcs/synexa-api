@@ -1,9 +1,29 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as net from 'net';
 
+type AmiFrame = Record<string, string>;
+type PendingAction = {
+  event?: string;
+  finish: (frame: AmiFrame | null) => void;
+};
+
 @Injectable()
-export class AsteriskAmiService {
+export class AsteriskAmiService implements OnModuleDestroy {
+  private socket: net.Socket | null = null;
+  private connecting: Promise<boolean> | null = null;
+  private finishLogin: ((success: boolean) => void) | null = null;
+  private authenticated = false;
+  private stopped = false;
+  private reconnectAfter = 0;
+  private nextActionId = 0;
+  private loginId = '';
+  private buffer = '';
+  private readonly pending = new Map<string, PendingAction>();
+  private readonly requestTimeoutMs = 4000;
+  private readonly maxPendingActions = 1024;
+  private readonly maxFrameLength = 1024 * 1024;
+
   private readonly logger = new Logger(AsteriskAmiService.name);
   private host: string;
   private port: number;
@@ -23,9 +43,11 @@ export class AsteriskAmiService {
     const cleanChannel = (channel || '').replace(/[\r\n]/g, '').trim();
     if (!cleanChannel) return false;
 
-    return this.withSession(async (client) => {
-      client.write(`Action: Hangup\r\nChannel: ${cleanChannel}\r\n\r\n`);
-    });
+    const response = await this.request([
+      'Action: Hangup',
+      'Channel: ' + cleanChannel,
+    ]);
+    return response?.response === 'Success';
   }
 
   /**
@@ -49,9 +71,10 @@ export class AsteriskAmiService {
 
     const actionLines = [
       'Action: Originate',
+      'Async: true',
       `Channel: ${cleanEndpoint}`,
       `Context: ${sanitize(params.context)}`,
-      `Extension: ${sanitize(params.extension)}`,
+      `Exten: ${sanitize(params.extension)}`,
       `Priority: ${params.priority ?? 1}`,
       `Timeout: ${timeoutMs}`,
     ];
@@ -65,9 +88,9 @@ export class AsteriskAmiService {
       }
     }
 
-    return this.withSession((client) => {
-      client.write(`${actionLines.join('\r\n')}\r\n\r\n`);
-    });
+    // Success means the originate was accepted, not that the callee answered.
+    const response = await this.request(actionLines);
+    return response?.response === 'Success';
   }
 
   /**
@@ -82,9 +105,11 @@ export class AsteriskAmiService {
     const result: Record<string, string | null> = {};
     if (!cleanChannel || !variables.length || !this.secret) return result;
 
-    for (const rawVariable of variables) {
-      result[rawVariable] = await this.queryVariable(cleanChannel, rawVariable);
-    }
+    await Promise.all(
+      variables.map(async (variable) => {
+        result[variable] = await this.queryVariable(cleanChannel, variable);
+      }),
+    );
     return result;
   }
 
@@ -120,184 +145,193 @@ export class AsteriskAmiService {
     };
   }
 
-  /**
-   * Abre uma conexão AMI efêmera, autentica e lê uma única variável.
-   * Com `channel = null`, lê variáveis globais/funções (ex.: DB(família/chave)).
-   */
-  private queryVariable(
-    channel: string | null,
+  private async queryVariable(
+    channel: string,
     variable: string,
   ): Promise<string | null> {
-    return new Promise<string | null>((resolveValue) => {
-      const client = net.createConnection({
-        host: this.host,
-        port: this.port,
-      });
-      let authenticated = false;
-      let done = false;
-      let buffer = '';
-      const finish = (val: string | null) => {
-        if (done) return;
-        done = true;
-        try {
-          if (authenticated) {
-            client.write('Action: Logoff\r\n\r\n');
-          }
-          client.destroy();
-        } catch {
-          /* noop */
-        }
-        resolveValue(val);
-      };
+    const response = await this.request([
+      'Action: Getvar',
+      'Channel: ' + sanitize(channel),
+      'Variable: ' + sanitize(variable),
+    ]);
+    const value = response?.value;
+    return value && value !== '<unset>' ? value : null;
+  }
 
-      client.setTimeout(4000);
-      client.on('connect', () => {
-        client.write(this.loginPayload());
-      });
-      client.on('data', (data) => {
-        const response = data.toString();
-        if (!authenticated && response.includes('Authentication accepted')) {
-          authenticated = true;
-          const getvar =
-            channel && channel.length > 0
-              ? `Action: Getvar\r\nChannel: ${sanitize(channel)}\r\nVariable: ${sanitize(variable)}\r\n\r\n`
-              : `Action: Getvar\r\nVariable: ${sanitize(variable)}\r\n\r\n`;
-          client.write(getvar);
-          return;
-        }
-        if (!authenticated) return;
-        // Eventos AMI (SuccessfulAuth, FullyBooted...) podem chegar antes da
-        // resposta: acumula até encontrar a linha Value: ou um erro.
-        buffer += response;
-        if (/^Response: Error/m.test(buffer)) {
-          finish(null);
-          return;
-        }
-        const match = buffer.match(/^Value:\s*(.*)$/m);
-        if (match) {
-          const value = match[1].trim();
-          finish(value === '' || value === '<unset>' ? null : value);
-        }
-      });
-      client.on('timeout', () => finish(null));
-      client.on('error', () => finish(null));
-    });
+  private async queryDbEntry(
+    family: string,
+    key: string,
+  ): Promise<string | null> {
+    const response = await this.request(
+      ['Action: DBGet', 'Family: ' + sanitize(family), 'Key: ' + sanitize(key)],
+      'DBGetResponse',
+    );
+    return response?.val || null;
   }
 
   /**
-   * Lê uma entrada do AsteriskDB via ação AMI DBGet (a resposta chega como
-   * evento DBGetResponse com header `Val:`).
+   * Multiplex actions over one authenticated socket. Never replay a command:
+   * after a disconnect its outcome may be unknown (especially Originate).
    */
-  private queryDbEntry(family: string, key: string): Promise<string | null> {
-    return new Promise<string | null>((resolveValue) => {
-      const client = net.createConnection({
-        host: this.host,
-        port: this.port,
-      });
-      let authenticated = false;
-      let done = false;
-      let buffer = '';
-      const finish = (val: string | null) => {
-        if (done) return;
-        done = true;
-        try {
-          if (authenticated) {
-            client.write('Action: Logoff\r\n\r\n');
-          }
-          client.destroy();
-        } catch {
-          /* noop */
-        }
-        resolveValue(val);
-      };
-
-      client.setTimeout(4000);
-      client.on('connect', () => {
-        client.write(this.loginPayload());
-      });
-      client.on('data', (data) => {
-        const response = data.toString();
-        if (!authenticated && response.includes('Authentication accepted')) {
-          authenticated = true;
-          client.write(
-            `Action: DBGet\r\nFamily: ${sanitize(family)}\r\nKey: ${sanitize(key)}\r\n\r\n`,
-          );
-          return;
-        }
-        if (!authenticated) return;
-        buffer += response;
-        if (/^Response: Error/m.test(buffer)) {
-          finish(null);
-          return;
-        }
-        const match = buffer.match(/^Val:\s*(.*)$/m);
-        if (match) {
-          const value = match[1].trim();
-          finish(value === '' ? null : value);
-        }
-      });
-      client.on('timeout', () => finish(null));
-      client.on('error', () => finish(null));
-    });
-  }
-
-  private loginPayload(): string {
-    return `Action: Login\r\nUsername: ${this.user}\r\nSecret: ${this.secret}\r\n\r\n`;
-  }
-
-  /**
-   * Abre uma conexão AMI efêmera autenticada e executa o comando desejado.
-   * Resolve após escrever o comando (fire-and-forget na resposta).
-   */
-  private withSession(execute: (client: net.Socket) => void): Promise<boolean> {
-    if (!this.secret) {
-      this.logger.warn('[AsteriskAmi] ASTERISK_AMI_SECRET não configurado');
-      return Promise.resolve(false);
+  private async request(
+    lines: string[],
+    event?: string,
+  ): Promise<AmiFrame | null> {
+    if (!(await this.ensureConnected())) return null;
+    const client = this.socket;
+    if (!client || client.destroyed || !this.authenticated) return null;
+    if (this.pending.size >= this.maxPendingActions) {
+      this.logger.warn({ event: 'ami_pending_limit' });
+      return null;
     }
-
+    const actionId = String(++this.nextActionId);
     return new Promise((resolve) => {
-      const client = net.createConnection({
-        host: this.host,
-        port: this.port,
+      const timer = setTimeout(() => {
+        // Reset an unresponsive connection and release all waiters.
+        this.disconnect(client, 'request_timeout');
+      }, this.requestTimeoutMs);
+      this.pending.set(actionId, {
+        event,
+        finish: (frame) => {
+          clearTimeout(timer);
+          this.pending.delete(actionId);
+          resolve(frame);
+        },
       });
-      let authenticated = false;
-      // Acumula chunks: fragmentação TCP pode separar 'Response: Success'
-      // e 'Authentication accepted' em pacotes distintos
-      let loginBuffer = '';
-
-      client.setTimeout(5000);
-
-      client.on('connect', () => {
-        client.write(this.loginPayload());
-      });
-
-      client.on('data', (data) => {
-        const response = data.toString();
-        if (!authenticated) {
-          loginBuffer += response;
-          if (
-            loginBuffer.includes('Response: Success') &&
-            loginBuffer.includes('Authentication accepted')
-          ) {
-            authenticated = true;
-            execute(client);
-            client.write('Action: Logoff\r\n\r\n');
-            resolve(true);
-          }
-        }
-      });
-
-      client.on('timeout', () => {
-        this.logger.warn('[AsteriskAmi] Timeout na conexão AMI');
-        client.destroy();
-        resolve(false);
-      });
-
-      client.on('error', (err) => {
-        this.logger.warn(`[AsteriskAmi] Erro na conexão AMI: ${err.message}`);
-        resolve(false);
-      });
+      try {
+        client.write(
+          lines.join('\r\n') + '\r\nActionID: ' + actionId + '\r\n\r\n',
+        );
+      } catch {
+        this.disconnect(client, 'write_failed');
+      }
     });
+  }
+
+  private ensureConnected(): Promise<boolean> {
+    if (this.stopped || !this.secret) return Promise.resolve(false);
+    if (this.authenticated && this.socket && !this.socket.destroyed) {
+      return Promise.resolve(true);
+    }
+    if (this.connecting) return this.connecting;
+    // One retry per second at most, on demand; no retry storm during outages.
+    if (Date.now() < this.reconnectAfter) return Promise.resolve(false);
+
+    let resolveLogin!: (success: boolean) => void;
+    const connection = new Promise<boolean>((resolve) => {
+      resolveLogin = resolve;
+    });
+    this.connecting = connection;
+    let client: net.Socket;
+    try {
+      client = net.createConnection({ host: this.host, port: this.port });
+    } catch {
+      this.connecting = null;
+      this.reconnectAfter = Date.now() + 1000;
+      this.logger.warn({ event: 'ami_disconnected', reason: 'connect_failed' });
+      resolveLogin(false);
+      return connection;
+    }
+    this.socket = client;
+    this.buffer = '';
+    this.loginId = String(++this.nextActionId);
+    const timer = setTimeout(
+      () => this.disconnect(client, 'login_timeout'),
+      4000,
+    );
+    this.finishLogin = (success) => {
+      clearTimeout(timer);
+      this.finishLogin = null;
+      this.connecting = null;
+      this.authenticated = success;
+      resolveLogin(success);
+    };
+    client.setEncoding('utf8');
+    client.setNoDelay(true);
+    client.setKeepAlive(true, 30000);
+    client.on('connect', () => {
+      if (client !== this.socket) return;
+      // DBGetResponse is a direct action response even with events disabled.
+      client.write(
+        [
+          'Action: Login',
+          'ActionID: ' + this.loginId,
+          'Username: ' + sanitize(this.user),
+          'Secret: ' + sanitize(this.secret),
+          'Events: off',
+          '',
+          '',
+        ].join('\r\n'),
+      );
+    });
+    client.on('data', (chunk: string) => this.receive(client, chunk));
+    client.on('error', () => this.disconnect(client, 'socket_error'));
+    client.on('end', () => this.disconnect(client, 'socket_end'));
+    client.on('close', () => this.disconnect(client, 'socket_closed'));
+    return connection;
+  }
+
+  /** TCP can split headers or combine multiple responses in a single chunk. */
+  private receive(client: net.Socket, chunk: string): void {
+    if (client !== this.socket) return;
+    this.buffer += chunk;
+    let end: number;
+    while ((end = this.buffer.indexOf('\r\n\r\n')) !== -1) {
+      if (end > this.maxFrameLength) {
+        this.disconnect(client, 'frame_too_large');
+        return;
+      }
+      const frame: AmiFrame = {};
+      for (const line of this.buffer.slice(0, end).split('\r\n')) {
+        const colon = line.indexOf(':');
+        if (colon > 0) {
+          frame[line.slice(0, colon).toLowerCase()] = line
+            .slice(colon + 1)
+            .trim();
+        }
+      }
+      this.buffer = this.buffer.slice(end + 4);
+      if (!this.authenticated) {
+        if (frame.actionid !== this.loginId) continue;
+        if (frame.response !== 'Success') {
+          this.disconnect(client, 'authentication_failed');
+          return;
+        }
+        this.finishLogin?.(true);
+        this.logger.log({ event: 'ami_connected' });
+        continue;
+      }
+      const action = this.pending.get(frame.actionid);
+      if (!action) continue;
+      if (frame.response === 'Error') {
+        action.finish(null);
+      } else if (action.event) {
+        // DBGet first acknowledges the request; its value arrives separately.
+        if (frame.event === action.event) action.finish(frame);
+      } else if (frame.response && !frame.event) {
+        action.finish(frame);
+      }
+    }
+    if (this.buffer.length > this.maxFrameLength) {
+      this.disconnect(client, 'frame_too_large');
+    }
+  }
+
+  private disconnect(client: net.Socket, reason: string): void {
+    if (client !== this.socket) return;
+    this.socket = null;
+    this.authenticated = false;
+    this.buffer = '';
+    this.reconnectAfter = Date.now() + 1000;
+    this.finishLogin?.(false);
+    for (const action of this.pending.values()) action.finish(null);
+    client.destroy();
+    if (!this.stopped) this.logger.warn({ event: 'ami_disconnected', reason });
+  }
+
+  onModuleDestroy(): void {
+    this.stopped = true;
+    if (this.socket) this.disconnect(this.socket, 'shutdown');
   }
 }
 
