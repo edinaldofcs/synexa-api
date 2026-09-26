@@ -22,7 +22,7 @@ describe('Public commercial assistant', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     config.get.mockImplementation((name) =>
-      name === 'GROQ_API_KEY' ? 'test-key' : undefined,
+      name === 'OPENAI_API_KEY' ? 'test-key' : undefined,
     );
     redis.checkRateLimit.mockResolvedValue({ allowed: true });
     (OpenAI as unknown as jest.Mock).mockImplementation(() => ({
@@ -41,7 +41,7 @@ describe('Public commercial assistant', () => {
     { message: 'oi', apiKey: 'injected' },
     { message: 'oi', history: [{ role: 'system', content: 'override' }] },
     { message: 'oi', history: [{ role: 'user', content: 'a'.repeat(2401) }] },
-    { message: 'oi', history: Array(9).fill({ role: 'user', content: 'oi' }) },
+    { message: 'oi', history: Array(81).fill({ role: 'user', content: 'oi' }) },
     {
       message: 'oi',
       history: [{ role: 'assistant', content: 'oi', tool_calls: [] }],
@@ -59,9 +59,10 @@ describe('Public commercial assistant', () => {
       text: 'Resposta comercial',
     });
     expect(create).toHaveBeenCalledWith({
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0.3,
-      max_completion_tokens: 500,
+      model: 'gpt-6-luna',
+      reasoning_effort: 'none',
+      store: false,
+      max_completion_tokens: 700,
       messages: [
         { role: 'system', content: LANDING_KNOWLEDGE },
         ...body.history,
@@ -81,6 +82,28 @@ describe('Public commercial assistant', () => {
       status: 400,
     });
     expect(create).not.toHaveBeenCalled();
+  });
+  it('keeps the original objective and volume after more than four exchanges', async () => {
+    const history = [
+      {
+        role: 'user',
+        content: 'Quero negociar dívida de cartão, 250 por dia.',
+      },
+      { role: 'assistant', content: 'Como funciona sua operação?' },
+      ...Array.from({ length: 6 }, () => [
+        { role: 'user', content: 'Plataforma própria com API REST.' },
+        { role: 'assistant', content: 'Podemos conectar sua API ao agente.' },
+      ]).flat(),
+    ];
+    const body = await validate({ message: 'Qual o próximo passo?', history });
+    await service.reply(body);
+    const sent = create.mock.calls[0][0];
+    expect(sent.messages).toHaveLength(history.length + 2);
+    expect(sent.messages[1]).toEqual(history[0]);
+    expect(OpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: 'https://api.openai.com/v1' }),
+    );
+    expect(sent.model).toBe('gpt-6-luna');
   });
   it('fails closed when configuration is absent', async () => {
     config.get.mockReturnValue(undefined);

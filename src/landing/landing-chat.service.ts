@@ -24,7 +24,7 @@ export class LandingChatService {
     if (!message) throw new BadRequestException('Escreva uma mensagem.');
     const key =
       this.config.get<string>('LANDING_CHAT_API_KEY') ||
-      this.config.get<string>('GROQ_API_KEY');
+      this.config.get<string>('OPENAI_API_KEY');
     if (!key)
       throw new ServiceUnavailableException(
         'O assistente está temporariamente indisponível.',
@@ -61,23 +61,21 @@ export class LandingChatService {
 
     const client = new OpenAI({
       apiKey: key,
-      baseURL: 'https://api.groq.com/openai/v1',
+      baseURL: 'https://api.openai.com/v1',
       timeout: 20000,
       maxRetries: 0,
     });
     try {
       const result = await client.chat.completions.create({
-        model:
-          this.config.get<string>('LANDING_CHAT_MODEL') ||
-          this.config.get<string>('GROQ_MODEL') ||
-          'llama-3.3-70b-versatile',
+        model: this.config.get<string>('LANDING_CHAT_MODEL') || 'gpt-6-luna',
         messages: [
           { role: 'system', content: LANDING_KNOWLEDGE },
           ...(body.history || []),
           { role: 'user', content: message },
         ],
-        temperature: 0.3,
-        max_completion_tokens: 500,
+        reasoning_effort: 'none',
+        store: false,
+        max_completion_tokens: 700,
       });
       const text = result.choices[0]?.message?.content?.trim();
       if (!text) throw new Error('empty_response');

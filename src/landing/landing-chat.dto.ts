@@ -24,7 +24,7 @@ export class LandingChatDto {
   message: string;
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(8)
+  @ArrayMaxSize(80)
   @ValidateNested({ each: true })
   @Type(() => LandingHistoryMessage)
   history?: LandingHistoryMessage[];
