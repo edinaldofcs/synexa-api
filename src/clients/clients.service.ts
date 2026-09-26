@@ -414,6 +414,19 @@ export class ClientsService {
       ...restDto
     } = updateClientDto;
 
+    // Provider credentials are edited through llm-config. A Flow tab opened
+    // before a credential change must not restore stale provider metadata.
+    if (restDto.metadata && typeof restDto.metadata === 'object') {
+      const existing = await this.clientsRepository.findOne(id);
+      const current = (existing?.metadata || {}) as Record<string, unknown>;
+      const next = { ...restDto.metadata } as Record<string, unknown>;
+      for (const key of ['llm_providers', 'llm_providers_updated_at']) {
+        delete next[key];
+        if (current[key] !== undefined) next[key] = current[key];
+      }
+      restDto.metadata = next;
+    }
+
     // Se test_sip_extension fornecido, sincroniza no metadata
     if (test_sip_extension !== undefined) {
       const currentMeta = (restDto.metadata as Record<string, any>) || {};

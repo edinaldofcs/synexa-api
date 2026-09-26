@@ -5,6 +5,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ClientsService } from './clients.service';
@@ -225,6 +226,65 @@ describe('ClientsService', () => {
       id: 'new',
     });
     expect(duplication.duplicate).toHaveBeenCalledWith('source', dto, actor);
+  });
+
+  it('rejects credential reads and writes outside the company before accessing secrets', async () => {
+    prisma.painel_clients.findUnique.mockResolvedValue({
+      company_id: 'other-company',
+    });
+    await expect(
+      service.getLlmConfig('client-1', companyId, userId, 'company_admin'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      service.saveLlmConfig(
+        'client-1',
+        { providers: {} },
+        companyId,
+        userId,
+        undefined,
+        undefined,
+        'company_admin',
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.provider_credentials.findMany).not.toHaveBeenCalled();
+    expect(prisma.provider_credentials.upsert).not.toHaveBeenCalled();
+  });
+
+  it('preserves current provider metadata when a stale Flow saves other settings', async () => {
+    const providers = {
+      groq: { apiKey: 'encrypted-placeholder', enabledModels: ['current'] },
+    };
+    clientsRepository.findOne.mockResolvedValue({
+      metadata: {
+        llm_providers: providers,
+        llm_providers_updated_at: 'current',
+      },
+    });
+    clientsRepository.update.mockResolvedValue({
+      id: 'client-1',
+      company_id: companyId,
+    });
+    await service.update(
+      'client-1',
+      {
+        metadata: {
+          voice_engine: 'hybrid',
+          llm_providers: { groq: { apiKey: 'stale' } },
+        },
+      } as any,
+      companyId,
+      'company_admin',
+    );
+    expect(clientsRepository.update).toHaveBeenCalledWith(
+      'client-1',
+      expect.objectContaining({
+        metadata: {
+          voice_engine: 'hybrid',
+          llm_providers: providers,
+          llm_providers_updated_at: 'current',
+        },
+      }),
+    );
   });
 
   it('propagates duplication failures without falling back to a partial copy', async () => {

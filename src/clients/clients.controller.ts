@@ -11,6 +11,7 @@ import {
   Post,
   Put,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -18,6 +19,8 @@ import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
 import { TestVoiceProviderDto } from './dto/test-voice-provider.dto';
 import { ClientsService } from './clients.service';
+import { Roles } from '../common/auth/roles.decorator';
+import { RolesGuard } from '../common/auth/roles.guard';
 
 @Controller()
 export class ClientsController {
@@ -103,6 +106,8 @@ export class ClientsController {
   }
 
   @Put('clients/:id/llm-config')
+  @UseGuards(RolesGuard)
+  @Roles('platform_admin', 'company_admin')
   saveLlmConfig(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: LlmConfigDto,

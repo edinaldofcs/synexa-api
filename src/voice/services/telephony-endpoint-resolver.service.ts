@@ -99,6 +99,28 @@ export class TelephonyEndpointResolverService {
     return resolved;
   }
 
+  /** PJSIP endpoint identity comes from AMI, never from caller-supplied SIP headers. */
+  public async authorizeSipEndpoint(
+    username: string | null | undefined,
+    route: ResolvedTelephonyRoute,
+  ): Promise<boolean> {
+    if (!username) return false;
+    // Static administrator/trunk endpoints keep their existing routing policy.
+    if (!username.startsWith('sx_')) return true;
+    const account = await this.prisma.sip_accounts.findFirst({
+      where: {
+        username,
+        enabled: true,
+        client_id: route.client_id,
+        company_id: route.company_id,
+        companies: { status: 'active' },
+        painel_clients: { company_id: route.company_id },
+      },
+      select: { id: true },
+    });
+    return Boolean(account);
+  }
+
   /**
    * Ingressos autenticados por secret (WS de discador): resolve a rota
    * direto pelo hash do token, opcionalmente filtrando pelo DID informado

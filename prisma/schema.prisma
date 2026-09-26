@@ -9,6 +9,7 @@ datasource db {
 }
 
 model companies {
+  sip_accounts sip_accounts[]
   max_concurrent_calls Int @default(5)
   call_exports call_exports[]
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -219,6 +220,7 @@ model media_assets {
 }
 
 model painel_clients {
+  sip_account sip_accounts?
   call_exports call_exports[]
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id   String    @db.Uuid
@@ -1001,4 +1003,18 @@ model prompt_templates {
   updated_at  DateTime @updatedAt @db.Timestamptz(6)
   @@id([company_id, scope, id])
   @@index([client_id])
+}
+
+model sip_accounts {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id String @db.Uuid
+  client_id String @unique @db.Uuid
+  username String @unique
+  digest String
+  enabled Boolean @default(true)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @updatedAt @db.Timestamptz(6)
+  companies companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  @@index([company_id])
 }

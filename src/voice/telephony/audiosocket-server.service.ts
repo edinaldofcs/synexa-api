@@ -153,6 +153,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
           'SYNEXA_VARS_JSON',
           'SYNEXA_CLIENTE_NOME',
           'SYNEXA_CPF',
+          'CHANNEL(endpoint)',
         ]);
 
       if (channelVars['CALLERID(num)']) {
@@ -271,6 +272,16 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      if (
+        !(await this.endpointResolver.authorizeSipEndpoint(
+          channelVars['CHANNEL(endpoint)'],
+          route,
+        ))
+      ) {
+        this.logger.warn({ event: 'sip_route_denied', channelId });
+        adapter.hangup('access_denied');
+        return;
+      }
       const agent = route.agent as Record<string, any> | null;
       if (agent?.interaction_mode === 'text') {
         adapter.hangup('agent_text_only');
