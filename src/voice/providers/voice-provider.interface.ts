@@ -19,6 +19,7 @@ export interface CustomSttConnectConfig {
 }
 
 export interface VoiceProviderConnectOptions {
+  allowInterruption?: boolean;
   geminiLive?: unknown;
   voiceSettings?: unknown;
   apiKey: string;

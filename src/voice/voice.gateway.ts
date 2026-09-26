@@ -1711,7 +1711,14 @@ export class VoiceGateway
                         !/^[0-9a-f-]{36}$/i.test(session.voiceName)
                       ? session.voiceName
                       : 'Mariana';
+              const allowInterruption =
+                typeof (agent as any)?.allow_interrupted === 'boolean'
+                  ? (agent as any).allow_interrupted
+                  : typeof (clientMeta.gemini_live as any)?.allowInterruption === 'boolean'
+                    ? (clientMeta.gemini_live as any).allowInterruption
+                    : true;
               provider.connect({
+                allowInterruption,
                 apiKey,
                 inworldApiKey,
                 cartesiaApiKey,
@@ -1785,7 +1792,10 @@ export class VoiceGateway
                   // ligação — armado 1x no primeiro setup (agente inicial);
                   // transições de agente NÃO reiniciam o cronômetro.
                   if (!maxDurationArmed) {
-                    const maxDurationSec = resolveMaxCallDurationSec(agent);
+                    const maxDurationSec = resolveMaxCallDurationSec(
+                      greetingAgent,
+                      clientMeta.voice_behavior,
+                    );
                     if (maxDurationSec) {
                       maxDurationArmed = true;
                       maxDurationTimer = setTimeout(() => {

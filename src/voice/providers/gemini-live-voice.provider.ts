@@ -8,6 +8,7 @@ export interface GeminiLiveToolDeclaration {
 }
 
 export interface GeminiLiveConnectOptions {
+  allowInterruption?: boolean;
   geminiLive?: unknown;
   apiKey: string;
   systemPrompt: string;
@@ -239,6 +240,16 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
 
       if (live)
         setupMessage.setup.realtimeInputConfig = live.realtimeInputConfig;
+
+      if (options.allowInterruption !== undefined) {
+        if (!setupMessage.setup.realtimeInputConfig) {
+          setupMessage.setup.realtimeInputConfig = {};
+        }
+        setupMessage.setup.realtimeInputConfig.activityHandling =
+          options.allowInterruption === false
+            ? 'NO_INTERRUPTION'
+            : 'START_OF_ACTIVITY_INTERRUPTS';
+      }
 
       if (options.contextCompressionEnabled) {
         setupMessage.setup.contextWindowCompression = {

@@ -62,6 +62,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
   public connect(options: VoiceProviderConnectOptions): void {
     this.options = options;
+    this.isInterruptionBlocked = options.allowInterruption === false;
     const customTts = options.customTts;
     const voiceId = options.voiceName || DEFAULT_CARTESIA_VOICE;
 

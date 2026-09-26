@@ -134,7 +134,8 @@ export function withFlowGreeting(agent: any, behavior: unknown): any {
     typeof config.greetingMessage === 'string'
       ? config.greetingMessage.trim().slice(0, 6000)
       : '';
-  if (!greeting && typeof config.aiSpeaksFirst !== 'boolean') return agent;
+  const rawDuration = config.maxCallDurationSec ?? config.max_call_duration_sec;
+  if (!greeting && typeof config.aiSpeaksFirst !== 'boolean' && rawDuration == null) return agent;
   const capabilities = { ...(agent?.transitions?.capabilities || {}) };
   if (greeting) {
     capabilities.greeting_message = greeting;
@@ -142,6 +143,9 @@ export function withFlowGreeting(agent: any, behavior: unknown): any {
   }
   if (typeof config.aiSpeaksFirst === 'boolean')
     capabilities.ai_speaks_first = config.aiSpeaksFirst;
+  if (rawDuration != null) {
+    capabilities.max_call_duration_sec = rawDuration;
+  }
   return { ...agent, transitions: { ...agent?.transitions, capabilities } };
 }
 
@@ -280,12 +284,30 @@ const MAX_CALL_DURATION_HARD_CAP_SEC = 7200;
 const MAX_CALL_DURATION_MIN_SEC = 10;
 
 /**
- * Tempo limite da chamada em segundos
- * (`transitions.capabilities.max_call_duration_sec`). Inválido/ausente =>
- * null (sem limite). Aceita número ou string numérica; faz clamp entre
- * 10s e 7200s (2h).
+ * Tempo limite da chamada em segundos. Prioriza `voiceBehavior` (Flow)
+ * com fallback para `transitions.capabilities.max_call_duration_sec` do agente.
+ * Inválido/ausente => null (sem limite). Aceita número ou string numérica;
+ * faz clamp entre 10s e 7200s (2h).
  */
-export function resolveMaxCallDurationSec(agent: unknown): number | null {
+export function resolveMaxCallDurationSec(
+  agent: unknown,
+  behavior?: unknown,
+): number | null {
+  // 1. Prioriza configuração do nó de voz no Flow (behavior)
+  if (behavior && typeof behavior === 'object') {
+    const beh = behavior as Record<string, unknown>;
+    const rawBeh = beh.maxCallDurationSec ?? beh.max_call_duration_sec;
+    const numBeh = typeof rawBeh === 'string' ? Number(rawBeh) : rawBeh;
+    if (typeof numBeh === 'number' && Number.isFinite(numBeh)) {
+      const secs = Math.floor(numBeh);
+      if (secs >= MAX_CALL_DURATION_MIN_SEC) {
+        return Math.min(secs, MAX_CALL_DURATION_HARD_CAP_SEC);
+      }
+      return null;
+    }
+  }
+
+  // 2. Fallback para capabilities do agente
   const raw = readCapability(agent, 'max_call_duration_sec');
   const num = typeof raw === 'string' ? Number(raw) : raw;
   if (typeof num !== 'number' || !Number.isFinite(num)) return null;

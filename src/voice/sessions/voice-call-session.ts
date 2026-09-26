@@ -529,6 +529,7 @@ export class VoiceCallSession {
         providerOptions.geminiLive = flowLive
           ? { ...flowLive, model: nextModel, voiceName: nextVoice }
           : undefined;
+        providerOptions.allowInterruption = resolveAgentInterruption(targetAgent);
         providerOptions.systemPrompt = buildVoiceSystemPrompt({
           agent: targetAgent,
           agentVariables: this.sessionState,
@@ -545,7 +546,19 @@ export class VoiceCallSession {
           : undefined;
         await this.liveProvider.connect(providerOptions);
       };
+      const resolveAgentInterruption = (agent: any): boolean => {
+        if (typeof agent?.allow_interrupted === 'boolean') {
+          return agent.allow_interrupted;
+        }
+        if (
+          typeof (this.config.geminiLive as any)?.allowInterruption === 'boolean'
+        ) {
+          return (this.config.geminiLive as any).allowInterruption;
+        }
+        return true;
+      };
       const providerOptions: VoiceProviderConnectOptions = {
+        allowInterruption: resolveAgentInterruption(selectedAgent),
         apiKey: this.config.apiKey || process.env.GEMINI_API_KEY || '',
         inworldApiKey: this.config.inworldApiKey,
         cartesiaApiKey: this.config.cartesiaApiKey,
@@ -1189,6 +1202,7 @@ export class VoiceCallSession {
   private armMaxDurationWatchdog(): void {
     const limitSec = resolveMaxCallDurationSec(
       this.config.selectedAgent as unknown,
+      this.config.voiceBehavior,
     );
     if (!limitSec) return;
     this.maxDurationTimer = setTimeout(

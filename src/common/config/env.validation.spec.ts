@@ -332,7 +332,7 @@ describe('validateEnv', () => {
         LLM_PROVIDER: 'gemini',
       };
       expect(() => validateEnv(config)).toThrow(
-        'At least one LLM API key (GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY) must be configured in production environment',
+        'At least one LLM API key (GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY) must be configured in production environment',
       );
     });
 

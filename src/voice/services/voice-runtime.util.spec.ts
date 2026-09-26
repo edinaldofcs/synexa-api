@@ -191,6 +191,34 @@ describe('resolveMaxCallDurationSec (tempo limite da chamada)', () => {
       }),
     ).toBe(7200);
   });
+
+  it('prioriza configuracao de voiceBehavior do Flow sobre capabilities do agente', () => {
+    const agent = {
+      transitions: { capabilities: { max_call_duration_sec: 120 } },
+    };
+    // VoiceBehavior com 600s deve sobrepor 120s do agente
+    expect(
+      resolveMaxCallDurationSec(agent, { maxCallDurationSec: 600 }),
+    ).toBe(600);
+
+    // VoiceBehavior com snake_case max_call_duration_sec
+    expect(
+      resolveMaxCallDurationSec(agent, { max_call_duration_sec: 900 }),
+    ).toBe(900);
+
+    // VoiceBehavior com string numerica
+    expect(
+      resolveMaxCallDurationSec(agent, { maxCallDurationSec: '450' }),
+    ).toBe(450);
+
+    // Se voiceBehavior for invalido/ausente, recorre ao agente
+    expect(
+      resolveMaxCallDurationSec(agent, { maxCallDurationSec: null }),
+    ).toBe(120);
+    expect(
+      resolveMaxCallDurationSec(agent, {}),
+    ).toBe(120);
+  });
 });
 
 describe('buildGreetingTurn (turno de saudacao)', () => {
