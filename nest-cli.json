@@ -3,7 +3,7 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "deleteOutDir": false,
+    "deleteOutDir": true,
     "watchAssets": true,
     "assets": [
       { "include": "voice/models/**/*", "watchAssets": true }

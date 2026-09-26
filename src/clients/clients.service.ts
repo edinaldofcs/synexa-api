@@ -1,4 +1,9 @@
 import {
+  ClientDuplicationService,
+  DuplicationActor,
+} from './client-duplication.service';
+import { DuplicateClientDto } from './dto/duplicate-client.dto';
+import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -10,9 +15,6 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ClientMetadataService } from '../common/metadata/client-metadata.service';
-import { AgentsRepository } from '../agents/repositories/agents.repository';
-import { ApisRepository } from '../apis/repositories/apis.repository';
-import { TracksRepository } from '../tracks/repositories/tracks.repository';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
@@ -34,9 +36,7 @@ export class ClientsService {
 
   constructor(
     private readonly clientsRepository: ClientsRepository,
-    private readonly agentsRepository: AgentsRepository,
-    private readonly tracksRepository: TracksRepository,
-    private readonly apisRepository: ApisRepository,
+    private readonly duplication: ClientDuplicationService,
     private readonly metadataService: ClientMetadataService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -599,111 +599,16 @@ export class ClientsService {
     return this.clientsRepository.remove(id);
   }
 
-  async duplicate(
+  duplicate(
     clientId: string,
-    companyId: string,
-  ): Promise<Record<string, unknown>> {
-    await this.validateClientAccess(clientId, companyId);
+    dto: DuplicateClientDto,
+    actor: DuplicationActor,
+  ) {
+    return this.duplication.duplicate(clientId, dto, actor);
+  }
 
-    const originalClient = await this.findOne(clientId);
-
-    const clientData = {
-      ...(originalClient as unknown as Record<string, unknown>),
-    };
-    delete clientData.id;
-    const newClient = await this.clientsRepository.duplicate({
-      ...clientData,
-      company_name: `${String(originalClient.company_name || '')} (C\u00f3pia)`,
-      agent_name: `${String(originalClient.agent_name || '')} (C\u00f3pia)`,
-      metadata: {},
-    });
-
-    if (!newClient) throw new BadRequestException('Failed to duplicate client');
-
-    const originalAgents =
-      await this.agentsRepository.findAllByClient(clientId);
-    const agentIdMap = new Map<string, string>();
-
-    for (const agent of originalAgents || []) {
-      const agentData = { ...(agent as unknown as Record<string, unknown>) };
-      const oldAgentId = agentData.id;
-      delete agentData.id;
-      delete agentData.client_id;
-      const newAgent = await this.agentsRepository.create(
-        newClient.id,
-        agentData,
-      );
-      if (newAgent) agentIdMap.set(String(oldAgentId), String(newAgent.id));
-    }
-
-    const originalTracks =
-      await this.tracksRepository.findAllByClient(clientId);
-    for (const track of originalTracks || []) {
-      const trackData = { ...(track as unknown as Record<string, unknown>) };
-      const oldAgentId = trackData.agent_id;
-      delete trackData.id;
-      delete trackData.client_id;
-      delete trackData.agent_id;
-      const newAgentId = agentIdMap.get(String(oldAgentId));
-      await this.tracksRepository.create(newClient.id, {
-        ...trackData,
-        ...(newAgentId ? { agent_id: newAgentId } : {}),
-      });
-    }
-
-    const originalApis = await this.apisRepository.findAllByClient(clientId);
-    const apiIdMap = new Map<string, string>();
-
-    for (const api of originalApis || []) {
-      if (!api) continue;
-      const apiData = { ...(api as unknown as Record<string, unknown>) };
-      const oldApiId = apiData.id;
-      const agent_id = apiData.agent_id;
-      delete apiData.id;
-      delete apiData.agent_id;
-      delete apiData.next_api_id;
-      const newAgentId = agentIdMap.get(String(agent_id));
-      if (!newAgentId) continue;
-
-      const newApi = await this.apisRepository.create(newAgentId, {
-        ...apiData,
-        next_api_id: null,
-      });
-      if (newApi) apiIdMap.set(String(oldApiId), String(newApi.id));
-    }
-
-    for (const api of originalApis || []) {
-      if (!api?.next_api_id) continue;
-      const newApiId = apiIdMap.get(String(api.id));
-      const newNextApiId = apiIdMap.get(String(api.next_api_id));
-      if (newApiId && newNextApiId) {
-        await this.apisRepository.update(newApiId, {
-          next_api_id: newNextApiId,
-        });
-      }
-    }
-
-    const originalSubagents = await this.prisma.painel_subagents.findMany({
-      where: { client_id: clientId },
-    });
-    for (const subagent of originalSubagents || []) {
-      const subagentData = {
-        ...(subagent as unknown as Record<string, unknown>),
-      };
-      delete subagentData.id;
-      delete subagentData.client_id;
-      delete subagentData.created_at;
-      delete subagentData.updated_at;
-      await this.prisma.painel_subagents.create({
-        data: {
-          ...subagentData,
-          client_id: newClient.id,
-        } as any,
-      });
-    }
-
-    void this.metadataService.refresh(newClient.id);
-    return newClient;
+  duplicatePreview(clientId: string, actor: DuplicationActor) {
+    return this.duplication.preview(clientId, actor);
   }
 
   async getLlmConfig(

@@ -1,4 +1,151 @@
 import { VoiceCallSession } from './voice-call-session';
+import { buildVoiceFarewellToolResponse } from '../services/voice-runtime.util';
+
+describe('Telephony farewell tool', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
+  it.each([
+    'pending-farewell',
+    'grace-period',
+    'pending-request',
+    'pending-adapter',
+  ])('cancela o encerramento tardio após remote_hangup: %s', async (phase) => {
+    const adapter = {
+      id: 'call',
+      providerName: 'test',
+      metadata: { customVariables: {} },
+      onAudio: jest.fn(),
+      onCallEnd: jest.fn(),
+      start: jest.fn().mockResolvedValue(undefined),
+      hangup: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn(),
+    };
+    const provider = {
+      connect: jest.fn(),
+      sendToolResponse: jest.fn(),
+      sendText: jest.fn(),
+      close: jest.fn(),
+    };
+    const onAiHangupRequest = jest.fn().mockResolvedValue(undefined);
+    const session = new VoiceCallSession({
+      telephonyAdapter: adapter as any,
+      liveProvider: provider as any,
+      audioGateService: {
+        createSession: () => ({
+          notifyAiSpeakingChanged: jest.fn(),
+          getStats: jest.fn(),
+        }),
+      } as any,
+      pricingService: {
+        calculateVoiceLiveCost: jest.fn().mockReturnValue(0),
+      } as any,
+      prisma: {
+        painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
+      } as any,
+      config: {
+        clientId: 'client',
+        selectedAgent: { id: 'agent' },
+        voiceEngine: 'live_api',
+        onAiHangupRequest,
+      },
+    });
+    await session.start();
+    const options = provider.connect.mock.calls[0][0];
+    await options.onToolCall([
+      { id: 'hangup', name: 'finalizar_chamada', args: {} },
+    ]);
+    options.onTurnComplete();
+    options.onTurnComplete();
+    let resolveHangup: (() => void) | undefined;
+    if (phase === 'pending-request' || phase === 'pending-adapter') {
+      const pending = new Promise<void>((resolve) => {
+        resolveHangup = resolve;
+      });
+      (phase === 'pending-request'
+        ? onAiHangupRequest
+        : adapter.hangup
+      ).mockReturnValue(pending);
+    }
+    if (phase !== 'pending-farewell') await jest.advanceTimersByTimeAsync(1500);
+    const endSpy = jest.spyOn(session, 'end');
+    await session.end('remote_hangup');
+    resolveHangup?.();
+    await jest.advanceTimersByTimeAsync(0);
+    options.onTurnComplete();
+    expect(jest.getTimerCount()).toBe(0);
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(endSpy).toHaveBeenCalledTimes(1);
+    expect(adapter.hangup).toHaveBeenCalledTimes(
+      phase === 'pending-farewell' || phase === 'pending-request' ? 0 : 1,
+    );
+    expect(provider.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['live_api', 'hybrid'])(
+    'mantém a orientação de idioma no retorno e aguarda a despedida em %s',
+    async (engine) => {
+      const adapter = {
+        id: 'call',
+        providerName: 'test',
+        metadata: { customVariables: {}, callerNumber: '', didNumber: '' },
+        onAudio: jest.fn(),
+        onCallEnd: jest.fn(),
+        start: jest.fn().mockResolvedValue(undefined),
+        hangup: jest.fn().mockResolvedValue(undefined),
+      };
+      const provider = {
+        connect: jest.fn(),
+        sendToolResponse: jest.fn(),
+        sendText: jest.fn(),
+      };
+      const onAiHangupRequest = jest.fn().mockResolvedValue(undefined);
+      const session = new VoiceCallSession({
+        telephonyAdapter: adapter as any,
+        liveProvider: provider as any,
+        audioGateService: {
+          createSession: () => ({ notifyAiSpeakingChanged: jest.fn() }),
+        } as any,
+        pricingService: {} as any,
+        prisma: {
+          painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
+        } as any,
+        config: {
+          clientId: 'client',
+          selectedAgent: { id: 'agent', service_step: 'Atendimento' },
+          voiceEngine: engine as 'live_api' | 'hybrid',
+          onAiHangupRequest,
+        },
+      });
+      await session.start();
+      const options = provider.connect.mock.calls[0][0];
+      expect(options.systemPrompt).toContain('mesmo idioma do atendimento');
+      await options.onToolCall([
+        {
+          id: 'hangup-1',
+          name: 'finalizar_chamada',
+          args: { mensagem_despedida: 'Obrigada pelo contato, até logo!' },
+        },
+      ]);
+      expect(provider.sendToolResponse).toHaveBeenCalledWith([
+        {
+          id: 'hangup-1',
+          name: 'finalizar_chamada',
+          response: { ok: true, message: buildVoiceFarewellToolResponse() },
+        },
+      ]);
+      expect(adapter.hangup).not.toHaveBeenCalled();
+      options.onTurnComplete();
+      await jest.advanceTimersByTimeAsync(1600);
+      expect(onAiHangupRequest).toHaveBeenCalledTimes(1);
+      expect(adapter.hangup).toHaveBeenCalledWith('ai_requested');
+    },
+  );
+});
+
 describe('Inactivity telephony hangup', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => {
@@ -45,7 +192,7 @@ describe('Inactivity telephony hangup', () => {
 });
 
 describe('Telephony agent transition', () => {
-  it('descarta o áudio anterior e reconecta com prompt, voz e ferramentas do novo agente', async () => {
+  it('preserva o áudio anterior e reconecta com prompt, voz e ferramentas do novo agente', async () => {
     const adapter = {
       id: 'call',
       providerName: 'test',
@@ -59,6 +206,7 @@ describe('Telephony agent transition', () => {
     const provider = {
       connect: jest.fn(),
       close: jest.fn(),
+      waitForOutput: jest.fn().mockResolvedValue(undefined),
       sendToolResponse: jest.fn(),
       sendText: jest.fn(),
     };
@@ -116,7 +264,12 @@ describe('Telephony agent transition', () => {
       { id: 'call-1', name: 'lookup', args: {} },
     ]);
 
-    expect(adapter.clearQueuedAudio).toHaveBeenCalledTimes(1);
+    expect(adapter.clearQueuedAudio).not.toHaveBeenCalled();
+    expect(provider.sendToolResponse).not.toHaveBeenCalled();
+    expect(provider.waitForOutput).toHaveBeenCalledTimes(1);
+    expect(provider.waitForOutput.mock.invocationCallOrder[0]).toBeLessThan(
+      provider.close.mock.invocationCallOrder[0],
+    );
     expect(provider.close).toHaveBeenCalledTimes(1);
     expect(provider.connect).toHaveBeenCalledTimes(2);
     const nextOptions = provider.connect.mock.calls[1][0];

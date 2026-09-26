@@ -165,6 +165,8 @@ export class VoiceCallSession {
   private pendingAiHangup = false;
   private hangupExecuted = false;
   private hangupWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingHangupTimer: ReturnType<typeof setTimeout> | null = null;
+  private hangupGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private liveAudioTap?: (
     role: 'ai' | 'user',
     chunk: Buffer,
@@ -453,105 +455,120 @@ export class VoiceCallSession {
       });
 
       // 6. Conecta a IA (Gemini Live Provider)
-      let pendingAgentTransition: any = null;
+      let providerGeneration = 0;
+      let agentSwitchInProgress = false;
       let pendingSwitchTurn: string | null = null;
       const switchTelephonyAgent = async (targetAgent: any) => {
         if (
           this.isEnded ||
+          agentSwitchInProgress ||
           !targetAgent?.id ||
           targetAgent.id === selectedAgent?.id
         )
           return;
 
-        const nativeTools = toolsDeclarations.filter((tool) =>
-          ['set_call_variable', 'finalizar_chamada'].includes(tool.name),
-        );
-        const nextTools =
-          this.voiceToolsService && clientId
-            ? [
-                ...(await this.voiceToolsService.getAgentTools(
-                  clientId,
-                  targetAgent.id,
-                )),
-                ...(await this.voiceToolsService.getAgentSubagents(
-                  clientId,
-                  targetAgent.id,
-                )),
-              ].map(({ name, description, parameters }) => ({
-                name,
-                description,
-                parameters,
-              }))
-            : [];
-        const names = new Set<string>();
-        toolsDeclarations = [...nextTools, ...nativeTools].filter((tool) => {
-          if (!tool.name || names.has(tool.name)) return false;
-          names.add(tool.name);
-          return true;
-        });
+        agentSwitchInProgress = true;
+        providerGeneration++;
+        try {
+          const nativeTools = toolsDeclarations.filter((tool) =>
+            ['set_call_variable', 'finalizar_chamada'].includes(tool.name),
+          );
+          const nextTools =
+            this.voiceToolsService && clientId
+              ? [
+                  ...(await this.voiceToolsService.getAgentTools(
+                    clientId,
+                    targetAgent.id,
+                  )),
+                  ...(await this.voiceToolsService.getAgentSubagents(
+                    clientId,
+                    targetAgent.id,
+                  )),
+                ].map(({ name, description, parameters }) => ({
+                  name,
+                  description,
+                  parameters,
+                }))
+              : [];
+          const names = new Set<string>();
+          toolsDeclarations = [...nextTools, ...nativeTools].filter((tool) => {
+            if (!tool.name || names.has(tool.name)) return false;
+            names.add(tool.name);
+            return true;
+          });
 
-        const nextModel =
-          this.config.voiceEngine === 'hybrid'
-            ? targetAgent.model?.startsWith('gemini-') &&
-              !targetAgent.model.includes('live')
-              ? targetAgent.model
-              : 'gemini-2.5-flash-lite'
-            : resolveLiveModel(targetAgent.model || this.config.model);
-        const nextVoice =
-          this.config.voiceEngine === 'hybrid'
-            ? targetAgent.voice_name || this.config.voiceName
-            : resolveLiveVoice(targetAgent.voice_name || this.config.voiceName);
-        const flowLive =
-          this.config.geminiLive && typeof this.config.geminiLive === 'object'
-            ? (this.config.geminiLive as Record<string, unknown>)
+          const nextModel =
+            this.config.voiceEngine === 'hybrid'
+              ? targetAgent.model?.startsWith('gemini-') &&
+                !targetAgent.model.includes('live')
+                ? targetAgent.model
+                : 'gemini-2.5-flash-lite'
+              : resolveLiveModel(targetAgent.model || this.config.model);
+          const nextVoice =
+            this.config.voiceEngine === 'hybrid'
+              ? targetAgent.voice_name || this.config.voiceName
+              : resolveLiveVoice(
+                  targetAgent.voice_name || this.config.voiceName,
+                );
+          const flowLive =
+            this.config.geminiLive && typeof this.config.geminiLive === 'object'
+              ? (this.config.geminiLive as Record<string, unknown>)
+              : undefined;
+
+          await this.liveProvider.waitForOutput?.();
+          if (this.isEnded) return;
+          // Preserve the previous voice in the transport playback queue.
+          this.isAiSpeaking = false;
+          this.gateSession?.notifyAiSpeakingChanged(false);
+          this.inactivity?.stop();
+          this.liveProvider.close();
+          selectedAgent = targetAgent;
+          this.config.agentId = targetAgent.id;
+          this.config.selectedAgent = targetAgent;
+          this.config.model = nextModel;
+          this.config.voiceName = nextVoice;
+          this.sessionState.current_agent_id = targetAgent.id;
+          pendingSwitchTurn = buildSwitchTurn(
+            targetAgent,
+            typeof this.sessionState.user_transcript === 'string'
+              ? this.sessionState.user_transcript
+              : undefined,
+            this.sessionState,
+          );
+          providerOptions.model = nextModel;
+          providerOptions.voiceName = nextVoice;
+          providerOptions.geminiLive = flowLive
+            ? { ...flowLive, model: nextModel, voiceName: nextVoice }
             : undefined;
-
-        this.telephonyAdapter.clearQueuedAudio?.();
-        this.isAiSpeaking = false;
-        this.gateSession?.notifyAiSpeakingChanged(false);
-        this.inactivity?.stop();
-        this.liveProvider.close();
-        selectedAgent = targetAgent;
-        this.config.agentId = targetAgent.id;
-        this.config.selectedAgent = targetAgent;
-        this.config.model = nextModel;
-        this.config.voiceName = nextVoice;
-        this.sessionState.current_agent_id = targetAgent.id;
-        pendingSwitchTurn = buildSwitchTurn(
-          targetAgent,
-          typeof this.sessionState.user_transcript === 'string'
-            ? this.sessionState.user_transcript
-            : undefined,
-          this.sessionState,
-        );
-        providerOptions.model = nextModel;
-        providerOptions.voiceName = nextVoice;
-        providerOptions.geminiLive = flowLive
-          ? { ...flowLive, model: nextModel, voiceName: nextVoice }
-          : undefined;
-        providerOptions.allowInterruption = resolveAgentInterruption(targetAgent);
-        providerOptions.systemPrompt = buildVoiceSystemPrompt({
-          agent: targetAgent,
-          agentVariables: this.sessionState,
-          fallbackPrompt: 'Você é um assistente de voz inteligente e natural.',
-          variables: {
-            ...this.sessionState,
-            canal: 'voice',
-            origin_channel: 'voice',
-            channel: 'voice',
-          },
-        });
-        providerOptions.tools = toolsDeclarations.length
-          ? [{ functionDeclarations: toolsDeclarations }]
-          : undefined;
-        await this.liveProvider.connect(providerOptions);
+          providerOptions.allowInterruption =
+            resolveAgentInterruption(targetAgent);
+          providerOptions.systemPrompt = buildVoiceSystemPrompt({
+            agent: targetAgent,
+            agentVariables: this.sessionState,
+            fallbackPrompt:
+              'Você é um assistente de voz inteligente e natural.',
+            variables: {
+              ...this.sessionState,
+              canal: 'voice',
+              origin_channel: 'voice',
+              channel: 'voice',
+            },
+          });
+          providerOptions.tools = toolsDeclarations.length
+            ? [{ functionDeclarations: toolsDeclarations }]
+            : undefined;
+          await this.liveProvider.connect(providerOptions);
+        } finally {
+          agentSwitchInProgress = false;
+        }
       };
       const resolveAgentInterruption = (agent: any): boolean => {
         if (typeof agent?.allow_interrupted === 'boolean') {
           return agent.allow_interrupted;
         }
         if (
-          typeof (this.config.geminiLive as any)?.allowInterruption === 'boolean'
+          typeof (this.config.geminiLive as any)?.allowInterruption ===
+          'boolean'
         ) {
           return (this.config.geminiLive as any).allowInterruption;
         }
@@ -669,21 +686,25 @@ export class VoiceCallSession {
           void this.flushTranscriptBuffers();
         },
         onTurnComplete: () => {
+          if (this.isEnded) return;
           this.inactivity?.outputComplete();
           this.isAiSpeaking = false;
           this.onSpeakingStateChange?.('listening_user');
           this.gateSession?.notifyAiSpeakingChanged(false);
           void this.flushTranscriptBuffers();
 
-          if (this.pendingAiHangup) {
-            setTimeout(() => {
+          if (this.pendingAiHangup && !this.pendingHangupTimer) {
+            this.pendingHangupTimer = setTimeout(() => {
+              this.pendingHangupTimer = null;
               void this.executeGracefulTelephonyHangup('turn_complete');
             }, 1500);
           }
         },
         onToolCall: (functionCalls) =>
           this.pendingWork.run(async () => {
-            if (this.isEnded) return;
+            if (this.isEnded || agentSwitchInProgress) return;
+            const generation = providerGeneration;
+            let pendingAgentTransition: any = null;
             this.inactivity?.outputStarted();
             // O protocolo BidiGenerateContent do Gemini Live paralisa a síntese
             // de fala até receber toolResponse para CADA call recebida. Qualquer
@@ -988,7 +1009,10 @@ export class VoiceCallSession {
                 errorResponseFor(call, err),
               );
             }
-            if (!this.isEnded) this.liveProvider.sendToolResponse(responses);
+            if (generation !== providerGeneration) return;
+            if (!this.isEnded && !pendingAgentTransition) {
+              this.liveProvider.sendToolResponse(responses);
+            }
             if (pendingAgentTransition && !this.isEnded) {
               const targetAgent = pendingAgentTransition;
               pendingAgentTransition = null;
@@ -1220,6 +1244,10 @@ export class VoiceCallSession {
     if (this.hangupExecuted || this.isEnded) return;
     this.hangupExecuted = true;
     this.pendingAiHangup = false;
+    if (this.pendingHangupTimer) {
+      clearTimeout(this.pendingHangupTimer);
+      this.pendingHangupTimer = null;
+    }
     if (this.hangupWatchdogTimer) {
       clearTimeout(this.hangupWatchdogTimer);
       this.hangupWatchdogTimer = null;
@@ -1232,6 +1260,7 @@ export class VoiceCallSession {
     } catch (err: any) {
       this.logger.warn(`Falha ao solicitar hangup do canal: ${err.message}`);
     }
+    if (this.isEnded) return;
     try {
       await this.telephonyAdapter.hangup(
         origin === 'inactivity' ? 'inactivity' : 'ai_requested',
@@ -1239,11 +1268,11 @@ export class VoiceCallSession {
     } catch (err: any) {
       this.logger.warn(`Falha no hangup direto do canal: ${err.message}`);
     }
-    setTimeout(
-      () =>
-        void this.end(origin === 'inactivity' ? 'inactivity' : 'ai_requested'),
-      800,
-    );
+    if (this.isEnded) return;
+    this.hangupGraceTimer = setTimeout(() => {
+      this.hangupGraceTimer = null;
+      void this.end(origin === 'inactivity' ? 'inactivity' : 'ai_requested');
+    }, 800);
   }
 
   /**
@@ -1394,6 +1423,15 @@ export class VoiceCallSession {
     if (this.isEnded) return;
     this.isEnded = true;
     this.inactivity?.stop();
+    this.pendingAiHangup = false;
+    if (this.pendingHangupTimer) {
+      clearTimeout(this.pendingHangupTimer);
+      this.pendingHangupTimer = null;
+    }
+    if (this.hangupGraceTimer) {
+      clearTimeout(this.hangupGraceTimer);
+      this.hangupGraceTimer = null;
+    }
     // Descarrega os buffers de transcript antes de encerrar para não perder
     // as últimas frases quando o cliente desliga no meio de um turno.
     await this.pendingWork.drain();

@@ -65,6 +65,41 @@ export class MediaService {
   }
 
   /** Internal, tenant-scoped cleanup for an acknowledged/expired call export. */
+  async copyFlowFile(
+    bucket: string,
+    sourcePath: string,
+    targetPath: string,
+  ): Promise<void> {
+    if (this.isDevelopment && this.storageProvider) {
+      if (!this.storageProvider.remove)
+        throw new Error('Storage does not support rollback');
+      const source = await this.storageProvider.download(bucket, sourcePath);
+      if (source.error) throw new Error('Unable to read flow file');
+      const result = await this.storageProvider.upload(
+        bucket,
+        targetPath,
+        source.data,
+      );
+      if (result.error) throw new Error('Unable to copy flow file');
+      return;
+    }
+    if (!this.supabase) throw new Error('Storage unavailable');
+    const { error } = await this.supabase.storage
+      .from(bucket)
+      .copy(sourcePath, targetPath);
+    if (error) throw new Error('Unable to copy flow file');
+  }
+
+  async removeFlowFile(bucket: string, path: string): Promise<void> {
+    if (this.isDevelopment && this.storageProvider?.remove) {
+      await this.storageProvider.remove(bucket, path);
+      return;
+    }
+    if (!this.supabase) throw new Error('Storage unavailable');
+    const { error } = await this.supabase.storage.from(bucket).remove([path]);
+    if (error) throw new Error('Unable to clean up flow file');
+  }
+
   async purgeConversationAssets(
     conversationId: string,
     companyId: string,

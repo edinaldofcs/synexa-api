@@ -37,6 +37,7 @@ describe('MediaService', () => {
   };
 
   const mockStorageProvider = {
+    remove: jest.fn(),
     upload: jest.fn(),
     download: jest.fn(),
     createSignedUrl: jest.fn(),
@@ -1033,6 +1034,51 @@ describe('MediaService', () => {
           'user-1',
         ),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+  describe('flow file copies', () => {
+    it('copies bytes to an independent path and supports compensating cleanup', async () => {
+      const bytes = Buffer.from('knowledge document');
+      mockStorageProvider.download.mockResolvedValue({ data: bytes });
+      mockStorageProvider.upload.mockResolvedValue({ path: 'copy/doc.txt' });
+      await service.copyFlowFile('bucket', 'source/doc.txt', 'copy/doc.txt');
+      expect(mockStorageProvider.download).toHaveBeenCalledWith(
+        'bucket',
+        'source/doc.txt',
+      );
+      expect(mockStorageProvider.upload).toHaveBeenCalledWith(
+        'bucket',
+        'copy/doc.txt',
+        bytes,
+      );
+      await service.removeFlowFile('bucket', 'copy/doc.txt');
+      expect(mockStorageProvider.remove).toHaveBeenCalledWith(
+        'bucket',
+        'copy/doc.txt',
+      );
+    });
+    it('fails instead of silently creating a document with missing bytes', async () => {
+      mockStorageProvider.download.mockResolvedValue({
+        data: Buffer.alloc(0),
+        error: 'missing',
+      });
+      await expect(
+        service.copyFlowFile('bucket', 'source/doc.txt', 'copy/doc.txt'),
+      ).rejects.toThrow('Unable to read');
+      expect(mockStorageProvider.upload).not.toHaveBeenCalled();
+    });
+    it('uses server-side storage copies in production without downloading binaries', async () => {
+      const copy = jest.fn().mockResolvedValue({ error: null });
+      const remove = jest.fn().mockResolvedValue({ error: null });
+      Object.assign(service, {
+        isDevelopment: false,
+        supabase: { storage: { from: () => ({ copy, remove }) } },
+      });
+      await service.copyFlowFile('bucket', 'source/doc.txt', 'copy/doc.txt');
+      expect(copy).toHaveBeenCalledWith('source/doc.txt', 'copy/doc.txt');
+      expect(mockStorageProvider.download).not.toHaveBeenCalled();
+      await service.removeFlowFile('bucket', 'copy/doc.txt');
+      expect(remove).toHaveBeenCalledWith(['copy/doc.txt']);
     });
   });
 });

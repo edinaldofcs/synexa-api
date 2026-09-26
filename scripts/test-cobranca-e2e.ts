@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from '../app.module';
-import { TestChatService } from '../orchestrator/test-chat.service';
-import { PrismaService } from '../common/prisma/prisma.service';
+import { AppModule } from '../src/app.module';
+import { TestChatService } from '../src/orchestrator/test-chat.service';
+import { PrismaService } from '../src/common/prisma/prisma.service';
 
 async function runTest() {
   console.log(

@@ -14,21 +14,8 @@ describe('ClientsService', () => {
     findOne: jest.fn(),
     update: jest.fn(),
     remove: jest.fn(),
-    duplicate: jest.fn(),
   };
-  const agentsRepository = {
-    create: jest.fn(),
-    findAllByClient: jest.fn(),
-  };
-  const tracksRepository = {
-    create: jest.fn(),
-    findAllByClient: jest.fn(),
-  };
-  const apisRepository = {
-    create: jest.fn(),
-    update: jest.fn(),
-    findAllByClient: jest.fn(),
-  };
+  const duplication = { duplicate: jest.fn(), preview: jest.fn() };
   const metadata = { refresh: jest.fn() };
   const configService = {
     get: jest.fn().mockReturnValue('12345678901234567890123456789012'),
@@ -61,9 +48,7 @@ describe('ClientsService', () => {
   };
   const service = new ClientsService(
     clientsRepository as never,
-    agentsRepository as never,
-    tracksRepository as never,
-    apisRepository as never,
+    duplication as never,
     metadata as never,
     prisma as never,
     configService as never,
@@ -229,81 +214,22 @@ describe('ClientsService', () => {
     expect(prisma.telephony_endpoints.upsert).not.toHaveBeenCalled();
   });
 
-  it('duplicates agents, tracks, apis, subagents and remaps next_api_id', async () => {
-    clientsRepository.findOne.mockResolvedValue({
-      id: 'client-old',
-      company_id: companyId,
-      company_name: 'ACME',
-      agent_name: 'Bot',
+  it('delegates duplication to the transactional flow copier', async () => {
+    const actor = { id: userId, company_id: companyId, role: 'company_admin' };
+    const dto = { company_name: 'Copy' };
+    duplication.duplicate.mockResolvedValue({ id: 'new' });
+    await expect(service.duplicate('source', dto, actor)).resolves.toEqual({
+      id: 'new',
     });
-    clientsRepository.duplicate.mockResolvedValue({ id: 'client-new' });
-    agentsRepository.findAllByClient.mockResolvedValue([
-      { id: 'agent-old', client_id: 'client-old', model: 'gpt-4o' },
-    ]);
-    agentsRepository.create.mockResolvedValue({ id: 'agent-new' });
-    tracksRepository.findAllByClient.mockResolvedValue([
-      { id: 'track-old', client_id: 'client-old', code: 'hello' },
-    ]);
-    apisRepository.findAllByClient.mockResolvedValue([
-      {
-        id: 'api-old',
-        agent_id: 'agent-old',
-        name: 'first',
-        next_api_id: 'api-next',
-      },
-      {
-        id: 'api-next',
-        agent_id: 'agent-old',
-        name: 'next',
-        next_api_id: null,
-      },
-    ]);
-    apisRepository.create
-      .mockResolvedValueOnce({ id: 'api-new' })
-      .mockResolvedValueOnce({ id: 'api-next-new' });
-
-    prisma.painel_subagents.findMany.mockResolvedValue([
-      {
-        id: 'sub-1',
-        client_id: 'client-old',
-        name: 'Especialista',
-        system_prompt: 'Prompt',
-      },
-    ]);
-
-    await expect(service.duplicate('client-old', companyId)).resolves.toEqual({
-      id: 'client-new',
-    });
-
-    expect(agentsRepository.create).toHaveBeenCalledWith('client-new', {
-      model: 'gpt-4o',
-    });
-    expect(tracksRepository.create).toHaveBeenCalledWith('client-new', {
-      code: 'hello',
-    });
-    expect(apisRepository.update).toHaveBeenCalledWith('api-new', {
-      next_api_id: 'api-next-new',
-    });
-    expect(prisma.painel_subagents.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        client_id: 'client-new',
-        name: 'Especialista',
-        system_prompt: 'Prompt',
-      }),
-    });
-    expect(metadata.refresh).toHaveBeenCalledWith('client-new');
+    expect(duplication.duplicate).toHaveBeenCalledWith('source', dto, actor);
   });
 
-  it('fails duplicate when source client cannot be copied', async () => {
-    clientsRepository.findOne.mockResolvedValue({
-      id: 'client-old',
-      company_id: companyId,
-    });
-    clientsRepository.duplicate.mockResolvedValue(null);
-
+  it('propagates duplication failures without falling back to a partial copy', async () => {
+    duplication.duplicate.mockRejectedValue(new ConflictException());
     await expect(
-      service.duplicate('client-old', companyId),
-    ).rejects.toBeInstanceOf(BadRequestException);
+      service.duplicate('source', {}, { id: userId, company_id: companyId }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(clientsRepository.create).not.toHaveBeenCalled();
   });
 
   it('retorna configuração de LLM mascarada e grava auditoria de visualização', async () => {

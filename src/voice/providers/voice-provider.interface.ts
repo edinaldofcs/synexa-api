@@ -77,5 +77,7 @@ export interface IVoiceProvider {
       response: Record<string, any>;
     }[],
   ): void;
+  /** Wait for pending speech before a normal agent transfer. */
+  waitForOutput?(): Promise<void>;
   close(): void;
 }

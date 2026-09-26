@@ -85,8 +85,4 @@ export class ClientsRepository {
       return { success: true };
     });
   }
-
-  async duplicate(payload: Record<string, unknown>) {
-    return this.prisma.painel_clients.create({ data: payload as any });
-  }
 }

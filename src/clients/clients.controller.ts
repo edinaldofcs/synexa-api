@@ -1,3 +1,5 @@
+import { DuplicateClientDto } from './dto/duplicate-client.dto';
+import { DuplicationActor } from './client-duplication.service';
 import {
   Body,
   Controller,
@@ -70,12 +72,21 @@ export class ClientsController {
     return this.clientsService.remove(id, user.company_id, user.role);
   }
 
+  @Get('clients/:id/duplicate-preview')
+  duplicatePreview(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: DuplicationActor,
+  ) {
+    return this.clientsService.duplicatePreview(id, user);
+  }
+
   @Post('clients/:id/duplicate')
   duplicate(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: { company_id: string },
+    @Body() dto: DuplicateClientDto,
+    @CurrentUser() user: DuplicationActor,
   ) {
-    return this.clientsService.duplicate(id, user.company_id);
+    return this.clientsService.duplicate(id, dto || {}, user);
   }
 
   @Get('clients/:id/llm-config')

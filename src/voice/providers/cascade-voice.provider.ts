@@ -26,6 +26,9 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private ttsSession: StreamingTtsSession | null = null;
   private vadSession: SileroVadSession | null = null;
   private isReady = false;
+  private generation = 0;
+  private hasPendingSpeech = false;
+  private pendingTtsPhrases = 0;
   private isSpeaking = false;
   private aiPlaybackUntil = 0;
   private turnCompleteTimer: NodeJS.Timeout | null = null;
@@ -61,6 +64,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   public connect(options: VoiceProviderConnectOptions): void {
+    this.generation++;
+    const generation = this.generation;
     this.options = options;
     this.isInterruptionBlocked = options.allowInterruption === false;
     const customTts = options.customTts;
@@ -115,6 +120,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         redemptionFrames: 12, // ~384ms de silêncio para fechar turno
         preRollFrames: 8, // ~256ms de áudio pré-fala
         onSpeechStart: () => {
+          if (!this.isReady || generation !== this.generation) return;
           if (this.isInterruptionBlocked) return;
           // Barge-in só quando há áudio da IA REALMENTE enfileirado/reproduzindo.
           // `isSpeaking` fica true desde o início da geração do LLM (janela
@@ -129,6 +135,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
           }
         },
         onSpeechEnd: (speechAudio: Buffer) => {
+          if (!this.isReady || generation !== this.generation) return;
           void this.handleSpeechTurnCompleted(speechAudio);
         },
       });
@@ -145,7 +152,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   public sendAudio(base64Pcm16: string, _sampleRate = 16000): void {
-    if (!base64Pcm16) return;
+    if (!this.isReady || !base64Pcm16) return;
 
     let buffer: Buffer;
     try {
@@ -332,7 +339,14 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
   public close(): void {
     this.isReady = false;
-    this.handleInterruption();
+    this.generation++;
+    // Shutdown is unconditional; allowInterruption only controls user barge-in.
+    this.abortController?.abort();
+    this.abortController = null;
+    this.activeContextId = null;
+    this.isSpeaking = false;
+    this.hasPendingSpeech = false;
+    this.pendingTtsPhrases = 0;
     if (this.turnCompleteTimer) {
       clearTimeout(this.turnCompleteTimer);
       this.turnCompleteTimer = null;
@@ -353,6 +367,22 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     this.conversationHistory = [];
     this.isInterruptionBlocked = false;
     this.options?.onClose?.();
+  }
+
+  public async waitForOutput(): Promise<void> {
+    const generation = this.generation;
+    const deadline = Date.now() + 15000;
+    while (
+      this.isReady &&
+      generation === this.generation &&
+      this.hasPendingSpeech
+    ) {
+      if (Date.now() >= deadline) {
+        this.logger.warn('[CascadeVoice] Timed out waiting for transfer audio');
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   // ── MÉTODOS INTERNOS DO PIPELINE ────────────────────────────────
@@ -464,6 +494,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         '⚡ [CascadeVoice] Barge-in detectado: abortando fala da IA',
       );
       this.isSpeaking = false;
+      this.hasPendingSpeech = false;
+      this.pendingTtsPhrases = 0;
       this.aiPlaybackUntil = 0;
       this.consecutiveBargeInFrames = 0;
       if (this.turnCompleteTimer) {
@@ -494,6 +526,8 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     rms: number,
     durationMs: number,
   ): Promise<void> {
+    const generation = this.generation;
+    if (!this.isReady) return;
     const customStt: CustomSttConfig | undefined = this.options?.customStt;
     const isInworld = this.options?.sttProvider === 'inworld';
     const groqKey = isInworld
@@ -531,6 +565,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         sttInput,
       );
 
+      if (!this.isReady || generation !== this.generation) return;
       if (!userText || !userText.trim()) {
         this.logger.log('[CascadeVoice] STT retornou texto vazio para o áudio');
         return;
@@ -553,6 +588,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
       this.options?.onUserTranscript?.(userText);
       await this.executeLlmAndSpeak(userText);
     } catch (err: any) {
+      if (!this.isReady || generation !== this.generation) return;
       this.logger.error(`❌ [CascadeVoice] Falha no STT: ${err.message}`);
       this.options?.onError?.(err);
     }
@@ -568,10 +604,15 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   private async continueLlmAfterToolResponse(): Promise<void> {
+    const generation = this.generation;
+    await this.waitForOutput();
+    if (!this.isReady || generation !== this.generation) return;
     await this.streamLlmResponse();
   }
 
   private async streamLlmResponse(): Promise<void> {
+    if (!this.isReady) return;
+    const generation = this.generation;
     const geminiKey = this.options?.apiKey || process.env.GEMINI_API_KEY || '';
     if (!geminiKey) {
       this.logger.error('❌ [CascadeVoice] GEMINI_API_KEY não configurada');
@@ -592,9 +633,20 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     }
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${geminiKey}`;
 
-    this.abortController = new AbortController();
+    this.abortController?.abort();
+    if (this.activeContextId)
+      this.ttsSession?.cancelContext(this.activeContextId);
+    const controller = new AbortController();
+    this.abortController = controller;
     const contextId = uuidv4();
     this.activeContextId = contextId;
+    this.hasPendingSpeech = false;
+    this.pendingTtsPhrases = 0;
+    const isCurrent = () =>
+      this.isReady &&
+      generation === this.generation &&
+      this.activeContextId === contextId &&
+      !controller.signal.aborted;
     this.isSpeaking = true;
     this.aiPlaybackUntil = Date.now();
     if (this.turnCompleteTimer) {
@@ -650,9 +702,10 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: this.abortController.signal,
+        signal: controller.signal,
       });
 
+      if (!isCurrent()) return;
       if (!res.ok) {
         const errText = await res.text();
         throw new Error(`Erro Gemini (${res.status}): ${errText}`);
@@ -666,6 +719,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!isCurrent()) return;
         if (done) break;
 
         streamBuffer += decoder.decode(value, { stream: true });
@@ -732,6 +786,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         this.options?.onToolCall?.(functionCallsToDispatch);
       }
     } catch (err: any) {
+      if (
+        !this.isReady ||
+        generation !== this.generation ||
+        this.activeContextId !== contextId
+      )
+        return;
       if (err.name === 'AbortError') {
         this.logger.debug(
           '🛑 [CascadeVoice] Stream do LLM abortado por interrupção',
@@ -760,8 +820,22 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   ): void {
     if (!this.ttsSession || !text.trim()) return;
 
+    const generation = this.generation;
+    const isCurrent = () =>
+      this.isReady &&
+      generation === this.generation &&
+      this.activeContextId === contextId;
+    if (!isCurrent()) return;
+    this.hasPendingSpeech = true;
+    this.pendingTtsPhrases++;
+    if (this.turnCompleteTimer) {
+      clearTimeout(this.turnCompleteTimer);
+      this.turnCompleteTimer = null;
+    }
+
     this.ttsSession.pushText(contextId, text, continueStream, {
       onAudioChunk: (pcmChunk) => {
+        if (!isCurrent()) return;
         // Envia o PCM 24kHz base64 para o telephonyAdapter / web client
         // 24kHz 16-bit mono = 48 bytes/ms
         const chunkDurationMs = Math.round(pcmChunk.length / 48);
@@ -771,6 +845,14 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         this.options?.onAudio?.(pcmChunk.toString('base64'));
       },
       onDone: () => {
+        if (!isCurrent()) return;
+        // HTTP and Inworld complete each phrase; Cartesia completes the context.
+        this.pendingTtsPhrases =
+          this.options?.customTts?.baseUrl ||
+          this.options?.ttsProvider === 'inworld'
+            ? Math.max(0, this.pendingTtsPhrases - 1)
+            : 0;
+        if (this.pendingTtsPhrases > 0) return;
         // Aguarda a janela de reprodução acústica no cliente terminar antes de fechar o turno
         const remainingPlaybackMs = Math.max(
           0,
@@ -780,12 +862,16 @@ export class CascadeVoiceProvider implements IVoiceProvider {
           clearTimeout(this.turnCompleteTimer);
         }
         this.turnCompleteTimer = setTimeout(() => {
+          if (!isCurrent()) return;
+          this.hasPendingSpeech = false;
           this.isSpeaking = false;
           this.turnCompleteTimer = null;
           this.options?.onTurnComplete?.();
         }, remainingPlaybackMs);
       },
       onError: (err) => {
+        if (!isCurrent()) return;
+        this.hasPendingSpeech = false;
         this.logger.error(
           `❌ [CascadeVoice] Erro no Cartesia TTS: ${err.message}`,
         );

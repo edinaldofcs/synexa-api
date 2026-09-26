@@ -115,6 +115,7 @@ export class VoiceGateway
 {
   private readonly logger = new Logger(VoiceGateway.name);
   private sessions = new Map<WebSocket, VoiceClientSession>();
+  private disconnectHandlers = new WeakMap<WebSocket, () => Promise<void>>();
 
   @WebSocketServer()
   server: WsServer;
@@ -343,9 +344,20 @@ export class VoiceGateway
     let stopHeartbeat: (() => void) | undefined;
     let exportEnabled = false;
     const pendingWork = new VoiceWorkTracker();
+    let pendingHangupTimer: ReturnType<typeof setTimeout> | null = null;
+    let hangupGraceTimer: ReturnType<typeof setTimeout> | null = null;
+    let closingPromise: Promise<void> | undefined;
     const closeVoiceSession = async (reason = 'connection_closed') => {
-      if (voiceSessionClosed) return;
+      if (voiceSessionClosed) return closingPromise;
       voiceSessionClosed = true;
+      if (pendingHangupTimer) {
+        clearTimeout(pendingHangupTimer);
+        pendingHangupTimer = null;
+      }
+      if (hangupGraceTimer) {
+        clearTimeout(hangupGraceTimer);
+        hangupGraceTimer = null;
+      }
       inactivity?.stop();
       if (telemetryTimer) {
         clearInterval(telemetryTimer);
@@ -364,28 +376,35 @@ export class VoiceGateway
         clearTimeout(statePersistTimer);
         statePersistTimer = null;
       }
-      try {
-        if (session.liveProvider) {
-          session.liveProvider.close();
-          session.liveProvider = null;
-          session.isReady = false;
+      closingPromise = (async () => {
+        try {
+          if (session.liveProvider) {
+            session.liveProvider.close();
+            session.liveProvider = null;
+            session.isReady = false;
+          }
+          await pendingWork.drain();
+          await flushConversationState().catch(() =>
+            this.logger.error('Voice state persistence failed'),
+          );
+          await this.telemetryService.flushAiBuffer(session);
+          await this.telemetryService.persistSessionTelemetry(session, reason);
+        } finally {
+          stopHeartbeat?.();
+          releaseVoiceSlot();
         }
-        await pendingWork.drain();
-        await flushConversationState().catch(() =>
-          this.logger.error('Voice state persistence failed'),
-        );
-        await this.telemetryService.flushAiBuffer(session);
-        await this.telemetryService.persistSessionTelemetry(session, reason);
-      } finally {
-        stopHeartbeat?.();
-        releaseVoiceSlot();
-      }
+      })();
+      return closingPromise;
     };
 
     const executeGracefulHangup = (origin: string = 'turn_complete') => {
       if (session.hangupExecuted || voiceSessionClosed) return;
       session.hangupExecuted = true;
       session.pendingAiHangup = false;
+      if (pendingHangupTimer) {
+        clearTimeout(pendingHangupTimer);
+        pendingHangupTimer = null;
+      }
       if (session.hangupWatchdogTimer) {
         clearTimeout(session.hangupWatchdogTimer);
         session.hangupWatchdogTimer = null;
@@ -400,7 +419,8 @@ export class VoiceGateway
         type: 'call_ended',
         reason: origin === 'inactivity' ? 'inactivity' : 'ai_requested',
       });
-      setTimeout(() => {
+      hangupGraceTimer = setTimeout(() => {
+        hangupGraceTimer = null;
         void closeVoiceSession(
           origin === 'inactivity' ? 'inactivity' : 'ai_requested',
         );
@@ -1197,8 +1217,15 @@ export class VoiceGateway
                 responses.push({ id: call.id, name: call.name, response });
               }
 
+              if (
+                voiceSessionClosed ||
+                generation !== session.providerGeneration
+              )
+                return;
               try {
-                responseProvider.sendToolResponse(responses);
+                // The old provider will close on transfer; do not start another answer.
+                if (!requestedAgent)
+                  responseProvider.sendToolResponse(responses);
               } catch (err: any) {
                 this.logger.error(
                   `Falha ao enviar toolResponse ao provider: ${err.message}`,
@@ -1714,7 +1741,8 @@ export class VoiceGateway
               const allowInterruption =
                 typeof (agent as any)?.allow_interrupted === 'boolean'
                   ? (agent as any).allow_interrupted
-                  : typeof (clientMeta.gemini_live as any)?.allowInterruption === 'boolean'
+                  : typeof (clientMeta.gemini_live as any)
+                        ?.allowInterruption === 'boolean'
                     ? (clientMeta.gemini_live as any).allowInterruption
                     : true;
               provider.connect({
@@ -2177,8 +2205,14 @@ export class VoiceGateway
 
                   // Se a IA solicitou encerramento (finalizar_chamada), aguarda o respiro
                   // dos buffers acústicos do cliente (1200ms) e executa o desligamento limpo
-                  if (session.pendingAiHangup) {
-                    setTimeout(() => {
+                  if (
+                    !voiceSessionClosed &&
+                    generation === session.providerGeneration &&
+                    session.pendingAiHangup &&
+                    !pendingHangupTimer
+                  ) {
+                    pendingHangupTimer = setTimeout(() => {
+                      pendingHangupTimer = null;
                       executeGracefulHangup('turn_complete');
                     }, 1200);
                   }
@@ -2229,128 +2263,147 @@ export class VoiceGateway
               });
             };
 
+            let agentSwitchInProgress = false;
             switchAgent = async (targetAgent, reason, handoffText) => {
-              if (!targetAgent || targetAgent.id === session.agentId) return;
-              const previousAgentId = session.agentId;
-              const previousProvider = session.liveProvider;
-              session.nextGeneration();
-              session.isReady = false;
-              // Corte a saída antiga antes de qualquer consulta de banco ou setup.
-              session.callAdapter?.clearQueuedAudio?.();
-              sendToClient({ type: 'audio_reset' });
-              previousProvider?.close();
-              session.liveProvider = null;
-              if (session.mockSession) {
-                session.mockSession.close();
-                session.mockSession = null;
-              }
-              let previousAgentName = 'Agente';
-              if (previousAgentId) {
-                let voiceAgents: Awaited<ReturnType<typeof findVoiceAgents>> =
-                  [];
-                try {
-                  voiceAgents = await findVoiceAgents();
-                } catch (error) {
-                  this.logger.warn(
-                    `Falha ao buscar nome do agente anterior: ${error instanceof Error ? error.message : String(error)}`,
+              if (
+                !targetAgent ||
+                targetAgent.id === session.agentId ||
+                agentSwitchInProgress
+              )
+                return;
+              agentSwitchInProgress = true;
+              try {
+                const previousAgentId = session.agentId;
+                const previousProvider = session.liveProvider;
+                session.isReady = false;
+                await previousProvider?.waitForOutput?.();
+                if (
+                  voiceSessionClosed ||
+                  session.liveProvider !== previousProvider
+                )
+                  return;
+                session.nextGeneration();
+                // Preserve queued audio: adapters play the old and new voice in order.
+                previousProvider?.close();
+                session.liveProvider = null;
+                if (session.mockSession) {
+                  session.mockSession.close();
+                  session.mockSession = null;
+                }
+                let previousAgentName = 'Agente';
+                if (previousAgentId) {
+                  let voiceAgents: Awaited<ReturnType<typeof findVoiceAgents>> =
+                    [];
+                  try {
+                    voiceAgents = await findVoiceAgents();
+                  } catch (error) {
+                    this.logger.warn(
+                      `Falha ao buscar nome do agente anterior: ${error instanceof Error ? error.message : String(error)}`,
+                    );
+                  }
+                  const found = voiceAgents.find(
+                    (a) => a.id === previousAgentId,
+                  );
+                  if (found) {
+                    previousAgentName = found.service_step || found.id;
+                  }
+                }
+                session.agentId = targetAgent.id;
+                if (session.voiceEngine === 'hybrid') {
+                  session.model =
+                    targetAgent.model &&
+                    targetAgent.model.toLowerCase().startsWith('gemini-') &&
+                    !targetAgent.model.includes('live') &&
+                    !targetAgent.model.includes('native-audio')
+                      ? targetAgent.model
+                      : 'gemini-2.5-flash-lite';
+                  session.voiceName =
+                    targetAgent.voice_name && targetAgent.voice_name.length > 20
+                      ? targetAgent.voice_name
+                      : 'cb2694c3-715f-4da9-99f3-1c974fff2928';
+                } else {
+                  session.model = resolveLiveModel(
+                    targetAgent.model || this.voiceService.getDefaultModel(),
+                  );
+                  session.voiceName = resolveLiveVoice(
+                    targetAgent.voice_name ||
+                      this.voiceService.getDefaultVoice(),
                   );
                 }
-                const found = voiceAgents.find((a) => a.id === previousAgentId);
-                if (found) {
-                  previousAgentName = found.service_step || found.id;
-                }
-              }
-              session.agentId = targetAgent.id;
-              if (session.voiceEngine === 'hybrid') {
-                session.model =
-                  targetAgent.model &&
-                  targetAgent.model.toLowerCase().startsWith('gemini-') &&
-                  !targetAgent.model.includes('live') &&
-                  !targetAgent.model.includes('native-audio')
-                    ? targetAgent.model
-                    : 'gemini-2.5-flash-lite';
-                session.voiceName =
-                  targetAgent.voice_name && targetAgent.voice_name.length > 20
-                    ? targetAgent.voice_name
-                    : 'cb2694c3-715f-4da9-99f3-1c974fff2928';
-              } else {
-                session.model = resolveLiveModel(
-                  targetAgent.model || this.voiceService.getDefaultModel(),
-                );
-                session.voiceName = resolveLiveVoice(
-                  targetAgent.voice_name || this.voiceService.getDefaultVoice(),
-                );
-              }
-              session.state = pruneSessionState({
-                ...session.state,
-                current_agent_id: targetAgent.id,
-                switch_reason: reason,
-              });
-              await flushConversationState();
-              if (session.conversationId) {
-                const conversation = await this.prisma.conversations.findUnique(
-                  {
-                    where: { id: session.conversationId },
-                    select: { metadata: true },
-                  },
-                );
-                await this.prisma.conversations.update({
-                  where: { id: session.conversationId },
-                  data: {
-                    metadata: {
-                      ...((conversation?.metadata as Record<string, unknown>) ||
-                        {}),
-                      agent_id: targetAgent.id,
-                      model: session.model,
-                      voice_name: session.voiceName,
-                    } as any,
-                  },
+                session.state = pruneSessionState({
+                  ...session.state,
+                  current_agent_id: targetAgent.id,
+                  switch_reason: reason,
                 });
+                await flushConversationState();
+                if (session.conversationId) {
+                  const conversation =
+                    await this.prisma.conversations.findUnique({
+                      where: { id: session.conversationId },
+                      select: { metadata: true },
+                    });
+                  await this.prisma.conversations.update({
+                    where: { id: session.conversationId },
+                    data: {
+                      metadata: {
+                        ...((conversation?.metadata as Record<
+                          string,
+                          unknown
+                        >) || {}),
+                        agent_id: targetAgent.id,
+                        model: session.model,
+                        voice_name: session.voiceName,
+                      } as any,
+                    },
+                  });
+                }
+                await connectAgent(targetAgent, handoffText, true);
+                sendDebug(
+                  'session',
+                  `🔄 Condição de Ativação Atendida: Troca de agente para "${targetAgent.service_step || targetAgent.id}"`,
+                  { conditions: targetAgent.activation_conditions },
+                  'success',
+                );
+                const targetRawPrompt = buildRawAgentPrompt(targetAgent);
+                const targetVariables: Record<string, any> = {
+                  nome_agente:
+                    clientDb?.agent_name ||
+                    targetAgent?.service_step ||
+                    'Assistente',
+                  agent_name:
+                    clientDb?.agent_name ||
+                    targetAgent?.service_step ||
+                    'Assistente',
+                  nome_empresa: clientDb?.company_name || 'Synexa',
+                  company_name: clientDb?.company_name || 'Synexa',
+                  ...session.state,
+                };
+                const targetSystemPrompt = buildVoiceSystemPrompt({
+                  agent: targetAgent,
+                  agentVariables: targetVariables,
+                  fallbackPrompt:
+                    'Você é um assistente de voz inteligente e natural do Synexa.',
+                  variables: targetVariables,
+                });
+                sendToClient({
+                  type: 'agent_switched',
+                  fromAgent: previousAgentName,
+                  fromAgentId: previousAgentId,
+                  toAgent: targetAgent.service_step || targetAgent.id,
+                  toAgentId: targetAgent.id,
+                  agentId: targetAgent.id,
+                  agentName: targetAgent.service_step || targetAgent.id,
+                  serviceStep: targetAgent.service_step || targetAgent.id,
+                  model: session.model,
+                  voiceName: session.voiceName,
+                  rawPrompt: targetRawPrompt,
+                  systemPrompt: targetSystemPrompt,
+                  variables: targetVariables,
+                  reason: reason || 'Condição de ativação atendida',
+                });
+              } finally {
+                agentSwitchInProgress = false;
               }
-              await connectAgent(targetAgent, handoffText, true);
-              sendDebug(
-                'session',
-                `🔄 Condição de Ativação Atendida: Troca de agente para "${targetAgent.service_step || targetAgent.id}"`,
-                { conditions: targetAgent.activation_conditions },
-                'success',
-              );
-              const targetRawPrompt = buildRawAgentPrompt(targetAgent);
-              const targetVariables: Record<string, any> = {
-                nome_agente:
-                  clientDb?.agent_name ||
-                  targetAgent?.service_step ||
-                  'Assistente',
-                agent_name:
-                  clientDb?.agent_name ||
-                  targetAgent?.service_step ||
-                  'Assistente',
-                nome_empresa: clientDb?.company_name || 'Synexa',
-                company_name: clientDb?.company_name || 'Synexa',
-                ...session.state,
-              };
-              const targetSystemPrompt = buildVoiceSystemPrompt({
-                agent: targetAgent,
-                agentVariables: targetVariables,
-                fallbackPrompt:
-                  'Você é um assistente de voz inteligente e natural do Synexa.',
-                variables: targetVariables,
-              });
-              sendToClient({
-                type: 'agent_switched',
-                fromAgent: previousAgentName,
-                fromAgentId: previousAgentId,
-                toAgent: targetAgent.service_step || targetAgent.id,
-                toAgentId: targetAgent.id,
-                agentId: targetAgent.id,
-                agentName: targetAgent.service_step || targetAgent.id,
-                serviceStep: targetAgent.service_step || targetAgent.id,
-                model: session.model,
-                voiceName: session.voiceName,
-                rawPrompt: targetRawPrompt,
-                systemPrompt: targetSystemPrompt,
-                variables: targetVariables,
-                reason: reason || 'Condição de ativação atendida',
-              });
             };
 
             await connectAgent(selectedAgent);
@@ -2409,33 +2462,39 @@ export class VoiceGateway
       }
     });
 
-    clientWs.on('close', async () => {
-      this.logger.log('🔴 [VoiceGateway] Cliente desconectado');
-      for (const unsub of audioUnsubscribers.values()) {
-        unsub();
-      }
-      audioUnsubscribers.clear();
-      clearIdentificationTimer();
-      if (session.mockSession) {
-        session.mockSession.close();
-        session.mockSession = null;
-      }
-      await this.telemetryService.flushAiBuffer(session);
-      await closeVoiceSession();
-      this.sessions.delete(clientWs);
+    let disconnectPromise: Promise<void> | undefined;
+    const disconnect = () => {
+      if (disconnectPromise) return disconnectPromise;
+      disconnectPromise = (async () => {
+        this.logger.log('🔴 [VoiceGateway] Cliente desconectado');
+        try {
+          for (const unsub of audioUnsubscribers.values()) {
+            unsub();
+          }
+          audioUnsubscribers.clear();
+          clearIdentificationTimer();
+          if (session.mockSession) {
+            session.mockSession.close();
+            session.mockSession = null;
+          }
+          await closeVoiceSession();
+        } catch {
+          this.logger.error('Voice disconnect cleanup failed');
+        } finally {
+          releaseVoiceSlot();
+          this.sessions.delete(clientWs);
+        }
+      })();
+      return disconnectPromise;
+    };
+    this.disconnectHandlers.set(clientWs, disconnect);
+    clientWs.on('close', () => {
+      void disconnect();
     });
   }
 
   handleDisconnect(clientWs: WebSocket) {
-    const session = this.sessions.get(clientWs);
-    if (session) {
-      if (session.holdsSessionSlot) {
-        session.holdsSessionSlot = false;
-        this.voiceSessionFactory.releaseSession(session.clientId);
-      }
-      session.liveProvider?.close();
-      this.sessions.delete(clientWs);
-    }
+    return this.disconnectHandlers.get(clientWs)?.();
   }
 
   /**

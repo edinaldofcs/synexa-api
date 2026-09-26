@@ -20,7 +20,10 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
     return buffer.toString('base64');
   };
 
+  afterEach(() => jest.restoreAllMocks());
+
   beforeEach(() => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(new Response(''));
     mockSession = {
       pushText: jest.fn(),
       finalizeContext: jest.fn(),
@@ -332,5 +335,177 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
       provider.setInterruptionBlocked(false);
       expect(mockVadSession.reset).toHaveBeenCalled();
     });
+  });
+});
+
+describe('CascadeVoiceProvider transfer isolation', () => {
+  const options = { apiKey: 'test', systemPrompt: 'test', groqApiKey: 'test' };
+  function setup() {
+    const tts = {
+      pushText: jest.fn(),
+      finalizeContext: jest.fn(),
+      cancelContext: jest.fn(),
+      close: jest.fn(),
+    };
+    const stt = { transcribePcm: jest.fn() };
+    const provider = new CascadeVoiceProvider(
+      { createSession: () => tts },
+      stt,
+    );
+    return { provider, tts, stt };
+  }
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it('always aborts on close without emitting a user interruption', () => {
+    const { provider } = setup();
+    const onInterrupted = jest.fn();
+    provider.connect({ ...options, allowInterruption: false, onInterrupted });
+    const controller = new AbortController();
+    Object.assign(provider, { abortController: controller, isSpeaking: true });
+    provider.close();
+    expect(controller.signal.aborted).toBe(true);
+    expect((provider as any).isSpeaking).toBe(false);
+    expect(onInterrupted).not.toHaveBeenCalled();
+  });
+
+  it('discards STT that finishes after reconnect instead of starting a new answer', async () => {
+    const { provider, stt } = setup();
+    let finish!: (text: string) => void;
+    stt.transcribePcm.mockReturnValue(
+      new Promise<string>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockRejectedValue(new Error('Unexpected request'));
+    provider.connect(options);
+    const pending = (provider as any).processUserSpeech(
+      Buffer.alloc(100),
+      1000,
+      2000,
+    );
+    provider.close();
+    const onUserTranscript = jest.fn();
+    provider.connect({ ...options, onUserTranscript });
+    finish('old transcript');
+    await pending;
+    expect(onUserTranscript).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    provider.close();
+  });
+
+  it('ignores old TTS callbacks after reconnect', () => {
+    const { provider, tts } = setup();
+    provider.connect(options);
+    (provider as any).activeContextId = 'old';
+    (provider as any).pushToCartesia('old', 'Hello', false);
+    const callbacks = tts.pushText.mock.calls[0][3];
+    provider.close();
+    const onAudio = jest.fn(),
+      onTurnComplete = jest.fn(),
+      onError = jest.fn();
+    provider.connect({ ...options, onAudio, onTurnComplete, onError });
+    callbacks.onAudioChunk(Buffer.alloc(4800));
+    callbacks.onDone();
+    callbacks.onError(new Error('late error'));
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onTurnComplete).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    provider.close();
+  });
+
+  it('waits for synthesis and playback before completing a transfer', async () => {
+    jest.useFakeTimers();
+    const { provider, tts } = setup();
+    provider.connect(options);
+    (provider as any).activeContextId = 'speech';
+    (provider as any).pushToCartesia('speech', 'Hello', false);
+    const callbacks = tts.pushText.mock.calls[0][3];
+    const completed = jest.fn();
+    const drain = provider.waitForOutput().then(completed);
+    await jest.advanceTimersByTimeAsync(100);
+    expect(completed).not.toHaveBeenCalled();
+    callbacks.onAudioChunk(Buffer.alloc(48000));
+    callbacks.onDone();
+    await jest.advanceTimersByTimeAsync(900);
+    expect(completed).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(150);
+    await drain;
+    expect(completed).toHaveBeenCalledTimes(1);
+    provider.close();
+  });
+
+  it('bounds a transfer wait when TTS never completes', async () => {
+    jest.useFakeTimers();
+    const { provider } = setup();
+    provider.connect(options);
+    (provider as any).activeContextId = 'speech';
+    (provider as any).pushToCartesia('speech', 'Hello', false);
+    const drain = provider.waitForOutput();
+    await jest.advanceTimersByTimeAsync(15000);
+    await drain;
+    provider.close();
+  });
+  it('ignores a late LLM stream after the provider is reused', async () => {
+    const { provider, tts } = setup();
+    let finish!: (result: ReadableStreamReadResult<Uint8Array>) => void;
+    const read = jest.fn(
+      () =>
+        new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({ read }) },
+    } as any);
+    provider.connect({ ...options, allowInterruption: false });
+    const pending = (provider as any).streamLlmResponse();
+    await Promise.resolve();
+    expect(read).toHaveBeenCalled();
+    provider.close();
+    const onAiTranscript = jest.fn();
+    provider.connect({ ...options, onAiTranscript });
+    finish({
+      done: false,
+      value: new TextEncoder().encode(
+        'data: {"candidates":[{"content":{"parts":[{"text":"Old answer."}]}}]}\n',
+      ),
+    });
+    await pending;
+    expect(onAiTranscript).not.toHaveBeenCalled();
+    expect(tts.pushText).not.toHaveBeenCalled();
+    provider.close();
+  });
+
+  it('does not finish a transfer between HTTP TTS phrases', async () => {
+    jest.useFakeTimers();
+    const { provider, tts } = setup();
+    provider.connect({
+      ...options,
+      ttsProvider: 'custom',
+      customTts: { baseUrl: 'https://tts.example.test', apiKey: 'test' },
+    });
+    (provider as any).activeContextId = 'speech';
+    (provider as any).pushToCartesia('speech', 'First.', true);
+    (provider as any).pushToCartesia('speech', 'Second.', false);
+    const first = tts.pushText.mock.calls[0][3];
+    const second = tts.pushText.mock.calls[1][3];
+    const completed = jest.fn();
+    const drain = provider.waitForOutput().then(completed);
+    first.onAudioChunk(Buffer.alloc(4800));
+    first.onDone();
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(completed).not.toHaveBeenCalled();
+    second.onAudioChunk(Buffer.alloc(4800));
+    second.onDone();
+    await jest.advanceTimersByTimeAsync(200);
+    await drain;
+    expect(completed).toHaveBeenCalledTimes(1);
+    provider.close();
   });
 });

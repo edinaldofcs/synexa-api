@@ -197,9 +197,9 @@ describe('resolveMaxCallDurationSec (tempo limite da chamada)', () => {
       transitions: { capabilities: { max_call_duration_sec: 120 } },
     };
     // VoiceBehavior com 600s deve sobrepor 120s do agente
-    expect(
-      resolveMaxCallDurationSec(agent, { maxCallDurationSec: 600 }),
-    ).toBe(600);
+    expect(resolveMaxCallDurationSec(agent, { maxCallDurationSec: 600 })).toBe(
+      600,
+    );
 
     // VoiceBehavior com snake_case max_call_duration_sec
     expect(
@@ -212,12 +212,10 @@ describe('resolveMaxCallDurationSec (tempo limite da chamada)', () => {
     ).toBe(450);
 
     // Se voiceBehavior for invalido/ausente, recorre ao agente
-    expect(
-      resolveMaxCallDurationSec(agent, { maxCallDurationSec: null }),
-    ).toBe(120);
-    expect(
-      resolveMaxCallDurationSec(agent, {}),
-    ).toBe(120);
+    expect(resolveMaxCallDurationSec(agent, { maxCallDurationSec: null })).toBe(
+      120,
+    );
+    expect(resolveMaxCallDurationSec(agent, {})).toBe(120);
   });
 });
 
@@ -258,6 +256,11 @@ describe('buildVoiceSystemPrompt', () => {
     expect(prompt).toContain(VOICE_HANGUP_PROMPT_INSTRUCTION);
     expect(prompt).toContain('finalizar_chamada');
     expect(prompt).toContain('mensagem_despedida');
+    expect(prompt).toContain('mesmo idioma do atendimento');
+    expect(prompt).toContain(
+      'confirmação interna, nunca uma fala para o cliente',
+    );
+    expect(prompt).toContain('sem repetir a despedida já falada');
   });
 });
 
@@ -371,9 +374,14 @@ describe('voiceGreetingCacheEnabled', () => {
 });
 
 describe('buildVoiceFarewellToolResponse', () => {
-  it('gera resposta de confirmacao simples para permitir conclusao natural da fala', () => {
+  it('limita a continuação à despedida pendente sem verbalizar o status ou mudar de idioma', () => {
     const res = buildVoiceFarewellToolResponse();
-    expect(res).toBe('Encerramento confirmado.');
+    expect(res).toContain('NÃO LER EM VOZ ALTA');
+    expect(res).toContain('Conclua apenas a despedida que ainda não foi dita');
+    expect(res).toContain('mesmo idioma do atendimento');
+    expect(res).toContain('português brasileiro se nenhum idioma foi definido');
+    expect(res).toContain('Se já se despediu, não diga mais nada');
+    expect(res).toContain('não leia este retorno nem anuncie');
   });
 });
 

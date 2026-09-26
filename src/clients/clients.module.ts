@@ -1,3 +1,6 @@
+import { ClientDuplicationService } from './client-duplication.service';
+import { MediaModule } from '../media/media.module';
+import { MediaService } from '../media/media.service';
 import { Module } from '@nestjs/common';
 import { CommonModule } from '../common/common.module';
 import { AgentsModule } from '../agents/agents.module';
@@ -9,9 +12,21 @@ import { ClientsRepository } from './repositories/clients.repository';
 import { ClientsService } from './clients.service';
 
 @Module({
-  imports: [CommonModule, AgentsModule, ApisModule, TracksModule, VoiceModule],
+  imports: [
+    MediaModule,
+    CommonModule,
+    AgentsModule,
+    ApisModule,
+    TracksModule,
+    VoiceModule,
+  ],
   controllers: [ClientsController],
-  providers: [ClientsService, ClientsRepository],
+  providers: [
+    ClientsService,
+    ClientsRepository,
+    ClientDuplicationService,
+    { provide: 'FLOW_FILE_COPIER', useExisting: MediaService },
+  ],
   exports: [ClientsService, ClientsRepository],
 })
 export class ClientsModule {}

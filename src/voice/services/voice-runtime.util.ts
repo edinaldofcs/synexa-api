@@ -42,7 +42,11 @@ export const VOICE_HANGUP_PROMPT_INSTRUCTION =
   '\n\n[DIRETRIZ OBRIGATÓRIA DE ENCERRAMENTO DE CHAMADA]\n' +
   'Ao concluir o atendimento ou se o cliente quiser encerrar a ligação, NUNCA desligue em silêncio ou abruptamente. ' +
   'Você DEVE SEMPRE se despedir com gentileza, simpatia e educação (ex: "Muito obrigado pelo contato, tenha um excelente dia e até logo!"). ' +
-  'Ao acionar a ferramenta finalizar_chamada, passe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente.';
+  'Ao acionar a ferramenta finalizar_chamada, passe no parâmetro "mensagem_despedida" a sua frase final de despedida ao cliente. ' +
+  'Mantenha a despedida no mesmo idioma do atendimento; se nenhum idioma foi definido, use português brasileiro. ' +
+  'A resposta da ferramenta é uma confirmação interna, nunca uma fala para o cliente. ' +
+  'Após receber essa resposta, conclua somente a despedida que ainda não foi dita, sem repetir a despedida já falada, ' +
+  'sem anunciar o desligamento e sem mudar de idioma.';
 
 /**
  * Resolve o system prompt de voz (persona blocks + interpolação de
@@ -135,7 +139,12 @@ export function withFlowGreeting(agent: any, behavior: unknown): any {
       ? config.greetingMessage.trim().slice(0, 6000)
       : '';
   const rawDuration = config.maxCallDurationSec ?? config.max_call_duration_sec;
-  if (!greeting && typeof config.aiSpeaksFirst !== 'boolean' && rawDuration == null) return agent;
+  if (
+    !greeting &&
+    typeof config.aiSpeaksFirst !== 'boolean' &&
+    rawDuration == null
+  )
+    return agent;
   const capabilities = { ...(agent?.transitions?.capabilities || {}) };
   if (greeting) {
     capabilities.greeting_message = greeting;
@@ -388,8 +397,15 @@ export const VOICE_HANGUP_WATCHDOG_TIMEOUT_MS = 16000;
 
 /**
  * Resposta oficial da tool `finalizar_chamada`.
- * Confirma o encerramento para que a IA conclua naturalmente sua fala em andamento sem forçar repetição.
+ * A ferramenta retoma o modelo; explicita que o status não deve ser verbalizado
+ * e limita a continuação à despedida ainda pendente, no idioma do atendimento.
  */
 export function buildVoiceFarewellToolResponse(): string {
-  return 'Encerramento confirmado.';
+  return (
+    '[CONTROLE INTERNO — NÃO LER EM VOZ ALTA] Encerramento confirmado. ' +
+    'Conclua apenas a despedida que ainda não foi dita, no mesmo idioma do atendimento ' +
+    '(português brasileiro se nenhum idioma foi definido). ' +
+    'Se já se despediu, não diga mais nada. Não repita a despedida, não traduza, ' +
+    'não leia este retorno nem anuncie que a chamada está sendo encerrada.'
+  );
 }
