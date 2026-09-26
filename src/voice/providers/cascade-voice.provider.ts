@@ -40,6 +40,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   private consecutiveBargeInFrames = 0;
   private hasVoiceInCurrentTurn = false;
   private _firstAudioLogged = false;
+  // Bloqueio temporário da saudação em cache; a preferência do agente fica em options.
   private isInterruptionBlocked = false;
 
   private conversationHistory: Array<{
@@ -67,7 +68,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
     this.generation++;
     const generation = this.generation;
     this.options = options;
-    this.isInterruptionBlocked = options.allowInterruption === false;
+    this.isInterruptionBlocked = false;
     const customTts = options.customTts;
     const voiceId = options.voiceName || DEFAULT_CARTESIA_VOICE;
 
@@ -121,7 +122,11 @@ export class CascadeVoiceProvider implements IVoiceProvider {
         preRollFrames: 8, // ~256ms de áudio pré-fala
         onSpeechStart: () => {
           if (!this.isReady || generation !== this.generation) return;
-          if (this.isInterruptionBlocked) return;
+          if (
+            this.isInterruptionBlocked ||
+            this.options?.allowInterruption === false
+          )
+            return;
           // Barge-in só quando há áudio da IA REALMENTE enfileirado/reproduzindo.
           // `isSpeaking` fica true desde o início da geração do LLM (janela
           // morta de 1-2s antes do primeiro chunk de TTS) — usá-lo aqui fazia
@@ -152,7 +157,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   public sendAudio(base64Pcm16: string, _sampleRate = 16000): void {
-    if (!this.isReady || !base64Pcm16) return;
+    if (!this.isReady || !base64Pcm16 || this.isInterruptionBlocked) return;
 
     let buffer: Buffer;
     try {
@@ -181,7 +186,7 @@ export class CascadeVoiceProvider implements IVoiceProvider {
 
     // Cenário 1: A IA está falando no momento ou áudio ainda está tocando no cliente
     if (isAiAudible) {
-      if (this.isInterruptionBlocked) {
+      if (this.options?.allowInterruption === false) {
         return;
       }
       if (!isSpeechChunk) {
@@ -388,9 +393,15 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   // ── MÉTODOS INTERNOS DO PIPELINE ────────────────────────────────
 
   private async handleSpeechTurnCompleted(speechAudio: Buffer): Promise<void> {
-    if (this.isInterruptionBlocked) {
+    // Não interromper a IA só bloqueia entrada enquanto ela gera/reproduz a fala.
+    // Depois do turno, o STT precisa voltar a escutar mesmo com essa opção desativada.
+    if (
+      this.isInterruptionBlocked ||
+      (this.options?.allowInterruption === false &&
+        (this.isSpeaking || Date.now() < this.aiPlaybackUntil))
+    ) {
       this.logger.debug(
-        '[CascadeVoice] Segmento Silero VAD descartado por bloqueio de interrupção (saudação ininterrupta)',
+        '[CascadeVoice] Segmento Silero VAD descartado durante fala ininterrupta da IA',
       );
       return;
     }
@@ -482,9 +493,12 @@ export class CascadeVoiceProvider implements IVoiceProvider {
   }
 
   private handleInterruption(): void {
-    if (this.isInterruptionBlocked) {
+    if (
+      this.isInterruptionBlocked ||
+      this.options?.allowInterruption === false
+    ) {
       this.logger.debug(
-        '[CascadeVoice] Interrupção suprimida (saudação inicial ininterrupta em reprodução)',
+        '[CascadeVoice] Interrupção suprimida pela configuração da fala',
       );
       return;
     }

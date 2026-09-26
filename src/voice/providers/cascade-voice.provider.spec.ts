@@ -271,6 +271,155 @@ describe('CascadeVoiceProvider - VAD & Barge-In Debounce', () => {
       expect(onUserTranscript).toHaveBeenCalledWith('Olá, como posso ajudar?');
     });
 
+    it.each(['cartesia', 'inworld', 'custom'] as const)(
+      'retoma STT após a saudação com TTS %s e interrupções desabilitadas',
+      async (ttsProvider) => {
+        jest.useFakeTimers();
+        const onUserTranscript = jest.fn();
+        const onTurnComplete = jest.fn();
+        const provider = new CascadeVoiceProvider(
+          cartesiaService,
+          groqWhisperService,
+          sileroVadService,
+        );
+        try {
+          provider.connect({
+            apiKey: 'test',
+            systemPrompt: 'test',
+            groqApiKey: 'test',
+            allowInterruption: false,
+            ttsProvider,
+            ...(ttsProvider === 'custom'
+              ? {
+                  customTts: {
+                    baseUrl: 'https://tts.example.test',
+                    apiKey: 'test',
+                  },
+                }
+              : {}),
+            onUserTranscript,
+            onTurnComplete,
+          });
+          jest
+            .spyOn(global, 'fetch')
+            .mockResolvedValueOnce(
+              new Response(
+                'data: {"candidates":[{"content":{"parts":[{"text":"Olá, como posso ajudar?"}]}}]}\n',
+              ),
+            );
+          groqWhisperService.transcribePcm.mockResolvedValue(
+            'Quero agendar uma visita',
+          );
+          const speech = Buffer.from(createPcmChunk(2000, 8000), 'base64');
+
+          provider.sendText('Cumprimente o usuário');
+          await jest.advanceTimersByTimeAsync(0);
+          const callbacks = mockSession.pushText.mock.calls[0][3];
+          callbacks.onAudioChunk(Buffer.alloc(48000));
+          callbacks.onDone();
+          mockVadSession._opts.onSpeechEnd(speech);
+          expect(groqWhisperService.transcribePcm).not.toHaveBeenCalled();
+
+          await jest.advanceTimersByTimeAsync(1000);
+          expect(onTurnComplete).toHaveBeenCalledTimes(1);
+          mockVadSession._opts.onSpeechEnd(speech);
+          await jest.advanceTimersByTimeAsync(0);
+          expect(groqWhisperService.transcribePcm).toHaveBeenCalledTimes(1);
+          expect(onUserTranscript).toHaveBeenCalledWith(
+            'Quero agendar uma visita',
+          );
+        } finally {
+          provider.close();
+          jest.useRealTimers();
+        }
+      },
+    );
+
+    it('mantém a preferência de não interromper após desbloquear a saudação em cache', () => {
+      const onInterrupted = jest.fn();
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+        sileroVadService,
+      );
+      provider.connect({
+        apiKey: 'test',
+        systemPrompt: 'test',
+        allowInterruption: false,
+        onInterrupted,
+      });
+      provider.setInterruptionBlocked(true);
+      provider.setInterruptionBlocked(false);
+      Object.assign(provider, {
+        isSpeaking: true,
+        aiPlaybackUntil: Date.now() + 2000,
+      });
+
+      mockVadSession._opts.onSpeechStart();
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect(mockSession.cancelContext).not.toHaveBeenCalled();
+      provider.close();
+    });
+
+    it.each([true, false])(
+      'bloqueia apenas a reprodução da saudação em cache (allowInterruption=%s)',
+      (allowInterruption) => {
+        const provider = new CascadeVoiceProvider(
+          cartesiaService,
+          groqWhisperService,
+          sileroVadService,
+        );
+        provider.connect({
+          apiKey: 'test',
+          systemPrompt: 'test',
+          groqApiKey: 'test',
+          allowInterruption,
+        });
+        const speech = Buffer.from(createPcmChunk(2000, 8000), 'base64');
+        provider.setInterruptionBlocked(true);
+        mockVadSession._opts.onSpeechEnd(speech);
+        expect(groqWhisperService.transcribePcm).not.toHaveBeenCalled();
+
+        provider.setInterruptionBlocked(false);
+        mockVadSession._opts.onSpeechEnd(speech);
+        expect(groqWhisperService.transcribePcm).toHaveBeenCalledTimes(1);
+        provider.close();
+      },
+    );
+
+    it('respeita interrupções desabilitadas também no fallback acústico após o cache', () => {
+      const onInterrupted = jest.fn();
+      const provider = new CascadeVoiceProvider(
+        cartesiaService,
+        groqWhisperService,
+      );
+      provider.connect({
+        apiKey: 'test',
+        systemPrompt: 'test',
+        groqApiKey: 'test',
+        allowInterruption: false,
+        onInterrupted,
+      });
+      provider.setInterruptionBlocked(true);
+      provider.setInterruptionBlocked(false);
+      Object.assign(provider, {
+        isSpeaking: true,
+        aiPlaybackUntil: Date.now() + 2000,
+      });
+      const speech = createPcmChunk(2000, 8000);
+      provider.sendAudio(speech);
+      provider.sendAudio(speech);
+      provider.sendAudioStreamEnd();
+      expect(onInterrupted).not.toHaveBeenCalled();
+      expect(groqWhisperService.transcribePcm).not.toHaveBeenCalled();
+
+      Object.assign(provider, { isSpeaking: false, aiPlaybackUntil: 0 });
+      provider.sendAudio(speech);
+      provider.sendAudioStreamEnd();
+      expect(groqWhisperService.transcribePcm).toHaveBeenCalledTimes(1);
+      provider.close();
+    });
+
     it('deve descarregar buffer via flush no sendAudioStreamEnd e resetar no close', () => {
       const provider = new CascadeVoiceProvider(
         cartesiaService,
