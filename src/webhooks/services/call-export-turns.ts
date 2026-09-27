@@ -12,6 +12,8 @@ export interface ExportMessage {
 }
 export interface ExportTool {
   id?: string;
+  turn_id?: string;
+  agent_id?: string;
   tool_name: string;
   arguments?: unknown;
   result?: unknown;
@@ -87,13 +89,14 @@ export function buildCallTurns(
   }
   for (const [index, tool] of tools.entries()) {
     const audit = tool.audit;
+    const turnId = audit?.turn_id || tool.turn_id;
     get(
-      audit?.turn_id || `unlinked-tool-${tool.id || index}`,
-      !!audit?.turn_id,
+      turnId || `unlinked-tool-${tool.id || index}`,
+      !!turnId,
       tool.created_at,
     ).tools.push({
       id: tool.id || null,
-      agent_id: audit?.agent_id || null,
+      agent_id: audit?.agent_id || tool.agent_id || null,
       tool_name: tool.tool_name,
       arguments: redactAudit(tool.arguments ?? null),
       model_result: redactAudit(

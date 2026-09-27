@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { sealToolAudit, type HttpToolAudit } from './services/voice-tool-audit';
 import {
   CompanyVoiceQuotaService,
@@ -1089,8 +1090,12 @@ export class VoiceGateway
               }
               for (const call of functionCalls) {
                 const startedAt = Date.now();
+                const executionId = randomUUID();
                 const args = call.args || {};
                 sendDebug('tool', `IA solicitou a tool ${call.name}.`, {
+                  turn_id: auditTurnId,
+                  execution_id: executionId,
+                  agent_id: auditAgentId,
                   name: call.name,
                   arguments: args,
                 });
@@ -1116,6 +1121,20 @@ export class VoiceGateway
                     },
                   });
                   responseProvider.sendToolResponse(responses);
+
+                  sendDebug(
+                    'tool',
+                    'Encerramento solicitado.',
+                    {
+                      turn_id: auditTurnId,
+                      execution_id: executionId,
+                      agent_id: auditAgentId,
+                      name: call.name,
+                      arguments: args,
+                      response: responses[responses.length - 1].response,
+                    },
+                    'success',
+                  );
 
                   // Watchdog de segurança: se em 16s a fala não completar o turno,
                   // encerra graciosamente para não prender a conexão
@@ -1184,6 +1203,19 @@ export class VoiceGateway
                     name: call.name,
                     response: nativeRes,
                   });
+                  sendDebug(
+                    'tool',
+                    'Ferramenta nativa concluída.',
+                    {
+                      turn_id: auditTurnId,
+                      execution_id: executionId,
+                      agent_id: auditAgentId,
+                      name: call.name,
+                      arguments: args,
+                      response: nativeRes,
+                    },
+                    nativeRes.ok === false ? 'warn' : 'success',
+                  );
                   continue;
                 }
 
@@ -1318,6 +1350,10 @@ export class VoiceGateway
                     ? `Retorno recebido do subagente ${call.name}.`
                     : `Retorno recebido da API ${call.name}.`,
                   {
+                    turn_id: auditTurnId,
+                    execution_id: executionId,
+                    agent_id: auditAgentId,
+                    arguments: args,
                     name: call.name,
                     durationMs: Date.now() - startedAt,
                     response,
@@ -1332,6 +1368,10 @@ export class VoiceGateway
                       `🔗 Encadeamento acionado: ${step.from} ➔ ${step.to}`,
                       {
                         chainedFrom: step.from,
+                        name: step.to,
+                        turn_id: auditTurnId,
+                        execution_id: randomUUID(),
+                        agent_id: auditAgentId,
                         chainedTo: step.to,
                         arguments: step.arguments,
                         response: step.response,
@@ -1651,16 +1691,27 @@ export class VoiceGateway
                       generation !== session.providerGeneration
                     )
                       return;
-                    sendToClient({ type: 'user_transcript', text });
+                    sendToClient({
+                      type: 'user_transcript',
+                      text,
+                      turn_id: session.auditTurn.user(),
+                      agent_id: session.agentId,
+                    });
                     void handleUserTranscript(text, generation);
                   },
                   onAiTranscript: (text) => {
                     if (generation === session.providerGeneration) {
-                      sendToClient({ type: 'ai_transcript', text });
+                      sendToClient({
+                        type: 'ai_transcript',
+                        text,
+                        turn_id: session.auditTurn.assistant(),
+                        agent_id: session.agentId,
+                      });
                     }
                   },
                   onTurnComplete: () => {
                     if (generation === session.providerGeneration) {
+                      session.auditTurn.complete();
                       sendToClient({ type: 'turn_complete' });
                     }
                   },
@@ -2221,6 +2272,8 @@ export class VoiceGateway
 
                               sendToClient({
                                 type: 'ai_transcript',
+                                turn_id: session.auditTurn.assistant(),
+                                agent_id: session.agentId,
                                 text: res.text,
                               });
 
@@ -2318,8 +2371,18 @@ export class VoiceGateway
                     session.aiMessageBuffer =
                       this.telemetryService.createAiBuffer();
                   }
-                  sendToClient({ type: 'ai_transcript', text });
-                  await this.telemetryService.appendAiTranscript(session, text);
+                  const turnId = session.auditTurn.assistant();
+                  sendToClient({
+                    type: 'ai_transcript',
+                    text,
+                    turn_id: turnId,
+                    agent_id: session.agentId,
+                  });
+                  await this.telemetryService.appendAiTranscript(
+                    session,
+                    text,
+                    turnId,
+                  );
                 },
                 onUserTranscript: async (text) => {
                   if (
@@ -2330,10 +2393,17 @@ export class VoiceGateway
                   inactivity?.userActivity();
                   inactivity?.outputStarted();
                   sendDebug('audio', 'Fala do usuário transcrita.', { text });
-                  sendToClient({ type: 'user_transcript', text });
+                  const turnId = session.auditTurn.user();
+                  sendToClient({
+                    type: 'user_transcript',
+                    text,
+                    turn_id: turnId,
+                    agent_id: session.agentId,
+                  });
                   await this.telemetryService.persistUserTranscript(
                     session,
                     text,
+                    turnId,
                   );
                   await handleUserTranscript(text, generation);
                 },

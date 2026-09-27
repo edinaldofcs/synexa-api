@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import {
   VoiceAuditTurn,
   sealToolAudit,
@@ -663,27 +664,35 @@ export class VoiceCallSession {
         },
         onAiTranscript: async (text) => {
           if (this.isEnded) return;
+          const turnId = this.auditTurn.assistant();
           this.config.onEvent?.({
             type: 'flow_telephony_transcript',
+            turn_id: turnId,
+            agent_id: this.config.agentId,
+            occurred_at: new Date().toISOString(),
             channelId: this.id,
             clientId: this.config.clientId,
             role: 'ai',
             text,
           });
-          await this.appendAiTranscript(companyId, text);
+          await this.appendAiTranscript(companyId, text, turnId);
         },
         onUserTranscript: async (text) => {
           if (this.isEnded) return;
+          const turnId = this.auditTurn.user();
           this.inactivity?.userActivity();
           this.inactivity?.outputStarted();
           this.config.onEvent?.({
             type: 'flow_telephony_transcript',
+            turn_id: turnId,
+            agent_id: this.config.agentId,
+            occurred_at: new Date().toISOString(),
             channelId: this.id,
             clientId: this.config.clientId,
             role: 'user',
             text,
           });
-          await this.appendUserTranscript(companyId, text);
+          await this.appendUserTranscript(companyId, text, turnId);
         },
         onInterrupted: () => {
           if (this.isGreetingPlaying) {
@@ -724,6 +733,9 @@ export class VoiceCallSession {
             const generation = providerGeneration;
             const auditTurnId = this.auditTurn.id;
             const auditAgentId = selectedAgent?.id;
+            const executionIds = new Map(
+              functionCalls.map((call) => [call, randomUUID()]),
+            );
             let pendingAgentTransition: any = null;
             this.inactivity?.outputStarted();
             // O protocolo BidiGenerateContent do Gemini Live paralisa a síntese
@@ -764,6 +776,10 @@ export class VoiceCallSession {
               );
               this.config.onEvent?.({
                 type: 'flow_telephony_tool_call',
+                turn_id: auditTurnId,
+                execution_id: executionIds.get(call),
+                agent_id: auditAgentId,
+                occurred_at: new Date().toISOString(),
                 channelId: this.id,
                 clientId: this.config.clientId,
                 name: call.name,
@@ -937,25 +953,16 @@ export class VoiceCallSession {
                         ...returnedState,
                       };
 
-                      const matchedTool = agentToolsList.find(
-                        (candidate) => candidate.name === call.name,
-                      );
-
-                      this.config.onEvent?.({
-                        type: 'flow_telephony_tool_response',
-                        channelId: this.id,
-                        clientId: this.config.clientId,
-                        name: call.name,
-                        toolName: matchedTool?.apiName || call.name,
-                        apiId: matchedTool?.id,
-                        response,
-                      });
-
                       // Notifica encadeamento se houver _chainTrail
                       if (Array.isArray(apiResponse?._chainTrail)) {
                         for (const step of apiResponse._chainTrail) {
                           this.config.onEvent?.({
                             type: 'flow_telephony_chaining',
+                            turn_id: auditTurnId,
+                            execution_id: randomUUID(),
+                            agent_id: auditAgentId,
+                            occurred_at:
+                              step.timestamp || new Date().toISOString(),
                             channelId: this.id,
                             clientId: this.config.clientId,
                             from: step.from,
@@ -1047,6 +1054,26 @@ export class VoiceCallSession {
               );
             }
             if (generation !== providerGeneration) return;
+            responses.forEach((result, index) => {
+              const call = functionCalls[index];
+              const matchedTool = agentToolsList.find(
+                (candidate) => candidate.name === call.name,
+              );
+              this.config.onEvent?.({
+                type: 'flow_telephony_tool_response',
+                turn_id: auditTurnId,
+                execution_id: executionIds.get(call),
+                agent_id: auditAgentId,
+                occurred_at: new Date().toISOString(),
+                channelId: this.id,
+                clientId: this.config.clientId,
+                name: call.name,
+                toolName: matchedTool?.apiName || call.name,
+                apiId: matchedTool?.id,
+                arguments: call.args || {},
+                response: result.response,
+              });
+            });
             if (!this.isEnded && !pendingAgentTransition) {
               this.liveProvider.sendToolResponse(responses);
             }
@@ -1360,9 +1387,9 @@ export class VoiceCallSession {
   private async appendAiTranscript(
     companyId: string | undefined,
     text: string,
+    turnId = this.auditTurn.assistant(),
   ): Promise<void> {
     if (!this.conversationId || !companyId || !text) return;
-    const turnId = this.auditTurn.assistant();
     try {
       if (!this.aiMessageBuffer) {
         this.aiMessageBuffer = { messageId: null, content: '', lastPersist: 0 };
@@ -1407,9 +1434,9 @@ export class VoiceCallSession {
   private async appendUserTranscript(
     companyId: string | undefined,
     text: string,
+    turnId = this.auditTurn.user(),
   ): Promise<void> {
     if (!this.conversationId || !companyId || !text) return;
-    const turnId = this.auditTurn.user();
     try {
       if (!this.userMessageBuffer) {
         this.userMessageBuffer = {

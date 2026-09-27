@@ -1,6 +1,130 @@
 import { VoiceCallSession } from './voice-call-session';
 import { buildVoiceFarewellToolResponse } from '../services/voice-runtime.util';
 
+it.each(['live_api', 'hybrid'])(
+  'keeps late API and chain results on their original transcript turn in %s',
+  async (engine) => {
+    const events: any[] = [];
+    let resolveFirst!: (value: unknown) => void;
+    const firstResult = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const provider = {
+      connect: jest.fn(),
+      close: jest.fn(),
+      sendText: jest.fn(),
+      sendToolResponse: jest.fn(),
+    };
+    const tools = {
+      getAgentTools: jest.fn().mockResolvedValue([
+        {
+          id: 'api',
+          name: 'debts',
+          parameters: { type: 'OBJECT', properties: {} },
+        },
+      ]),
+      getAgentSubagents: jest.fn().mockResolvedValue([]),
+      execute: jest
+        .fn()
+        .mockReturnValueOnce(firstResult)
+        .mockResolvedValueOnce({ ok: false, error: 'timeout' }),
+    };
+    const session = new VoiceCallSession({
+      telephonyAdapter: {
+        id: 'call',
+        providerName: 'test',
+        metadata: { customVariables: {} },
+        onAudio: jest.fn(),
+        onCallEnd: jest.fn(),
+        start: jest.fn(),
+        close: jest.fn(),
+      } as any,
+      liveProvider: provider as any,
+      audioGateService: {
+        createSession: () => ({
+          notifyAiSpeakingChanged: jest.fn(),
+          getStats: () => undefined,
+        }),
+      } as any,
+      pricingService: {
+        calculateVoiceLiveCost: () => 0,
+        calculateHybridVoiceCost: () => 0,
+      } as any,
+      prisma: {
+        painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
+        painel_agents: { findMany: jest.fn().mockResolvedValue([]) },
+      } as any,
+      voiceToolsService: tools as any,
+      config: {
+        clientId: 'client',
+        agentId: 'agent',
+        selectedAgent: { id: 'agent' },
+        voiceEngine: engine as 'live_api' | 'hybrid',
+        onEvent: (event) => events.push(event),
+      },
+    });
+    try {
+      await session.start();
+      const callbacks = provider.connect.mock.calls[0][0];
+      await callbacks.onUserTranscript('Consulta inicial');
+      const pending = callbacks.onToolCall([
+        { id: 'call-1', name: 'debts', args: { customer: 1 } },
+      ]);
+      await new Promise((resolve) => setImmediate(resolve));
+      await callbacks.onAiTranscript('Consultando');
+      await callbacks.onUserTranscript('Consultar outro cliente');
+      await callbacks.onToolCall([
+        { id: 'call-2', name: 'debts', args: { customer: 2 } },
+      ]);
+      const response = {
+        ok: true,
+        balance: 10,
+        _chainTrail: [
+          { from: 'debts', to: 'offers', response: { plans: [1] } },
+        ],
+      };
+      resolveFirst(response);
+      await pending;
+      const transcripts = events.filter(
+        (event) => event.type === 'flow_telephony_transcript',
+      );
+      const starts = events.filter(
+        (event) => event.type === 'flow_telephony_tool_call',
+      );
+      const completions = events.filter(
+        (event) => event.type === 'flow_telephony_tool_response',
+      );
+      const chain = events.find(
+        (event) => event.type === 'flow_telephony_chaining',
+      );
+      expect(transcripts[0].turn_id).toBe(transcripts[1].turn_id);
+      expect(transcripts[2].turn_id).not.toBe(transcripts[0].turn_id);
+      expect(starts[0].turn_id).toBe(transcripts[0].turn_id);
+      expect(starts[1].turn_id).toBe(transcripts[2].turn_id);
+      expect(
+        completions.find(
+          (event) => event.execution_id === starts[0].execution_id,
+        ),
+      ).toMatchObject({ turn_id: transcripts[0].turn_id, response });
+      expect(
+        completions.find(
+          (event) => event.execution_id === starts[1].execution_id,
+        ),
+      ).toMatchObject({
+        turn_id: transcripts[2].turn_id,
+        response: { ok: false, error: 'timeout' },
+      });
+      expect(chain.turn_id).toBe(transcripts[0].turn_id);
+      expect(chain.execution_id).not.toBe(starts[0].execution_id);
+      expect(provider.sendToolResponse).toHaveBeenCalledWith([
+        { id: 'call-1', name: 'debts', response },
+      ]);
+    } finally {
+      await session.end('test-completed');
+    }
+  },
+);
+
 describe('Telephony farewell tool', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => {

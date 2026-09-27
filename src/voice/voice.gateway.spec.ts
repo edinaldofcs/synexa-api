@@ -161,6 +161,104 @@ function makeGateway(
 }
 
 describe('VoiceGateway security', () => {
+  it('sends matching source turn and execution IDs to browser transcripts and API debug events', async () => {
+    const connect = jest
+      .spyOn(GeminiLiveVoiceProvider.prototype, 'connect')
+      .mockImplementation(() => undefined);
+    try {
+      const prisma = {
+        tool_calls: { create: jest.fn().mockResolvedValue({}) },
+        painel_clients: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'bot',
+            metadata: { voice_engine: 'live_api' },
+          }),
+        },
+        painel_agents: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValue({ id: 'agent', interaction_mode: 'voice' }),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+        conversations: {
+          create: jest.fn().mockResolvedValue({ id: 'conversation' }),
+        },
+      };
+      const { gateway, voiceAuthService } = makeGateway(
+        { GEMINI_API_KEY: 'test-key', ENVIRONMENT: 'development' },
+        undefined,
+        new VoiceSessionFactory(
+          {} as any,
+          { get: () => 50 } as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          {} as any,
+        ),
+        prisma,
+      );
+      voiceAuthService.authenticateSession.mockResolvedValue({
+        company_id: 'company',
+      });
+      voiceAuthService.resolveClientId.mockResolvedValue('bot');
+      const telemetry = (gateway as any).telemetryService;
+      telemetry.persistUserTranscript = jest.fn();
+      telemetry.appendAiTranscript = jest.fn();
+      telemetry.createAiBuffer = jest.fn().mockReturnValue({ content: '' });
+      (gateway as any).voiceToolsService.execute = jest.fn().mockResolvedValue({
+        ok: true,
+        balance: 10,
+        _chainTrail: [
+          { from: 'debts', to: 'offers', response: { plans: [1] } },
+        ],
+      });
+      const socket = new FakeClientSocket();
+      gateway.handleConnection(socket as any);
+      socket.emit(
+        'message',
+        JSON.stringify({ type: 'start', clientId: 'bot' }),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      const callbacks = connect.mock.calls[0][0];
+      await callbacks.onUserTranscript?.('Consultar');
+      await callbacks.onToolCall?.([
+        { id: 'lookup-1', name: 'debts', args: { id: 1 } },
+      ]);
+      await callbacks.onAiTranscript?.('Saldo disponível');
+      const sent = socket.sent.map((value) => JSON.parse(value));
+      const user = sent.find((value) => value.type === 'user_transcript');
+      const ai = sent.find((value) => value.type === 'ai_transcript');
+      const tools = sent
+        .filter(
+          (value) => value.type === 'debug' && value.event.data?.execution_id,
+        )
+        .map((value) => value.event.data);
+      expect(user.turn_id).toEqual(expect.any(String));
+      expect(ai.turn_id).toBe(user.turn_id);
+      expect(tools).toHaveLength(3);
+      expect(tools.every((value) => value.turn_id === user.turn_id)).toBe(true);
+      expect(tools[0].execution_id).toBe(tools[1].execution_id);
+      expect(tools[2].execution_id).not.toBe(tools[0].execution_id);
+      expect(tools[2].name).toBe('offers');
+      expect(telemetry.persistUserTranscript).toHaveBeenCalledWith(
+        expect.anything(),
+        'Consultar',
+        user.turn_id,
+      );
+      expect(telemetry.appendAiTranscript).toHaveBeenCalledWith(
+        expect.anything(),
+        'Saldo disponível',
+        user.turn_id,
+      );
+    } finally {
+      connect.mockRestore();
+    }
+  });
   it('keeps native Live audio continuous even when the client enabled the acoustic gate', async () => {
     const connect = jest
       .spyOn(GeminiLiveVoiceProvider.prototype, 'connect')

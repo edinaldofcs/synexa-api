@@ -53,12 +53,12 @@ export class VoiceTelemetryService {
   async appendAiTranscript(
     session: VoiceClientSession,
     text: string,
+    turnId = session.auditTurn?.assistant(),
   ): Promise<void> {
     const buffer = session.aiMessageBuffer;
     if (!buffer) return;
     if (!session.conversationId || !session.companyId || !text) return;
 
-    const turnId = session.auditTurn?.assistant();
     try {
       if (buffer.content && text.startsWith(buffer.content)) {
         buffer.content = text;
@@ -115,9 +115,9 @@ export class VoiceTelemetryService {
   async persistUserTranscript(
     session: VoiceClientSession,
     text: string,
+    turnId = session.auditTurn?.user(),
   ): Promise<void> {
     if (!session.conversationId || !session.companyId || !text) return;
-    const turnId = session.auditTurn?.user();
     try {
       await this.prisma.messages.create({
         data: {

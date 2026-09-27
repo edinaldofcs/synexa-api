@@ -91,12 +91,20 @@ export class WebhooksController {
         variables: body.variables,
         messages: includeTranscript
           ? body.transcript.map((entry) => ({
+              id: entry.id,
+              metadata: entry.turn_id
+                ? { turn_id: entry.turn_id, agent_id: entry.agent_id }
+                : undefined,
               sender_type: entry.role === 'user' ? 'customer' : 'ai',
               content: entry.text,
-              created_at: null,
+              created_at: entry.created_at ?? null,
             }))
           : undefined,
         tools: body.tools.map((tool) => ({
+          id: tool.id,
+          turn_id: tool.turn_id,
+          agent_id: tool.agent_id,
+          created_at: tool.created_at ?? null,
           tool_name: tool.tool_name,
           arguments: tool.arguments ?? null,
           status:
@@ -106,7 +114,7 @@ export class WebhooksController {
                 ? 'completed'
                 : 'failed',
           result: tool.result ?? null,
-          completed_at: null,
+          completed_at: tool.completed_at ?? null,
         })),
       }),
     };

@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsISO8601,
   IsObject,
   IsOptional,
   IsString,
@@ -16,12 +17,20 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-class PreviewTranscriptDto {
+class PreviewCorrelationDto {
+  @IsOptional() @IsString() @MaxLength(200) id?: string;
+  @IsOptional() @IsUUID() turn_id?: string;
+  @IsOptional() @IsUUID() agent_id?: string;
+  @IsOptional() @IsISO8601() created_at?: string;
+}
+
+class PreviewTranscriptDto extends PreviewCorrelationDto {
   @IsIn(['user', 'ai']) role: 'user' | 'ai';
   @IsString() @MaxLength(20000) text: string;
 }
 
-class PreviewToolDto {
+class PreviewToolDto extends PreviewCorrelationDto {
+  @IsOptional() @IsISO8601() completed_at?: string;
   @IsOptional() @IsObject() arguments?: Record<string, unknown>;
   @IsString() @MaxLength(200) tool_name: string;
   @IsIn(['executing', 'success', 'error']) status: string;

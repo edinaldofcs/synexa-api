@@ -13,6 +13,68 @@ const previewBody = {
 };
 
 describe('read-only call preview', () => {
+  it('joins messages and repeated/chained API calls by source IDs without requiring private HTTP audit', async () => {
+    const { controller } = setup(true, true);
+    const first = '10000000-0000-4000-8000-000000000001';
+    const second = '10000000-0000-4000-8000-000000000002';
+    const body: CallPreviewDto = {
+      ...previewBody,
+      payload_version: 2,
+      transcript: [
+        { role: 'user', text: 'Consultar', turn_id: first },
+        { role: 'ai', text: 'Localizei', turn_id: first },
+        { role: 'user', text: 'Repetir', turn_id: second },
+      ],
+      tools: [
+        {
+          id: 'lookup-2',
+          tool_name: 'debts',
+          status: 'success',
+          turn_id: second,
+          result: { balance: 20 },
+        },
+        {
+          id: 'lookup-1',
+          tool_name: 'debts',
+          status: 'success',
+          turn_id: first,
+          result: { balance: 10 },
+        },
+        {
+          id: 'chain-1',
+          tool_name: 'offers',
+          status: 'success',
+          turn_id: first,
+          result: { plans: [1] },
+        },
+      ],
+    };
+    expect(
+      await validate(plainToInstance(CallPreviewDto, body), {
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    ).toHaveLength(0);
+    const result = await controller.previewCall(
+      { id: 'user', company_id: 'company' },
+      'client',
+      body,
+    );
+    expect(result.payload.call.turns).toHaveLength(2);
+    expect(result.payload.call.turns[0]).toMatchObject({
+      id: first,
+      correlation: 'recorded',
+      messages: [{ text: 'Consultar' }, { text: 'Localizei' }],
+      tools: [
+        { id: 'lookup-1', audit_available: false },
+        { id: 'chain-1', audit_available: false },
+      ],
+    });
+    expect(result.payload.call.turns[1]).toMatchObject({
+      id: second,
+      tools: [{ id: 'lookup-2' }],
+    });
+  });
   function setup(owned = true, includeTranscript = false) {
     const prisma = {
       painel_clients: {
