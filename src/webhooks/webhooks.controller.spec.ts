@@ -93,7 +93,52 @@ describe('read-only call preview', () => {
         'client',
         previewBody,
       ),
-    ).toMatchObject({ configured: false, include_transcript: false });
+    ).toMatchObject({
+      configured: false,
+      include_transcript: true,
+      payload_version: 2,
+      payload: {
+        schema_version: 2,
+        call: {
+          turns: expect.arrayContaining([
+            expect.objectContaining({
+              messages: [expect.objectContaining({ text: 'Teste' })],
+            }),
+          ]),
+        },
+      },
+    });
+  });
+
+  it('can simulate messages and v2 without changing a saved destination', async () => {
+    const { controller, prisma } = setup(true, false);
+    const result = await controller.previewCall(
+      { id: 'user', company_id: 'company' },
+      'client',
+      { ...previewBody, include_transcript: true, payload_version: 2 },
+    );
+    expect(result).toMatchObject({
+      configured: true,
+      settings_overridden: true,
+      include_transcript: true,
+    });
+    const call = JSON.parse(JSON.stringify(result.payload)).call;
+    expect(call).not.toHaveProperty('tools');
+    expect(call).not.toHaveProperty('transcript');
+    expect(call.turns.flatMap((turn: any) => turn.messages)).toEqual([
+      expect.objectContaining({ text: 'Teste', role: 'customer' }),
+    ]);
+    expect(prisma.webhook_endpoints.findFirst).toHaveBeenCalledTimes(1);
+    const saved = await controller.previewCall(
+      { id: 'user', company_id: 'company' },
+      'client',
+      previewBody,
+    );
+    expect(saved).toMatchObject({
+      include_transcript: false,
+      payload_version: 1,
+      settings_overridden: false,
+    });
   });
 
   it('validates nested inputs and rejects extra tenant fields', async () => {
@@ -107,6 +152,8 @@ describe('read-only call preview', () => {
       ...previewBody,
       company_id: 'foreign',
       duration_seconds: -1,
+      payload_version: 3,
+      include_transcript: 'true',
       transcript: [{ role: 'system', text: 123 }],
       tools: [{ status: 'bogus' }],
     });
@@ -118,6 +165,8 @@ describe('read-only call preview', () => {
       expect.arrayContaining([
         'company_id',
         'duration_seconds',
+        'payload_version',
+        'include_transcript',
         'transcript',
         'tools',
       ]),
@@ -149,6 +198,7 @@ it('refuses listing without a company scope', async () => {
 });
 it('preserves the export policy on a partial enabled update', async () => {
   const policy = {
+    payload_version: 2,
     retention_hours: 12,
     include_transcript: true,
     max_retries: 5,

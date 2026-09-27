@@ -8,6 +8,7 @@ import {
 
 /** Shared by delivery and the read-only Flow preview. */
 export function buildCallExportPayload(input: {
+  payloadVersion?: 1 | 2;
   eventId: string;
   companyId: string;
   clientId: string;
@@ -25,7 +26,7 @@ export function buildCallExportPayload(input: {
   const { conversation, endedAt, interaction } = input;
   const metadata = (conversation.metadata || {}) as Record<string, unknown>;
   return {
-    schema_version: 1,
+    schema_version: input.payloadVersion ?? 1,
     event: 'call.completed',
     event_id: input.eventId,
     occurred_at: endedAt.toISOString(),
@@ -60,12 +61,22 @@ export function buildCallExportPayload(input: {
       customer_name: interaction?.client_name || null,
       variables: input.variables || interaction?.context_variables || {},
       summary: interaction?.summary || null,
-      transcript: input.messages?.map(
-        ({ metadata: _metadata, ...message }) => message,
-      ),
+      transcript:
+        input.payloadVersion === 2
+          ? undefined
+          : input.messages?.map(
+              ({ metadata: _metadata, ...message }) => message,
+            ),
       transcript_included: input.messages !== undefined,
-      tools: input.tools.map(({ audit: _audit, ...tool }) => redactAudit(tool)),
-      turns: buildCallTurns(input.messages, input.tools),
+      tools:
+        input.payloadVersion === 2
+          ? undefined
+          : input.tools.map(({ audit: _audit, ...tool }) => redactAudit(tool)),
+      turns: buildCallTurns(
+        input.messages,
+        input.tools,
+        input.payloadVersion === 2,
+      ),
       usage: interaction
         ? {
             total_tokens: interaction.total_tokens,

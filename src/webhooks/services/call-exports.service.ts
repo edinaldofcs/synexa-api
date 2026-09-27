@@ -10,6 +10,7 @@ import { QueueService } from '../../queue/queue.service';
 import { MediaService } from '../../media/media.service';
 
 type Destination = {
+  payload_version?: 1 | 2;
   url: string;
   secret: string;
   include_transcript: boolean;
@@ -215,6 +216,7 @@ export class CallExportsService implements OnModuleInit {
     ]);
     const endedAt = conversation.closed_at || conversation.voice_finalized_at!;
     const payload = buildCallExportPayload({
+      payloadVersion: destination.payload_version === 2 ? 2 : 1,
       eventId: row.id,
       companyId: row.company_id,
       clientId: row.client_id,

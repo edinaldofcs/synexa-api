@@ -54,14 +54,24 @@ export class WebhooksController {
       },
       select: { retry_policy: true },
     });
-    const includeTranscript =
-      (endpoint?.retry_policy as Record<string, unknown> | null)
-        ?.include_transcript === true;
+    const policy = endpoint?.retry_policy as Record<string, unknown> | null;
+    const savedTranscript = endpoint
+      ? policy?.include_transcript === true
+      : true;
+    const savedVersion = endpoint && policy?.payload_version !== 2 ? 1 : 2;
+    const includeTranscript = body.include_transcript ?? savedTranscript;
+    const payloadVersion = body.payload_version ?? savedVersion;
     const endedAt = new Date();
     return {
       configured: !!endpoint,
       include_transcript: includeTranscript,
+      payload_version: payloadVersion,
+      settings_overridden:
+        !!endpoint &&
+        (includeTranscript !== savedTranscript ||
+          payloadVersion !== savedVersion),
       payload: buildCallExportPayload({
+        payloadVersion,
         eventId: 'preview-event',
         companyId: ctx.companyId,
         clientId,
@@ -169,6 +179,7 @@ export class WebhooksController {
             max_retries: 3,
             retention_hours: body.retention_hours ?? 24,
             include_transcript: body.include_transcript ?? false,
+            payload_version: body.payload_version ?? 1,
           },
         },
       })
@@ -234,6 +245,8 @@ export class WebhooksController {
               body.retention_hours ?? policy.retention_hours ?? 24,
             include_transcript:
               body.include_transcript ?? policy.include_transcript ?? false,
+            payload_version:
+              body.payload_version ?? policy.payload_version ?? 1,
           },
         },
       })

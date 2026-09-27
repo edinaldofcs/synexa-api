@@ -3,6 +3,7 @@ import {
   Allow,
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsObject,
@@ -28,6 +29,8 @@ class PreviewToolDto {
 }
 
 export class CallPreviewDto {
+  @IsOptional() @IsBoolean() include_transcript?: boolean;
+  @IsOptional() @IsIn([1, 2]) payload_version?: 1 | 2;
   @IsOptional() @IsUUID() agent_id?: string;
   @IsOptional() @IsString() @MaxLength(200) caller_number?: string;
   @IsOptional() @IsString() @MaxLength(200) dialed_number?: string;

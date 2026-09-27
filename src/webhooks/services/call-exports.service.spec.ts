@@ -103,66 +103,79 @@ function setup(status = 'pending') {
 
 beforeEach(() => sender.mockReset());
 
-it('decrypts private HTTP evidence only for the webhook and joins it to the recorded transcript turn', async () => {
-  sender.mockResolvedValue(503);
-  const { row, service, prisma } = setup('collecting');
-  const destination = JSON.parse(decrypt(row.destination_enc, key));
-  row.destination_enc = encrypt(
-    JSON.stringify({ ...destination, include_transcript: true }),
-    key,
-  );
-  prisma.messages.findMany.mockResolvedValue([
-    {
-      id: 'm',
-      sender_type: 'customer',
-      content: 'Consultar saldo',
-      metadata: { turn_id: 't' },
-      created_at: new Date(),
-    },
-  ]);
-  prisma.tool_calls.findMany.mockResolvedValue([
-    {
-      id: 'tool',
-      tool_name: 'lookup',
-      arguments: { customer: '123' },
-      result: { balance: 10 },
-      status: 'success',
-      audit_enc: encrypt(
-        JSON.stringify({
-          turn_id: 't',
-          agent_id: 'agent',
-          http_exchanges: [
-            {
-              request: { body: { customer: '123' } },
-              response: { body: { balance: 10, extra: 'only-webhook' } },
-            },
-          ],
-        }),
-        key,
-      ),
-    },
-  ]);
-  await service.process(row.id);
-  const payload = JSON.parse(decrypt(row.payload_enc, key));
-  expect(payload.call.turns[0]).toMatchObject({
-    id: 't',
-    messages: [{ text: 'Consultar saldo' }],
-    tools: [
+it.each([1, 2])(
+  'decrypts private HTTP evidence only for the webhook and joins it to the recorded transcript turn (v%s)',
+  async (payloadVersion) => {
+    sender.mockResolvedValue(503);
+    const { row, service, prisma } = setup('collecting');
+    const destination = JSON.parse(decrypt(row.destination_enc, key));
+    row.destination_enc = encrypt(
+      JSON.stringify({
+        ...destination,
+        include_transcript: true,
+        payload_version: payloadVersion,
+      }),
+      key,
+    );
+    prisma.messages.findMany.mockResolvedValue([
       {
-        arguments: { customer: '123' },
-        model_result: { balance: 10 },
-        http_exchanges: [{ response: { body: { extra: 'only-webhook' } } }],
+        id: 'm',
+        sender_type: 'customer',
+        content: 'Consultar saldo',
+        metadata: { turn_id: 't' },
+        created_at: new Date(),
       },
-    ],
-  });
-  expect(JSON.stringify(payload)).not.toContain('audit_enc');
-  expect(payload.call.tools[0]).not.toHaveProperty('audit');
-  expect(prisma.tool_calls.findMany.mock.calls[0][0].where).toEqual({
-    conversation_id: 'call',
-    company_id: 'company',
-    client_id: 'client',
-  });
-});
+    ]);
+    prisma.tool_calls.findMany.mockResolvedValue([
+      {
+        id: 'tool',
+        tool_name: 'lookup',
+        arguments: { customer: '123' },
+        result: { balance: 10 },
+        status: 'success',
+        audit_enc: encrypt(
+          JSON.stringify({
+            turn_id: 't',
+            agent_id: 'agent',
+            http_exchanges: [
+              {
+                request: { body: { customer: '123' } },
+                response: { body: { balance: 10, extra: 'only-webhook' } },
+              },
+            ],
+          }),
+          key,
+        ),
+      },
+    ]);
+    await service.process(row.id);
+    const payload = JSON.parse(decrypt(row.payload_enc, key));
+    expect(payload.call.turns[0]).toMatchObject({
+      id: 't',
+      messages: [{ text: 'Consultar saldo' }],
+      tools: [
+        {
+          arguments: { customer: '123' },
+          model_result: { balance: 10 },
+          http_exchanges: [{ response: { body: { extra: 'only-webhook' } } }],
+        },
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain('audit_enc');
+    expect(payload.schema_version).toBe(payloadVersion);
+    if (payloadVersion === 1)
+      expect(payload.call.tools[0]).not.toHaveProperty('audit');
+    else {
+      expect(payload.call).not.toHaveProperty('tools');
+      expect(payload.call).not.toHaveProperty('transcript');
+    }
+    expect(prisma.tool_calls.findMany.mock.calls[0][0].where).toEqual({
+      conversation_id: 'call',
+      company_id: 'company',
+      client_id: 'client',
+    });
+  },
+);
 
 it('retries corrupted audit evidence rather than silently dropping it from delivery', async () => {
   const { row, service, prisma } = setup('collecting');

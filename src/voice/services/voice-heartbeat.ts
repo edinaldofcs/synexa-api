@@ -70,6 +70,7 @@ export async function createVoiceConversation(
               url: endpoint.url,
               secret: endpoint.secret_hash,
               include_transcript: policy.include_transcript === true,
+              payload_version: policy.payload_version === 2 ? 2 : 1,
               retention_hours: retentionHours,
             }),
             process.env.ENCRYPTION_KEY || '',

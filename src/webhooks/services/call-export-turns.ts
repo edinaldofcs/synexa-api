@@ -29,6 +29,7 @@ export interface ExportTool {
 export function buildCallTurns(
   messages: ExportMessage[] | undefined,
   tools: ExportTool[],
+  compact = false,
 ) {
   const turns = new Map<
     string,
@@ -95,7 +96,9 @@ export function buildCallTurns(
       agent_id: audit?.agent_id || null,
       tool_name: tool.tool_name,
       arguments: redactAudit(tool.arguments ?? null),
-      model_result: redactAudit(tool.result ?? null),
+      model_result: redactAudit(
+        compact ? withoutChainTrail(tool.result) : (tool.result ?? null),
+      ),
       status: tool.status,
       started_at: tool.created_at ?? null,
       completed_at: tool.completed_at ?? null,
@@ -108,4 +111,12 @@ export function buildCallTurns(
       (a.started_at ? new Date(a.started_at).getTime() : 0) -
       (b.started_at ? new Date(b.started_at).getTime() : 0),
   );
+}
+
+/** The executor's debug trail repeats child responses already represented by executions. */
+function withoutChainTrail(result: unknown): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result))
+    return result ?? null;
+  const { _chainTrail: _trail, ...data } = result as Record<string, unknown>;
+  return data;
 }
