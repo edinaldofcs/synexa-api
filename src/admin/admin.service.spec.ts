@@ -464,3 +464,84 @@ describe('AdminService - listUsers', () => {
     ).rejects.toThrow('company_id inválido');
   });
 });
+
+describe('AdminService - resetUserPassword delivery', () => {
+  const originalEnvironment = process.env.ENVIRONMENT;
+  const reset = jest.fn();
+  beforeEach(() => {
+    process.env.ENVIRONMENT = 'production';
+    reset.mockReset();
+  });
+  afterEach(() => {
+    if (originalEnvironment === undefined) delete process.env.ENVIRONMENT;
+    else process.env.ENVIRONMENT = originalEnvironment;
+    jest.restoreAllMocks();
+  });
+  function setup() {
+    const prisma = {
+      users: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user',
+          email: 'user@example.test',
+          company_id: 'company',
+          role: 'operator',
+        }),
+        update: jest.fn(),
+      },
+    };
+    const service = new AdminService(prisma as never, {} as never);
+    jest
+      .spyOn(service as any, 'adminClient', 'get')
+      .mockReturnValue({ auth: { resetPasswordForEmail: reset } });
+    return { service, prisma };
+  }
+  const actor = { id: 'admin', role: 'company_admin', company_id: 'company' };
+  it.each([
+    { status: 429, code: 'over_email_send_rate_limit' },
+    { status: 429 },
+    { status: 400, code: 'over_email_send_rate_limit' },
+  ])('returns 429 for the provider email limit: %j', async (error) => {
+    const { service, prisma } = setup();
+    reset.mockResolvedValue({ error });
+    const result = await service
+      .resetUserPassword(actor, 'user')
+      .catch((e) => e);
+    expect(result.getStatus()).toBe(429);
+    expect(result.getResponse()).toMatchObject({
+      code: 'PASSWORD_RESET_EMAIL_RATE_LIMIT',
+      message: expect.stringContaining('limite de envio'),
+    });
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+  it('does not expose provider errors or claim the email was sent', async () => {
+    const { service } = setup();
+    reset.mockResolvedValue({
+      error: { status: 500, message: 'sensitive upstream detail' },
+    });
+    const result = await service
+      .resetUserPassword(actor, 'user')
+      .catch((e) => e);
+    expect(result.getStatus()).toBe(502);
+    expect(result.getResponse()).toMatchObject({
+      code: 'PASSWORD_RESET_EMAIL_UNAVAILABLE',
+    });
+    expect(JSON.stringify(result.getResponse())).not.toContain(
+      'sensitive upstream detail',
+    );
+  });
+  it('returns success only after the email provider accepts the request', async () => {
+    const { service } = setup();
+    reset.mockResolvedValue({ error: null });
+    await expect(
+      service.resetUserPassword(actor, 'user'),
+    ).resolves.toMatchObject({ success: true });
+    expect(reset).toHaveBeenCalledWith('user@example.test');
+  });
+  it('does not contact the provider for another tenant', async () => {
+    const { service } = setup();
+    await expect(
+      service.resetUserPassword({ ...actor, company_id: 'another' }, 'user'),
+    ).rejects.toThrow();
+    expect(reset).not.toHaveBeenCalled();
+  });
+});

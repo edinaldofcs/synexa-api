@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   HttpException,
+  HttpStatus,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -567,7 +568,29 @@ export class AdminService {
     const { error } = await this.adminClient.auth.resetPasswordForEmail(
       target.email,
     );
-    if (error) throw new InternalServerErrorException(error.message);
+    if (error) {
+      const rateLimited =
+        error.status === 429 ||
+        error.code === 'over_email_send_rate_limit' ||
+        error.code === 'over_request_rate_limit';
+      this.logger.warn({
+        event: 'password_reset_email_failed',
+        provider: 'supabase',
+        reason: rateLimited ? 'rate_limit' : 'delivery_failed',
+        status: error.status,
+      });
+      throw new HttpException(
+        {
+          code: rateLimited
+            ? 'PASSWORD_RESET_EMAIL_RATE_LIMIT'
+            : 'PASSWORD_RESET_EMAIL_UNAVAILABLE',
+          message: rateLimited
+            ? 'O limite de envio de e-mails foi atingido. Aguarde antes de tentar novamente. Se persistir, revise a configuração de e-mail da autenticação.'
+            : 'Não foi possível enviar o e-mail de redefinição. Tente novamente mais tarde.',
+        },
+        rateLimited ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.BAD_GATEWAY,
+      );
+    }
 
     return { success: true, message: 'Email de redefinição enviado' };
   }
