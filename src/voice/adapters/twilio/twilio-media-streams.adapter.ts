@@ -108,6 +108,10 @@ export class TwilioMediaStreamsAdapter implements ITelephonyAdapter {
     this.pacer.enqueue(pcm24k);
   }
 
+  public finishAudio(): void {
+    this.pacer.finish();
+  }
+
   /**
    * Barge-in: descarta o áudio enfileirado local E o buffer do Twilio
    * (`{event:'clear'}`) — a IA para de falar imediatamente.

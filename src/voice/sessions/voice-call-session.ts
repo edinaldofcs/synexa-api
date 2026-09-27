@@ -754,6 +754,7 @@ export class VoiceCallSession {
         },
         onTurnComplete: () => {
           if (this.isEnded) return;
+          this.telephonyAdapter.finishAudio?.();
           this.auditTurn.complete();
           this.inactivity?.outputComplete();
           this.isAiSpeaking = false;
@@ -1298,6 +1299,7 @@ export class VoiceCallSession {
             this.gateSession?.notifyAiSpeakingChanged(true);
             this.liveAudioTap?.('ai', res.audioBuffer, 24000);
             this.telephonyAdapter.sendAudio(res.audioBuffer);
+            this.telephonyAdapter.finishAudio?.();
             this.inactivity?.outputAudio(res.audioBuffer.length);
             this.inactivity?.outputComplete();
 

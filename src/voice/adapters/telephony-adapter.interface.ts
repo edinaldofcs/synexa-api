@@ -45,9 +45,13 @@ export interface ITelephonyAdapter {
   start(): Promise<void>;
 
   /**
-   * Envia um bloco de áudio PCM 16-bit LE de volta para o telefone/cliente.
+   * Envia um bloco PCM mono, signed 16-bit little-endian, 24 kHz.
+   * O adapter converte para a taxa e o codec exigidos pelo transporte.
    */
   sendAudio(pcm16: Buffer): Promise<void> | void;
+
+  /** Fim da geração do turno: escoa filtro e frame parcial sem descartar a fila. */
+  finishAudio?(): void;
 
   /**
    * Envia um dígito DTMF para a chamada (se suportado).

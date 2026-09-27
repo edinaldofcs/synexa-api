@@ -20,7 +20,7 @@ export class CallFlexAdapter implements ITelephonyAdapter {
 
   public readonly id: string;
   public readonly providerName = 'callflex';
-  public readonly sampleRate = 8000;
+  public readonly sampleRate: number;
   public metadata: TelephonyCallMetadata;
 
   private ws: WebSocket | null = null;
@@ -32,6 +32,7 @@ export class CallFlexAdapter implements ITelephonyAdapter {
   private variableCallback: ((key: string, value: string) => void) | null =
     null;
   private isClosed = false;
+  private readonly pacer: TelephonyOutboundPacer;
 
   constructor(config: CallFlexAdapterConfig) {
     this.metadata = config.metadata || {};
@@ -39,6 +40,11 @@ export class CallFlexAdapter implements ITelephonyAdapter {
       this.metadata.uniqueId ||
       `cf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     this.audioFormat = config.audioFormat || 'g711_ulaw';
+    this.sampleRate = this.audioFormat === 'pcm_16k' ? 16000 : 8000;
+    this.pacer = new TelephonyOutboundPacer(
+      (frame) => this.sendAudioFrame(frame),
+      { sampleRate: this.sampleRate },
+    );
 
     if (config.wsSocket) {
       this.ws = config.wsSocket;
@@ -73,6 +79,7 @@ export class CallFlexAdapter implements ITelephonyAdapter {
     this.ws.on('close', () => {
       if (!this.isClosed) {
         this.isClosed = true;
+        this.pacer.dispose();
         this.callEndCallback?.('callflex_disconnected');
       }
     });
@@ -179,10 +186,6 @@ export class CallFlexAdapter implements ITelephonyAdapter {
     this.callStartCallback?.();
   }
 
-  private readonly pacer = new TelephonyOutboundPacer(
-    (frame) => this.sendAudioFrame(frame),
-    { sampleRate: 24000 },
-  );
   public setWaitingMusic(pcm: Buffer, volume: number): void {
     this.pacer.setWaitingMusic(pcm, volume);
   }
@@ -195,7 +198,12 @@ export class CallFlexAdapter implements ITelephonyAdapter {
   public clearQueuedAudio(): void {
     this.pacer.clear();
   }
+
+  public finishAudio(): void {
+    this.pacer.finish();
+  }
   public sendAudio(pcm: Buffer): void {
+    if (this.isClosed) return;
     this.pacer.enqueue(pcm);
   }
 
@@ -205,13 +213,11 @@ export class CallFlexAdapter implements ITelephonyAdapter {
 
     let outgoingBuffer: Buffer;
     if (this.audioFormat === 'g711_ulaw') {
-      const pcm8k = AudioResampler.resample(pcm16, 24000, 8000);
-      outgoingBuffer = G711Codec.encodeUlaw(pcm8k);
+      outgoingBuffer = G711Codec.encodeUlaw(pcm16);
     } else if (this.audioFormat === 'g711_alaw') {
-      const pcm8k = AudioResampler.resample(pcm16, 24000, 8000);
-      outgoingBuffer = G711Codec.encodeAlaw(pcm8k);
+      outgoingBuffer = G711Codec.encodeAlaw(pcm16);
     } else {
-      outgoingBuffer = AudioResampler.resample(pcm16, 24000, 8000);
+      outgoingBuffer = pcm16;
     }
 
     this.ws.send(outgoingBuffer);

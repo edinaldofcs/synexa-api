@@ -333,7 +333,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
               channelId: String(channelId),
               uniqueId: asteriskChannel || channelId,
               protocol: 'SIP / AudioSocket (Asterisk 20)',
-              codec: 'G.711u (PCMU 8kHz)',
+              codec: 'PCM s16le mono 8 kHz (AudioSocket)',
               sampleRate: 8000,
               sipHeaders: {
                 'Call-ID': `sip-${channelId}@asterisk`,
@@ -589,7 +589,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
           channelId: String(channelId),
           uniqueId: asteriskChannel || channelId,
           protocol: 'SIP / AudioSocket (Asterisk 20)',
-          codec: 'G.711u (PCMU 8kHz)',
+          codec: 'PCM s16le mono 8 kHz (AudioSocket)',
           sampleRate: 8000,
           sipHeaders: {
             'Call-ID': `sip-${channelId}@asterisk`,
@@ -668,7 +668,7 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
             channelId: String(channelId),
             uniqueId: asteriskChannel || channelId,
             protocol: 'SIP / AudioSocket (Asterisk 20)',
-            codec: 'G.711u (PCMU 8kHz)',
+            codec: 'PCM s16le mono 8 kHz (AudioSocket)',
             sampleRate: 8000,
             sipHeaders: {
               'Call-ID': `sip-${channelId}@asterisk`,

@@ -119,6 +119,10 @@ export class VonageVoiceAdapter implements ITelephonyAdapter {
     this.pacer.enqueue(pcm24k);
   }
 
+  public finishAudio(): void {
+    this.pacer.finish();
+  }
+
   /**
    * Barge-in: descarta o áudio enfileirado local E o buffer de reprodução
    * do Vonage (`{"action":"clear"}`) — a IA para de falar imediatamente.

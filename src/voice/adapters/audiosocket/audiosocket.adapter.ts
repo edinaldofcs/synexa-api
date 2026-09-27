@@ -147,6 +147,10 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
     this.pacer.clear();
   }
 
+  public finishAudio(): void {
+    this.pacer.finish();
+  }
+
   public hangup(reason = 'normal_hangup'): void {
     if (this.isClosed) return;
     this.logger.log(`📞 [AudioSocket] Encerrando chamada (${reason})`);

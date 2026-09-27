@@ -145,20 +145,22 @@ describe('AudioSocketAdapter', () => {
       expect(first.length).toBe(3 + 320);
       const firstPayload = first.subarray(3);
       expect(firstPayload.readInt16LE(0)).toBe(0);
-      expect(firstPayload.readInt16LE(2)).not.toBe(0);
-      expect(firstPayload.subarray(32).every((v) => v === 0x11)).toBe(true);
+      // O FIR causal tem transiente inicial de até 254 amostras @24kHz.
+      expect(firstPayload.readInt16LE(200)).toBe(0x1111);
+      expect(firstPayload.subarray(180).every((v) => v === 0x11)).toBe(true);
 
-      // Segundo chunk: resto 14 + 974 = 988 → 3 frames + 28 de resto.
-      // Frame da junção começa com o resto (0x11) e termina em 0x22.
+      // A fase atravessa os chunks; a junção é filtrada sem silêncio inserido.
       adapter.sendAudio(Buffer.alloc(2920, 0x22));
       jest.advanceTimersByTime(80);
       const frames = audioFramesFrom(writes);
       // 1 (chunk1) + 4 ticks após o chunk2
       expect(frames.length).toBe(5);
       const junction = frames[3].subarray(3);
-      expect(junction[13]).toBe(0x11);
-      expect(junction[14]).toBe(0x22);
-      expect(junction[319]).toBe(0x22);
+      expect(junction.readInt16LE(0)).toBe(0x1111);
+      expect(junction.readInt16LE(318)).toBe(0x2222);
+      for (let i = 0; i < junction.length; i += 2) {
+        expect(junction.readInt16LE(i)).toBeGreaterThan(0);
+      }
       // Frames de áudio enviados não contêm padding de silêncio
       for (const f of frames) {
         expect(f.subarray(3).some((v) => v !== 0)).toBe(true);
@@ -210,7 +212,7 @@ describe('AudioSocketAdapter', () => {
       // depois do clear: 1º frame com decay do último sample, resto silêncio
       const f0 = frames[0].subarray(3);
       expect(f0.readInt16LE(0)).toBe(0);
-      expect(f0.subarray(32).every((v) => v === 0x11)).toBe(true);
+      expect(f0.subarray(180).every((v) => v === 0x11)).toBe(true);
       const decay = frames[1].subarray(3);
       expect(decay.readInt16LE(0)).not.toBe(0);
       expect(decay.subarray(40).every((v) => v === 0)).toBe(true);

@@ -164,6 +164,7 @@ describe('Telephony farewell tool', () => {
       start: jest.fn().mockResolvedValue(undefined),
       hangup: jest.fn().mockResolvedValue(undefined),
       close: jest.fn(),
+      finishAudio: jest.fn(),
     };
     const provider = {
       connect: jest.fn(),
@@ -204,6 +205,7 @@ describe('Telephony farewell tool', () => {
     ]);
     options.onTurnComplete();
     options.onTurnComplete();
+    expect(adapter.finishAudio).toHaveBeenCalledTimes(2);
     let resolveHangup: (() => void) | undefined;
     if (phase === 'pending-request' || phase === 'pending-adapter') {
       const pending = new Promise<void>((resolve) => {
@@ -220,6 +222,7 @@ describe('Telephony farewell tool', () => {
     resolveHangup?.();
     await jest.advanceTimersByTimeAsync(0);
     options.onTurnComplete();
+    expect(adapter.finishAudio).toHaveBeenCalledTimes(2);
     expect(jest.getTimerCount()).toBe(0);
     await jest.advanceTimersByTimeAsync(10000);
     expect(endSpy).toHaveBeenCalledTimes(1);

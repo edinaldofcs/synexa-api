@@ -1,4 +1,5 @@
-import { AudioResampler } from '../audio/audio-resampler.util';
+import { Logger } from '@nestjs/common';
+import { StreamingPcmResampler } from '../audio/streaming-pcm-resampler';
 
 /**
  * Pacer de saída compartilhado pelos adapters de telefonia (AudioSocket,
@@ -8,10 +9,10 @@ import { AudioResampler } from '../audio/audio-resampler.util';
  * qualquer tamanho. Saída: frames PCM 16-bit LE 8kHz de 20ms entregues ao
  * `sink` em cadência constante.
  *
- * Propriedades (validadas em chamadas reais — ver specs do AudioSocket):
+ * Responsabilidades:
  * - Resto entre chunks preservado: sem padding de silêncio no meio da fala
  * - Pre-buffer mínimo antes de iniciar (colchão p/ jitter buffer do cliente)
- * - Pacer contínuo: fila vazia → silêncio (sem underflow picotado)
+ * - Pacer contínuo: fila vazia → silêncio; underflow durante geração é contado
  * - Silêncio com decay do último sample + fade-in na retomada (sem cliques)
  * - Fila com teto alto (o Gemini gera mais rápido que o tempo real; teto
  *   baixo descartava frames = "só os últimos segundos tocavam limpos")
@@ -26,11 +27,24 @@ export interface TelephonyOutboundPacerOptions {
 
 const MAX_QUEUE_SECONDS = 15;
 const PREBUFFER_FRAMES = 3;
-const PACER_INTERVAL_MS = 20;
 const DECAY_SAMPLES = 20;
 const FADE_IN_SAMPLES = 16;
 
 export class TelephonyOutboundPacer {
+  private readonly logger = new Logger(TelephonyOutboundPacer.name);
+  private readonly resampler: StreamingPcmResampler;
+  private readonly frameMs: number;
+  private inputActive = false;
+  private readonly metrics = {
+    inputBytes: 0,
+    speechFrames: 0,
+    underflowFrames: 0,
+    droppedFrames: 0,
+    lateTicks: 0,
+    maxLatenessMs: 0,
+    invalidPcmBytes: 0,
+    maxQueueMs: 0,
+  };
   private readonly sampleRate: number;
   private readonly frameBytes: number;
   private readonly maxQueueBytes: number;
@@ -50,7 +64,8 @@ export class TelephonyOutboundPacer {
   private musicGain = 0.2;
 
   public setWaitingMusic(pcm24k: Buffer, volume: number): void {
-    this.music = AudioResampler.resample(pcm24k, 24000, this.sampleRate);
+    const converter = new StreamingPcmResampler(this.sampleRate);
+    this.music = Buffer.concat([converter.push(pcm24k), converter.finish()]);
     this.musicOffset = 0;
     this.musicGain = Math.max(0, Math.min(100, volume)) / 100;
     if (this.musicActive) this.startPacer();
@@ -88,6 +103,11 @@ export class TelephonyOutboundPacer {
   ) {
     this.sampleRate = options?.sampleRate ?? 8000;
     const frameMs = options?.frameMs ?? 20;
+    if (!Number.isInteger(frameMs) || frameMs < 10 || frameMs > 60) {
+      throw new RangeError('PCM frame duration must be 10–60 ms');
+    }
+    this.frameMs = frameMs;
+    this.resampler = new StreamingPcmResampler(this.sampleRate);
     this.frameBytes = Math.round((this.sampleRate * 2 * frameMs) / 1000);
     // O Gemini gera mais rápido que o tempo real: teto baixo descartava
     // frames no meio da fala. 15s ≈ 240KB por chamada.
@@ -96,12 +116,36 @@ export class TelephonyOutboundPacer {
 
   /** Enfileira áudio do Gemini (PCM 16-bit LE 24kHz) resampleado à taxa alvo. */
   public enqueue(pcm24k: Buffer): void {
-    if (this.disposed) return;
-    const pcmTel =
-      this.sampleRate === 24000
-        ? pcm24k
-        : AudioResampler.resample(pcm24k, 24000, this.sampleRate);
+    if (this.disposed || !pcm24k.length) return;
+    this.inputActive = true;
+    this.metrics.inputBytes += pcm24k.length;
+    this.appendPcm(this.resampler.push(pcm24k));
+    this.startPacer();
+  }
 
+  /** Complete the turn, including short utterances below the prebuffer threshold. */
+  public finish(): void {
+    if (this.disposed || !this.inputActive) return;
+    this.metrics.invalidPcmBytes += this.resampler.pendingBytes;
+    this.appendPcm(this.resampler.finish());
+    if (this.pending.length) {
+      const frame = Buffer.alloc(this.frameBytes);
+      this.pending.copy(frame);
+      this.enqueueFrame(frame);
+      this.pending = Buffer.alloc(0);
+    }
+    this.inputActive = false;
+    this.startPacer(true);
+  }
+
+  public getMetrics(): Readonly<typeof this.metrics & { queuedMs: number }> {
+    return {
+      ...this.metrics,
+      queuedMs: (this.queueBytes * 1000) / (this.sampleRate * 2),
+    };
+  }
+
+  private appendPcm(pcmTel: Buffer): void {
     // Acumula com o resto do chunk anterior: só frame completo é enviado —
     // sem padding de silêncio entre chunks do Gemini.
     let buffer =
@@ -111,7 +155,6 @@ export class TelephonyOutboundPacer {
       buffer = buffer.subarray(this.frameBytes);
     }
     this.pending = buffer;
-    this.startPacer();
   }
 
   /** Barge-in: descarta o áudio ainda não reproduzido. */
@@ -119,16 +162,24 @@ export class TelephonyOutboundPacer {
     this.queue = [];
     this.queueBytes = 0;
     this.pending = Buffer.alloc(0);
+    this.resampler.reset();
+    this.inputActive = false;
     this.speechUntil = 0;
   }
 
   /** Encerra o pacer (fim da chamada). */
   public dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     this.music = undefined;
     this.musicActive = false;
     this.clear();
     this.stopTimer();
+    this.logger.log({
+      event: 'telephony_output_summary',
+      sampleRate: this.sampleRate,
+      ...this.metrics,
+    });
   }
 
   private enqueueFrame(frame: Buffer): void {
@@ -136,30 +187,48 @@ export class TelephonyOutboundPacer {
       const dropped = this.queue.shift();
       if (!dropped) break;
       this.queueBytes -= dropped.length;
+      this.metrics.droppedFrames++;
     }
     this.queue.push(frame);
     this.queueBytes += frame.length;
+    this.metrics.maxQueueMs = Math.max(
+      this.metrics.maxQueueMs,
+      (this.queueBytes * 1000) / (this.sampleRate * 2),
+    );
   }
 
   /**
    * Envia 1 frame (20ms) por tick com agendamento por prazo absoluto (sem
    * drift do event loop), iniciado após pre-buffer mínimo.
    *
-   * Contínuo: com a fila vazia envia silêncio em vez de parar — o fluxo
-   * nunca entra em underflow no meio da fala. Encerra apenas no dispose().
+   * Contínuo: com a fila vazia envia silêncio e contabiliza falta de áudio
+   * durante geração. Encerra apenas no dispose().
    */
-  private startPacer(): void {
+  private startPacer(force = false): void {
     if (this.timer || this.disposed) return;
     if (
       this.queue.length < PREBUFFER_FRAMES &&
+      !(force && this.queue.length > 0) &&
       !(this.musicActive && this.music?.length)
     )
       return;
 
-    let deadline = Date.now();
+    let deadline = performance.now();
     const tick = () => {
+      const now = performance.now();
+      const lateness = Math.max(0, now - deadline);
+      this.metrics.maxLatenessMs = Math.max(
+        this.metrics.maxLatenessMs,
+        lateness,
+      );
+      if (lateness >= this.frameMs) {
+        this.metrics.lateTicks++;
+        // After an event-loop stall do not burst old frames into the transport.
+        deadline = now;
+      }
       const frame = this.queue.shift();
       if (frame) {
+        this.metrics.speechFrames++;
         this.speechUntil = Date.now() + 150;
         this.queueBytes -= frame.length;
         // Retomada após silêncio: fade-in curto elimina o clique
@@ -168,6 +237,7 @@ export class TelephonyOutboundPacer {
         this.lastOutSample =
           frame.length >= 2 ? frame.readInt16LE(frame.length - 2) : 0;
       } else {
+        if (this.inputActive) this.metrics.underflowFrames++;
         // Fila vazia: silêncio mantém o fluxo contínuo, com cauda decaindo
         // do último sample para não estalar
         this.sink(this.musicFrame() || this.buildSilenceFrame());
@@ -176,16 +246,16 @@ export class TelephonyOutboundPacer {
         this.timer = null;
         return;
       }
-      deadline += PACER_INTERVAL_MS;
+      deadline += this.frameMs;
       this.timer = setTimeout(
         tick,
-        Math.max(1, deadline - Date.now()),
+        Math.max(1, deadline - performance.now()),
       ) as unknown as ReturnType<typeof setInterval>;
       this.timer.unref?.();
     };
 
-    deadline += PACER_INTERVAL_MS;
-    this.timer = setTimeout(tick, PACER_INTERVAL_MS) as unknown as ReturnType<
+    deadline += this.frameMs;
+    this.timer = setTimeout(tick, this.frameMs) as unknown as ReturnType<
       typeof setInterval
     >;
     this.timer.unref?.();
