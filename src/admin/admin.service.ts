@@ -567,6 +567,9 @@ export class AdminService {
 
     const { error } = await this.adminClient.auth.resetPasswordForEmail(
       target.email,
+      {
+        redirectTo: `${(process.env.AUTH_FRONTEND_URL || '').replace(/\/+$/, '')}/reset-password`,
+      },
     );
     if (error) {
       const rateLimited =

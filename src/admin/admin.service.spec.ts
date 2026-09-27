@@ -535,7 +535,9 @@ describe('AdminService - resetUserPassword delivery', () => {
     await expect(
       service.resetUserPassword(actor, 'user'),
     ).resolves.toMatchObject({ success: true });
-    expect(reset).toHaveBeenCalledWith('user@example.test');
+    expect(reset).toHaveBeenCalledWith('user@example.test', {
+      redirectTo: expect.stringMatching(/\/reset-password$/),
+    });
   });
   it('does not contact the provider for another tenant', async () => {
     const { service } = setup();

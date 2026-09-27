@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
@@ -17,16 +17,12 @@ import {
   type SessionUser,
 } from './session.service';
 import { LoginDto } from './dto/login.dto';
-import { MagicLinkDto } from './dto/magic-link.dto';
+import { MagicLinkDto, CompleteMagicLinkDto } from './dto/magic-link.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ImpersonateDto } from './dto/impersonate.dto';
 import { ConfigService } from '@nestjs/config';
-import {
-  ForbiddenException,
-  Logger,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ForbiddenException, Logger } from '@nestjs/common';
 import type { AuthSession } from './session.service';
 import { isPlatformOwner } from './platform-owner.guard';
 
@@ -77,26 +73,28 @@ export class AuthController {
 
   @Public()
   @Get('callback')
-  async callback(
-    @Query('code') code: string,
-    @Req() request: Request,
-    @Res() response: Response,
+  callback(@Res() response: Response) {
+    // Old emails target the API. Browsers preserve the fragment through this redirect.
+    return response.redirect(this.frontendUrl('/auth/callback'));
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('magic-link/complete')
+  async completeMagicLink(
+    @Body() body: CompleteMagicLinkDto,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    try {
-      if (!code) throw new UnauthorizedException('Código de acesso ausente');
-      const user = await this.authService.completeMagicLink(code);
-      const session = await this.sessionService.create(user);
-      setAuthCookies(
-        response,
-        this.configService,
-        session.id,
-        session.csrfToken,
-        SESSION_TTL_SECONDS * 1000,
-      );
-      return response.redirect(this.frontendUrl('/dashboard'));
-    } catch {
-      return response.redirect(this.frontendUrl('/login?error=magic_link'));
-    }
+    const user = await this.authService.completeMagicLink(body.token);
+    const session = await this.sessionService.create(user);
+    setAuthCookies(
+      response,
+      this.configService,
+      session.id,
+      session.csrfToken,
+      SESSION_TTL_SECONDS * 1000,
+    );
+    return { user };
   }
 
   @Get('me')
@@ -219,7 +217,11 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('reset-password')
   async resetPassword(@Body() body: ResetPasswordDto) {
-    await this.authService.resetPassword(body.token, body.password);
+    await this.authService.resetPassword(
+      body.token,
+      body.password,
+      body.refreshToken,
+    );
     return { ok: true };
   }
 
@@ -243,6 +245,8 @@ export class AuthController {
   }
 
   private callbackUrl(request: Request) {
+    const frontend = this.configService.get<string>('AUTH_FRONTEND_URL');
+    if (frontend) return `${frontend.replace(/\/+$/, '')}/auth/callback`;
     const configured = this.configService.get<string>('AUTH_CALLBACK_URL');
     if (configured) return configured;
 
