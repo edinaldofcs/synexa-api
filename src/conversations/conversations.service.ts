@@ -1,3 +1,4 @@
+import { BrandId, getBrandName } from '../common/config/branding';
 import { SearchConversationsDto } from './dto/search-conversations.dto';
 import {
   Injectable,
@@ -848,6 +849,7 @@ export class ConversationsService {
     conversationId: string,
     companyId: string,
     format: 'txt' | 'json' = 'txt',
+    brand: BrandId = BrandId.Synexa,
   ): Promise<{ contentType: string; filename: string; content: string }> {
     const conv = await this.prisma.conversations.findFirst({
       where: { id: conversationId, company_id: companyId },
@@ -879,12 +881,12 @@ export class ConversationsService {
 
     // Formato TXT formatado
     let text = `====================================================\n`;
-    text += `SYNEXA ENTERPRISE - REGISTRO DE ATENDIMENTO\n`;
+    text += `${getBrandName(brand).toUpperCase()} ENTERPRISE - REGISTRO DE ATENDIMENTO\n`;
     text += `ID da Conversa: ${conv.id}\n`;
     text += `Data de Início: ${conv.created_at ? new Date(conv.created_at).toLocaleString('pt-BR') : 'n/d'}\n`;
     text += `Canal: ${(conv.origin_channel || 'Web').toUpperCase()}\n`;
     text += `Cliente/Lead: ${conv.end_users?.name || 'Não identificado'} (${contact})\n`;
-    text += `Assistente/Empresa: ${conv.painel_clients?.company_name || 'Synexa'}\n`;
+    text += `Assistente/Empresa: ${conv.painel_clients?.company_name || getBrandName(brand)}\n`;
     text += `Status: ${conv.status.toUpperCase()}\n`;
     text += `====================================================\n\n`;
     text += `--- HISTÓRICO DE MENSAGENS ---\n\n`;

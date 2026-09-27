@@ -2,9 +2,11 @@ import { SearchConversationsDto } from './dto/search-conversations.dto';
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   Param,
   ParseUUIDPipe,
+  ParseEnumPipe,
   Patch,
   Post,
   Query,
@@ -15,6 +17,7 @@ import { ConversationsService } from './conversations.service';
 import { TabulationService } from './services/tabulation.service';
 import { CurrentUser } from '../common/auth/current-user.decorator';
 import { extractTenantContext } from '../common/utils/tenant-access.helper';
+import { BrandId } from '../common/config/branding';
 
 @Controller('conversations')
 export class ConversationsController {
@@ -114,12 +117,19 @@ export class ConversationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: any,
     @Query('format') format?: 'txt' | 'json',
+    @Query(
+      'brand',
+      new DefaultValuePipe(BrandId.Synexa),
+      new ParseEnumPipe(BrandId),
+    )
+    brand?: BrandId,
   ) {
     const ctx = extractTenantContext(user);
     return this.conversationsService.exportConversation(
       id,
       ctx.companyId,
       format || 'txt',
+      brand,
     );
   }
 

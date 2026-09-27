@@ -9,7 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { RedisService } from '../common/redis/redis.service';
 import { LandingChatDto } from './landing-chat.dto';
-import { LANDING_KNOWLEDGE } from './landing-knowledge';
+import { getLandingKnowledge } from './landing-knowledge';
 
 @Injectable()
 export class LandingChatService {
@@ -69,7 +69,7 @@ export class LandingChatService {
       const result = await client.chat.completions.create({
         model: this.config.get<string>('LANDING_CHAT_MODEL') || 'gpt-6-luna',
         messages: [
-          { role: 'system', content: LANDING_KNOWLEDGE },
+          { role: 'system', content: getLandingKnowledge(body.brand) },
           ...(body.history || []),
           { role: 'user', content: message },
         ],
