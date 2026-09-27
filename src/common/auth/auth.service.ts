@@ -126,7 +126,7 @@ export class AuthService {
     const user = await this.loadUser(data.user.id, data.user.email ?? '');
     if (
       !(await this.redis.acquireLock(
-        `auth:magic:used:${claims.session_id}`,
+        `auth:email-link:used:${claims.session_id}`,
         3660,
       ))
     ) {
@@ -360,14 +360,27 @@ export class AuthService {
     const { data, error } = await client.auth.getClaims(token);
     const claims = data?.claims;
     const now = Math.floor(Date.now() / 1000);
+    // The implicit /verify flow signs BOTH magic links and recovery links as OTP.
+    // URL type is not a signed purpose claim. Accept the verified OTP proof and
+    // consume its session once across both endpoints; never trust URL type alone.
     const recentLink = claims?.amr?.some(
       (entry) =>
-        entry.method === method &&
+        (entry.method === method || entry.method === 'otp') &&
         Number.isFinite(entry.timestamp) &&
         entry.timestamp <= now + 30 &&
         entry.timestamp > now - 3600,
     );
     if (error || !claims?.session_id || !recentLink) {
+      this.logger.warn({
+        event: 'email_link_rejected',
+        requested_flow: method,
+        reason:
+          error || !claims
+            ? 'invalid_token'
+            : !claims.session_id
+              ? 'missing_session'
+              : 'unsupported_or_stale_authentication',
+      });
       throw new UnauthorizedException(
         'Link inválido ou expirado. Solicite um novo link.',
       );
@@ -404,7 +417,7 @@ export class AuthService {
       identity.data.user.email ?? '',
     );
     // Keep the lock through the recovery window after success (also blocks refreshed JWTs).
-    const key = `auth:recovery:used:${claims.session_id}`;
+    const key = `auth:email-link:used:${claims.session_id}`;
     if (!(await this.redis.acquireLock(key, 3660))) {
       throw new UnauthorizedException(
         'Link já utilizado ou redefinição em andamento.',

@@ -156,6 +156,43 @@ describe('AuthService email links', () => {
       'já utilizado',
     );
   });
+
+  it('accepts the OTP authentication method emitted by real implicit magic links', async () => {
+    claims('otp');
+    await expect(
+      service.completeMagicLink('signed-otp-access'),
+    ).resolves.toMatchObject({ id: user.id });
+    expect(auth.getUser).toHaveBeenCalledWith('signed-otp-access');
+  });
+
+  it('accepts the OTP authentication method emitted by real implicit recovery links', async () => {
+    claims('otp');
+    await service.resetPassword('signed-otp-access', 'Password123', 'refresh');
+    expect(auth.updateUser).toHaveBeenCalledWith({ password: 'Password123' });
+  });
+
+  it('does not reuse an OTP session across login and password recovery', async () => {
+    claims('otp');
+    const consumed = new Set<string>();
+    redis.acquireLock.mockImplementation(async (key: string) => {
+      if (consumed.has(key)) return false;
+      consumed.add(key);
+      return true;
+    });
+    await service.completeMagicLink('signed-otp-access');
+    await expect(
+      service.resetPassword('signed-otp-access', 'Password123', 'refresh'),
+    ).rejects.toThrow('já utilizado');
+    expect(auth.updateUser).not.toHaveBeenCalled();
+  });
+
+  it('rejects an old OTP proof instead of accepting any OTP session', async () => {
+    claims('otp', 3601);
+    await expect(service.completeMagicLink('old-otp-access')).rejects.toThrow(
+      'Link inválido',
+    );
+    expect(auth.getUser).not.toHaveBeenCalled();
+  });
   it('does not turn a recovery credential into a login session', async () => {
     await expect(service.completeMagicLink('access')).rejects.toThrow(
       'Link inválido',
