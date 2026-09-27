@@ -180,14 +180,31 @@ export class CallExportsService implements OnModuleInit {
       }),
       destination.include_transcript
         ? this.prisma.messages.findMany({
-            where: { conversation_id: conversation.id },
-            select: { sender_type: true, content: true, created_at: true },
+            where: {
+              conversation_id: conversation.id,
+              company_id: row.company_id,
+            },
+            select: {
+              id: true,
+              sender_type: true,
+              content: true,
+              created_at: true,
+              metadata: true,
+            },
             orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
           })
         : Promise.resolve(undefined),
       this.prisma.tool_calls.findMany({
-        where: { conversation_id: conversation.id },
+        where: {
+          conversation_id: conversation.id,
+          company_id: row.company_id,
+          client_id: row.client_id,
+        },
         select: {
+          id: true,
+          arguments: true,
+          audit_enc: true,
+          created_at: true,
           tool_name: true,
           status: true,
           result: true,
@@ -207,7 +224,11 @@ export class CallExportsService implements OnModuleInit {
       interaction,
       variables: state?.state,
       messages,
-      tools,
+      tools: tools.map(({ audit_enc, ...tool }) => ({
+        ...tool,
+        // Decryption failure must retry the export, never deliver incomplete evidence.
+        audit: audit_enc ? JSON.parse(decrypt(audit_enc, this.key())) : null,
+      })),
     });
     await this.update(row.id, token, {
       status: 'pending',

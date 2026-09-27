@@ -88,6 +88,7 @@ export class WebhooksController {
           : undefined,
         tools: body.tools.map((tool) => ({
           tool_name: tool.tool_name,
+          arguments: tool.arguments ?? null,
           status:
             tool.status === 'executing'
               ? 'running'

@@ -1,4 +1,8 @@
 import { publicFetch } from '../common/utils/public-http';
+import {
+  startHttpAudit,
+  type HttpToolAudit,
+} from './services/voice-tool-audit';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -173,6 +177,8 @@ export class VoiceToolsService {
     args: Record<string, unknown>,
     sessionState?: Record<string, unknown>,
     visited?: Set<string>,
+    audit?: HttpToolAudit[],
+    parentAuditId?: string,
   ) {
     let tool = (await this.getAgentTools(clientId, agentId)).find(
       (candidate) => candidate.name === functionName,
@@ -280,6 +286,18 @@ export class VoiceToolsService {
     }
 
     const controller = new AbortController();
+    const capture = audit
+      ? startHttpAudit({
+          apiId: tool.id,
+          name: tool.apiName,
+          url,
+          method,
+          headers,
+          body: init.body ? body : null,
+          parentId: parentAuditId,
+        })
+      : undefined;
+    if (capture) audit!.push(capture.entry);
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
       const response = await publicFetch(url, {
@@ -287,9 +305,13 @@ export class VoiceToolsService {
         signal: controller.signal,
       });
       const contentType = response.headers.get('content-type') || '';
+      const rawText = await response.text();
+      // Preserve evidence even when an upstream server sends invalid JSON.
+      capture?.response(response.status, response.headers, rawText);
       const raw = contentType.includes('application/json')
-        ? await response.json()
-        : await response.text();
+        ? JSON.parse(rawText)
+        : rawText;
+      capture?.response(response.status, response.headers, raw);
 
       const extractConfig = tool.extract_data as
         | Record<string, any>
@@ -309,6 +331,7 @@ export class VoiceToolsService {
       }
 
       const extracted = this.applyExtractData(raw, tool.extract_data);
+      capture?.extracted(extracted);
       const hasExtractConfig =
         extractConfig &&
         typeof extractConfig === 'object' &&
@@ -393,6 +416,8 @@ export class VoiceToolsService {
                 nextArgs,
                 sessionState,
                 nextVisited,
+                audit,
+                capture?.entry.id,
               );
               if (nextResult && nextResult.ok) {
                 if (Array.isArray((nextResult as any)._chainTrail)) {
@@ -440,6 +465,7 @@ export class VoiceToolsService {
         resultado: raw ?? fallbackMessage,
       };
     } catch (error) {
+      capture?.failed(error);
       const extractConfig = tool.extract_data as
         | Record<string, any>
         | undefined;

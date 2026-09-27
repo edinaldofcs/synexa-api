@@ -102,6 +102,77 @@ function setup(status = 'pending') {
 }
 
 beforeEach(() => sender.mockReset());
+
+it('decrypts private HTTP evidence only for the webhook and joins it to the recorded transcript turn', async () => {
+  sender.mockResolvedValue(503);
+  const { row, service, prisma } = setup('collecting');
+  const destination = JSON.parse(decrypt(row.destination_enc, key));
+  row.destination_enc = encrypt(
+    JSON.stringify({ ...destination, include_transcript: true }),
+    key,
+  );
+  prisma.messages.findMany.mockResolvedValue([
+    {
+      id: 'm',
+      sender_type: 'customer',
+      content: 'Consultar saldo',
+      metadata: { turn_id: 't' },
+      created_at: new Date(),
+    },
+  ]);
+  prisma.tool_calls.findMany.mockResolvedValue([
+    {
+      id: 'tool',
+      tool_name: 'lookup',
+      arguments: { customer: '123' },
+      result: { balance: 10 },
+      status: 'success',
+      audit_enc: encrypt(
+        JSON.stringify({
+          turn_id: 't',
+          agent_id: 'agent',
+          http_exchanges: [
+            {
+              request: { body: { customer: '123' } },
+              response: { body: { balance: 10, extra: 'only-webhook' } },
+            },
+          ],
+        }),
+        key,
+      ),
+    },
+  ]);
+  await service.process(row.id);
+  const payload = JSON.parse(decrypt(row.payload_enc, key));
+  expect(payload.call.turns[0]).toMatchObject({
+    id: 't',
+    messages: [{ text: 'Consultar saldo' }],
+    tools: [
+      {
+        arguments: { customer: '123' },
+        model_result: { balance: 10 },
+        http_exchanges: [{ response: { body: { extra: 'only-webhook' } } }],
+      },
+    ],
+  });
+  expect(JSON.stringify(payload)).not.toContain('audit_enc');
+  expect(payload.call.tools[0]).not.toHaveProperty('audit');
+  expect(prisma.tool_calls.findMany.mock.calls[0][0].where).toEqual({
+    conversation_id: 'call',
+    company_id: 'company',
+    client_id: 'client',
+  });
+});
+
+it('retries corrupted audit evidence rather than silently dropping it from delivery', async () => {
+  const { row, service, prisma } = setup('collecting');
+  prisma.tool_calls.findMany.mockResolvedValue([
+    { tool_name: 'lookup', audit_enc: 'invalid' },
+  ]);
+  await service.process(row.id);
+  expect(sender).not.toHaveBeenCalled();
+  expect(row.error_code).toBe('processing_failed');
+});
 it('signs the exact payload, accepts 2xx and scrubs content while preserving billing', async () => {
   sender.mockResolvedValue(204);
   const { row, service, prisma } = setup();

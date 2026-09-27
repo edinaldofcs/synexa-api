@@ -21,6 +21,7 @@ class PreviewTranscriptDto {
 }
 
 class PreviewToolDto {
+  @IsOptional() @IsObject() arguments?: Record<string, unknown>;
   @IsString() @MaxLength(200) tool_name: string;
   @IsIn(['executing', 'success', 'error']) status: string;
   @Allow() result?: unknown;

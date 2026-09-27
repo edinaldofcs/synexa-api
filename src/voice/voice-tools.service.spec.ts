@@ -2,6 +2,7 @@ jest.mock('../common/utils/public-http', () => ({
   publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
 }));
 import { VoiceToolsService } from './voice-tools.service';
+import type { HttpToolAudit } from './services/voice-tool-audit';
 
 jest.mock('../common/utils/api-chaining.util', () => ({
   resolveChainedApiId: jest.fn(),
@@ -62,6 +63,160 @@ const captureFetch = (
 afterEach(() => {
   jest.restoreAllMocks();
   jest.clearAllMocks();
+});
+
+describe('webhook-only HTTP audit', () => {
+  const api = {
+    id: '11111111-1111-1111-1111-111111111111',
+    name: 'Lookup',
+    method: 'POST',
+    url: 'https://example.com/customer/{cpf}',
+    headers: { Authorization: 'Bearer test-audit-credential' },
+    body: {
+      amount: { source: 'system', value: 'amount' },
+      cpf: { source: 'ai' },
+    },
+    extract_data: { balance: 'balance' },
+  };
+  beforeEach(() => mockedResolveChainedApiId.mockReturnValue(undefined));
+
+  it('captures resolved request and full response without changing the model-visible result', async () => {
+    const { service } = buildPrisma(api);
+    const requests = captureFetch({
+      ok: true,
+      body: { balance: 10, private_business_field: 'webhook-only' },
+    });
+    const audit: HttpToolAudit[] = [];
+    const args = { cpf: '123' };
+    const state = { amount: 25 };
+    const ordinary = await service.execute(
+      'client',
+      'agent',
+      'lookup',
+      args,
+      state,
+    );
+    const audited = await service.execute(
+      'client',
+      'agent',
+      'lookup',
+      args,
+      state,
+      undefined,
+      audit,
+    );
+    expect(audited).toEqual(ordinary);
+    expect(audited).toEqual({ ok: true, status: 200, balance: 10 });
+    expect(JSON.stringify(audited)).not.toContain('webhook-only');
+    expect(audit[0].request).toMatchObject({
+      method: 'POST',
+      url: 'https://example.com/customer/123',
+      body: JSON.parse(requests[1].init.body as string),
+    });
+    expect(audit[0].response?.body).toEqual({
+      balance: 10,
+      private_business_field: 'webhook-only',
+    });
+    expect(audit[0].extracted_variables).toEqual({ balance: 10 });
+    expect(JSON.stringify(audit)).not.toContain('test-audit-credential');
+    expect(state).toEqual({ amount: 25 });
+  });
+
+  it('keeps error bodies in audit while the model receives the existing fallback', async () => {
+    const { service } = buildPrisma(api);
+    captureFetch({
+      ok: false,
+      status: 422,
+      body: { validation_details: 'customer field rejected' },
+    });
+    const audit: HttpToolAudit[] = [];
+    const result = await service.execute(
+      'client',
+      'agent',
+      'lookup',
+      { cpf: '123' },
+      {},
+      undefined,
+      audit,
+    );
+    expect(result).toMatchObject({ ok: false, status: 422 });
+    expect(JSON.stringify(result)).not.toContain('validation_details');
+    expect(audit[0].response).toMatchObject({
+      status: 422,
+      body: { validation_details: 'customer field rejected' },
+    });
+  });
+
+  it('records timeout without exposing exception details', async () => {
+    const { service } = buildPrisma(api);
+    jest
+      .spyOn(global, 'fetch')
+      .mockRejectedValue(
+        new DOMException('network private error', 'AbortError'),
+      );
+    const audit: HttpToolAudit[] = [];
+    await service.execute(
+      'client',
+      'agent',
+      'lookup',
+      { cpf: '123' },
+      {},
+      undefined,
+      audit,
+    );
+    expect(audit[0]).toMatchObject({ response: null, error: 'timeout' });
+  });
+
+  it('records every chained HTTP execution with a parent ID even when a child fails', async () => {
+    const child = {
+      ...api,
+      id: '22222222-2222-2222-2222-222222222222',
+      name: 'Child',
+      url: 'https://example.com/child',
+    };
+    const { service, prisma } = buildPrisma(api);
+    prisma.painel_apis.findMany.mockResolvedValue([api, child]);
+    prisma.painel_apis.findFirst.mockResolvedValue(child as any);
+    mockedResolveChainedApiId
+      .mockReturnValueOnce(child.id)
+      .mockReturnValue(undefined);
+    captureFetch({
+      ok: true,
+      body: { balance: 10, raw_extra: 'full-response' },
+    });
+    jest
+      .mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ balance: 10, raw_extra: 'full-response' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: 'child-rejected' }), {
+          status: 422,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    const audit: HttpToolAudit[] = [];
+    const result = await service.execute(
+      'client',
+      'agent',
+      'lookup',
+      { cpf: '123' },
+      {},
+      undefined,
+      audit,
+    );
+    expect(audit).toHaveLength(2);
+    expect(audit[1].parent_id).toBe(audit[0].id);
+    expect(audit[1].response).toMatchObject({
+      status: 422,
+      body: { detail: 'child-rejected' },
+    });
+    expect(audit[1].request.url).toBe('https://example.com/child');
+    expect(JSON.stringify(result)).not.toContain('full-response');
+  });
 });
 
 describe('VoiceToolsService - encadeamento (tenant scope & cycle guard)', () => {

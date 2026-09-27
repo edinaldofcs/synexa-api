@@ -1,3 +1,4 @@
+import { sealToolAudit, type HttpToolAudit } from './services/voice-tool-audit';
 import {
   CompanyVoiceQuotaService,
   VoiceSlotLease,
@@ -1059,6 +1060,8 @@ export class VoiceGateway
                 return;
               }
 
+              const auditTurnId = session.auditTurn.id;
+              const auditAgentId = session.agentId;
               const responses: Array<{
                 id: string;
                 name: string;
@@ -1185,6 +1188,9 @@ export class VoiceGateway
                 }
 
                 const isSubagent = call.name.startsWith('subagent_');
+                const audit: HttpToolAudit[] | undefined = exportEnabled
+                  ? []
+                  : undefined;
                 let response: any;
                 try {
                   response = isSubagent
@@ -1200,6 +1206,8 @@ export class VoiceGateway
                         call.name,
                         args,
                         session.state,
+                        undefined,
+                        audit,
                       );
                 } catch (err: any) {
                   // O Gemini Live exige toolResponse para cada call: uma
@@ -1222,6 +1230,12 @@ export class VoiceGateway
                         client_id: session.clientId,
                         conversation_id: session.conversationId,
                         tool_name: call.name,
+                        audit_enc: sealToolAudit(
+                          auditTurnId,
+                          auditAgentId,
+                          audit,
+                        ),
+                        created_at: new Date(startedAt),
                         arguments: call.args || {},
                         result: response || {},
                         status: response?.ok === false ? 'failed' : 'success',
@@ -2220,6 +2234,10 @@ export class VoiceGateway
                                       channel: 'voice',
                                       direction: 'outbound',
                                       content: res.text,
+                                      metadata: {
+                                        turn_id: session.auditTurn.assistant(),
+                                        agent_id: session.agentId || null,
+                                      },
                                     },
                                   })
                                   .catch(() => undefined);
@@ -2352,6 +2370,7 @@ export class VoiceGateway
                   )
                     return;
                   inactivity?.outputComplete();
+                  session.auditTurn.complete();
                   session.isAiSpeaking = false;
                   session.aiResponseStarted = false;
                   await this.telemetryService.flushAiBuffer(session);

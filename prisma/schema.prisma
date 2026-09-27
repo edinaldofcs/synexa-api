@@ -612,6 +612,7 @@ model tool_calls {
   request_id      String?
   tool_name       String
   tool_type       String    @default("api")
+  audit_enc       String?   @db.Text
   arguments       Json?     @default("{}") @db.JsonB
   result          Json?     @db.JsonB
   status          String    @default("running")

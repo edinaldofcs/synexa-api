@@ -1,3 +1,8 @@
+import {
+  VoiceAuditTurn,
+  sealToolAudit,
+  type HttpToolAudit,
+} from '../services/voice-tool-audit';
 import { VoiceWorkTracker } from '../services/voice-work-tracker';
 import {
   createVoiceConversation,
@@ -117,6 +122,7 @@ export class VoiceCallSession {
   public readonly id: string;
   private stopHeartbeat?: () => void;
   private exportEnabled = false;
+  private readonly auditTurn = new VoiceAuditTurn();
   private readonly pendingWork = new VoiceWorkTracker();
   public conversationId: string | null = null;
   public isAiSpeaking = false;
@@ -698,6 +704,7 @@ export class VoiceCallSession {
         },
         onTurnComplete: () => {
           if (this.isEnded) return;
+          this.auditTurn.complete();
           this.inactivity?.outputComplete();
           this.isAiSpeaking = false;
           this.onSpeakingStateChange?.('listening_user');
@@ -715,6 +722,8 @@ export class VoiceCallSession {
           this.pendingWork.run(async () => {
             if (this.isEnded || agentSwitchInProgress) return;
             const generation = providerGeneration;
+            const auditTurnId = this.auditTurn.id;
+            const auditAgentId = selectedAgent?.id;
             let pendingAgentTransition: any = null;
             this.inactivity?.outputStarted();
             // O protocolo BidiGenerateContent do Gemini Live paralisa a síntese
@@ -842,6 +851,10 @@ export class VoiceCallSession {
 
                     const isSubagent = call.name.startsWith('subagent_');
                     const toolCallStarted = Date.now();
+                    const audit: HttpToolAudit[] | undefined = this
+                      .exportEnabled
+                      ? []
+                      : undefined;
                     const response = isSubagent
                       ? await this.voiceToolsService.executeSubagent(
                           clientId,
@@ -855,6 +868,8 @@ export class VoiceCallSession {
                           call.name,
                           call.args || {},
                           this.sessionState,
+                          undefined,
+                          audit,
                         );
 
                     // Persiste a chamada de tool da voz na tabela tool_calls
@@ -868,6 +883,13 @@ export class VoiceCallSession {
                             conversation_id: this.conversationId,
                             tool_name: call.name,
                             tool_type: isSubagent ? 'subagent' : 'api',
+                            audit_enc: sealToolAudit(
+                              auditTurnId,
+                              auditAgentId,
+                              audit,
+                            ),
+                            created_at: new Date(toolCallStarted),
+                            completed_at: new Date(),
                             arguments: (call.args || {}) as any,
                             result: (response || {}) as any,
                             status:
@@ -881,7 +903,11 @@ export class VoiceCallSession {
                               null,
                           },
                         })
-                        .catch(() => undefined);
+                        .catch(() =>
+                          this.logger.error(
+                            'Voice tool result persistence failed',
+                          ),
+                        );
                     }
 
                     if (
@@ -1336,6 +1362,7 @@ export class VoiceCallSession {
     text: string,
   ): Promise<void> {
     if (!this.conversationId || !companyId || !text) return;
+    const turnId = this.auditTurn.assistant();
     try {
       if (!this.aiMessageBuffer) {
         this.aiMessageBuffer = { messageId: null, content: '', lastPersist: 0 };
@@ -1356,6 +1383,10 @@ export class VoiceCallSession {
             channel: 'voice',
             direction: 'outbound',
             content: buffer.content,
+            metadata: {
+              turn_id: turnId,
+              agent_id: this.config.agentId || null,
+            },
           },
         });
         buffer.messageId = created.id;
@@ -1378,6 +1409,7 @@ export class VoiceCallSession {
     text: string,
   ): Promise<void> {
     if (!this.conversationId || !companyId || !text) return;
+    const turnId = this.auditTurn.user();
     try {
       if (!this.userMessageBuffer) {
         this.userMessageBuffer = {
@@ -1402,6 +1434,10 @@ export class VoiceCallSession {
             channel: 'voice',
             direction: 'inbound',
             content: buffer.content,
+            metadata: {
+              turn_id: turnId,
+              agent_id: this.config.agentId || null,
+            },
           },
         });
         buffer.messageId = created.id;

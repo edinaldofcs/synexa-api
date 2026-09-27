@@ -1,3 +1,4 @@
+import { VoiceAuditTurn } from '../services/voice-tool-audit';
 import { WebSocket } from 'ws';
 import type { AudioGateSession } from '../services/audio-gate.service';
 import type { IVoiceProvider } from '../providers/voice-provider.interface';
@@ -56,6 +57,7 @@ export class VoiceClientSession {
   providerGeneration = 0;
   /** Acumulador do turno atual da IA para persistir a fala como mensagem única */
   aiMessageBuffer: VoiceAiMessageBuffer | null = null;
+  auditTurn = new VoiceAuditTurn();
   /** Sinaliza que a IA solicitou encerramento e aguarda o término da despedida */
   pendingAiHangup = false;
   hangupExecuted = false;
@@ -90,6 +92,7 @@ export class VoiceClientSession {
     this.telemetryPersisted = false;
     this.aiResponseStarted = false;
     this.aiMessageBuffer = null;
+    this.auditTurn = new VoiceAuditTurn();
     this.state = params.state;
     this.nextGeneration();
   }

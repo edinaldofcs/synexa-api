@@ -58,6 +58,7 @@ export class VoiceTelemetryService {
     if (!buffer) return;
     if (!session.conversationId || !session.companyId || !text) return;
 
+    const turnId = session.auditTurn?.assistant();
     try {
       if (buffer.content && text.startsWith(buffer.content)) {
         buffer.content = text;
@@ -75,6 +76,9 @@ export class VoiceTelemetryService {
             channel: 'voice',
             direction: 'outbound',
             content: buffer.content,
+            metadata: turnId
+              ? { turn_id: turnId, agent_id: session.agentId || null }
+              : undefined,
           },
         });
         buffer.messageId = created.id;
@@ -113,6 +117,7 @@ export class VoiceTelemetryService {
     text: string,
   ): Promise<void> {
     if (!session.conversationId || !session.companyId || !text) return;
+    const turnId = session.auditTurn?.user();
     try {
       await this.prisma.messages.create({
         data: {
@@ -122,6 +127,9 @@ export class VoiceTelemetryService {
           channel: 'voice',
           direction: 'inbound',
           content: text,
+          metadata: turnId
+            ? { turn_id: turnId, agent_id: session.agentId || null }
+            : undefined,
         },
       });
     } catch (e: any) {

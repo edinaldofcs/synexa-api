@@ -1,4 +1,10 @@
+import { redactAudit } from '../../voice/services/voice-tool-audit';
 import type { conversations, painel_interactions } from '@prisma/client';
+import {
+  buildCallTurns,
+  type ExportMessage,
+  type ExportTool,
+} from './call-export-turns';
 
 /** Shared by delivery and the read-only Flow preview. */
 export function buildCallExportPayload(input: {
@@ -13,8 +19,8 @@ export function buildCallExportPayload(input: {
   recoveredCall?: boolean;
   interaction?: Partial<painel_interactions> | null;
   variables?: unknown;
-  messages?: unknown;
-  tools: unknown;
+  messages?: ExportMessage[];
+  tools: ExportTool[];
 }) {
   const { conversation, endedAt, interaction } = input;
   const metadata = (conversation.metadata || {}) as Record<string, unknown>;
@@ -54,8 +60,12 @@ export function buildCallExportPayload(input: {
       customer_name: interaction?.client_name || null,
       variables: input.variables || interaction?.context_variables || {},
       summary: interaction?.summary || null,
-      transcript: input.messages,
-      tools: input.tools,
+      transcript: input.messages?.map(
+        ({ metadata: _metadata, ...message }) => message,
+      ),
+      transcript_included: input.messages !== undefined,
+      tools: input.tools.map(({ audit: _audit, ...tool }) => redactAudit(tool)),
+      turns: buildCallTurns(input.messages, input.tools),
       usage: interaction
         ? {
             total_tokens: interaction.total_tokens,
