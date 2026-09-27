@@ -341,8 +341,21 @@ export class VoiceToolsService {
               '_fallback_message',
               'fallback_message',
               'validate_field',
+              '_chaining',
             ].includes(k),
         ).length > 0;
+
+      // HTTP 200 is transport success, not evidence that the mapped data exists.
+      // Undefined properties disappear during JSON serialization and used to leave
+      // only { ok: true, status: 200 }, causing the model to assume a successful lookup.
+      if (!this.hasExtractionData(hasExtractConfig ? extracted : raw)) {
+        return {
+          ok: false,
+          status: response.status,
+          error: 'extraction_empty',
+          message: fallbackMessage,
+        };
+      }
 
       let consolidatedData: Record<string, unknown> = {};
       if (hasExtractConfig && extracted && typeof extracted === 'object') {
@@ -771,7 +784,7 @@ export class VoiceToolsService {
           '_chaining',
         ].includes(k),
     );
-    if (!keys.length || !raw || typeof raw !== 'object') return raw;
+    if (!keys.length) return raw;
     const result: Record<string, unknown> = {};
     for (const key of keys) {
       const config = mapping[key];
@@ -828,6 +841,20 @@ export class VoiceToolsService {
       }
     }
     return result;
+  }
+
+  private hasExtractionData(value: unknown): boolean {
+    const pending = [value];
+    while (pending.length) {
+      const item = pending.pop();
+      if (item === null || item === undefined) continue;
+      if (typeof item === 'string') {
+        if (item.trim()) return true;
+      } else if (typeof item === 'object') {
+        for (const child of Object.values(item)) pending.push(child);
+      } else return true; // 0 and false are valid extracted values.
+    }
+    return false;
   }
 
   private matchesCondition(

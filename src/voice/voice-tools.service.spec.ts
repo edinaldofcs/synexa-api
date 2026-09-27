@@ -80,6 +80,96 @@ describe('webhook-only HTTP audit', () => {
   };
   beforeEach(() => mockedResolveChainedApiId.mockReturnValue(undefined));
 
+  it.each([
+    {},
+    { unrelated: 'private-raw-value' },
+    { balance: null },
+    { balance: '' },
+    { balance: '   ' },
+    { balance: [] },
+    { balance: {} },
+    { balance: { missing: null } },
+    [],
+    'not-json-data',
+    0,
+    false,
+  ])(
+    'returns the configured fallback when mapped data is empty (%j)',
+    async (body) => {
+      const { service } = buildPrisma({
+        ...api,
+        extract_data: {
+          balance: 'balance',
+          _fallback_message: 'Não localizado',
+          _chaining: { rules: [] },
+        },
+      });
+      captureFetch({ ok: true, body });
+      const audit: HttpToolAudit[] = [];
+      const result = await service.execute(
+        'client',
+        'agent',
+        'lookup',
+        { cpf: '123' },
+        {},
+        undefined,
+        audit,
+      );
+      expect(JSON.parse(JSON.stringify(result))).toEqual({
+        ok: false,
+        status: 200,
+        error: 'extraction_empty',
+        message: 'Não localizado',
+      });
+      expect(audit[0].response?.body).toEqual(body);
+      expect(mockedResolveChainedApiId).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, false, 'available', [0], { available: false }])(
+    'keeps valid extracted values including falsy values (%j)',
+    async (balance) => {
+      const { service } = buildPrisma(api);
+      captureFetch({ ok: true, body: { balance } });
+      expect(
+        await service.execute('client', 'agent', 'lookup', { cpf: '123' }),
+      ).toEqual({ ok: true, status: 200, balance });
+    },
+  );
+
+  it('keeps field fallbacks and partially populated mappings valid', async () => {
+    const { service } = buildPrisma({
+      ...api,
+      extract_data: {
+        balance: { path: 'missing', fallback: 0, fallback_type: 'number' },
+        absent: 'other_missing',
+      },
+    });
+    captureFetch({ ok: true, body: {} });
+    const result = await service.execute('client', 'agent', 'lookup', {
+      cpf: '123',
+    });
+    expect(JSON.parse(JSON.stringify(result))).toEqual({
+      ok: true,
+      status: 200,
+      balance: 0,
+    });
+  });
+
+  it('uses the fallback for empty responses without mappings, excluding chaining metadata', async () => {
+    const { service } = buildPrisma({
+      ...api,
+      extract_data: {
+        _fallback_message: 'Nenhum dado',
+        _chaining: { rules: [] },
+      },
+    });
+    captureFetch({ ok: true, body: {} });
+    expect(
+      await service.execute('client', 'agent', 'lookup', { cpf: '123' }),
+    ).toMatchObject({ ok: false, message: 'Nenhum dado' });
+  });
+
   it('captures resolved request and full response without changing the model-visible result', async () => {
     const { service } = buildPrisma(api);
     const requests = captureFetch({
@@ -233,7 +323,7 @@ describe('VoiceToolsService - encadeamento (tenant scope & cycle guard)', () => 
       extract_data: null,
     });
     prisma.painel_apis.findFirst.mockResolvedValue(null);
-    captureFetch({ ok: true, body: {} });
+    captureFetch({ ok: true, body: { found: true } });
 
     await service.execute(
       'client-1',
@@ -262,7 +352,7 @@ describe('VoiceToolsService - encadeamento (tenant scope & cycle guard)', () => 
       url: 'https://api.example.com/self',
       extract_data: null,
     });
-    captureFetch({ ok: true, body: {} });
+    captureFetch({ ok: true, body: { found: true } });
 
     const result = await service.execute(
       'client-1',
@@ -345,7 +435,10 @@ describe('VoiceToolsService - resolução de payload (source system/sessão)', (
     buildPrisma(apiRecord).service;
 
   const captureFetch = (
-    respond: { ok: boolean; status?: number; body?: unknown } = { ok: true },
+    respond: { ok: boolean; status?: number; body?: unknown } = {
+      ok: true,
+      body: { accepted: true },
+    },
   ) => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
     jest
