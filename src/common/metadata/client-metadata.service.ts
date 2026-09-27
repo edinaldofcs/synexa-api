@@ -14,6 +14,11 @@ export class ClientMetadataService {
 
   async refresh(clientId: string): Promise<void> {
     try {
+      const client = await this.prisma.painel_clients.findUnique({
+        where: { id: clientId },
+        select: { metadata: true, company_id: true },
+      });
+      if (!client) return;
       const result = await this.prisma.$queryRaw<MetadataResult[]>(Prisma.sql`
 WITH agent_list AS (
   SELECT
@@ -26,7 +31,9 @@ WITH agent_list AS (
     pa.activation_mode,
     pa.interaction_mode
   FROM public.painel_agents pa
-  WHERE pa.is_active = true
+  JOIN public.painel_clients owner ON owner.id = pa.client_id
+  WHERE pa.is_active = true AND pa.client_id = ${clientId}::uuid
+    AND owner.company_id = ${client.company_id}::uuid
 ),
 api_base AS (
   SELECT
@@ -36,7 +43,7 @@ api_base AS (
     papi.name
   FROM agent_list al
   LEFT JOIN public.painel_apis papi
-    ON al.id = papi.agent_id
+    ON al.id = papi.agent_id AND papi.client_id = al.client_id
   WHERE papi.name IS NOT NULL
 ),
 api_cumulative AS (
@@ -100,14 +107,10 @@ FROM public.painel_clients a
 LEFT JOIN regras r ON r.client_id = a.id
 LEFT JOIN api_flags f ON f.client_id = a.id
 LEFT JOIN agent_activation ac ON ac.client_id = a.id
-WHERE a.id = ${clientId}::uuid
+WHERE a.id = ${clientId}::uuid AND a.company_id = ${client.company_id}::uuid
 `);
 
       const generatedMetadata = result[0]?.result ?? {};
-      const client = await this.prisma.painel_clients.findUnique({
-        where: { id: clientId },
-        select: { metadata: true },
-      });
       const currentMetadata =
         typeof client?.metadata === 'object' && client.metadata !== null
           ? (client.metadata as Record<string, unknown>)

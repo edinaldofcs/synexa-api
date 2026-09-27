@@ -7,9 +7,18 @@ describe('ActiveCallsRegistryService', () => {
   let redisServiceMock: any;
 
   beforeEach(async () => {
+    const cache = new Map<string, string>();
     redisServiceMock = {
-      set: jest.fn().mockResolvedValue('OK'),
-      del: jest.fn().mockResolvedValue(1),
+      set: jest.fn().mockImplementation(async (key: string, value: unknown) => {
+        cache.set(key, JSON.stringify(value));
+      }),
+      get: jest.fn().mockImplementation(async (key: string) => {
+        const value = cache.get(key);
+        return value === undefined ? null : JSON.parse(value);
+      }),
+      del: jest
+        .fn()
+        .mockImplementation(async (key: string) => cache.delete(key)),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -25,6 +34,80 @@ describe('ActiveCallsRegistryService', () => {
     service = module.get<ActiveCallsRegistryService>(
       ActiveCallsRegistryService,
     );
+  });
+
+  const descriptor = {
+    callId: 'call-123',
+    channelId: 'chan-1',
+    companyId: 'comp-1',
+    clientId: 'cli-1',
+    callerNumber: '+5511999998888',
+    callerName: 'Cliente Teste',
+    didNumber: '2000',
+  };
+
+  it('publica uma lista serializável e sem duplicar o alias do canal', async () => {
+    const call = await service.registerCall(descriptor);
+    const apiRegistry = new ActiveCallsRegistryService(redisServiceMock);
+
+    expect(await apiRegistry.getActiveCalls('comp-1')).toEqual([call]);
+    expect(await apiRegistry.getCallFromRedis(call.callId)).toEqual(call);
+  });
+
+  it('publica somente chamadas da empresa consultada', async () => {
+    const call = await service.registerCall(descriptor);
+    const otherCall = await service.registerCall({
+      ...descriptor,
+      callId: 'call-other',
+      channelId: 'chan-other',
+      companyId: 'comp-other',
+      clientId: 'cli-other',
+    });
+    const apiRegistry = new ActiveCallsRegistryService(redisServiceMock);
+
+    expect(await apiRegistry.getActiveCalls('comp-1')).toEqual([call]);
+    expect(await apiRegistry.getActiveCalls('comp-other')).toEqual([otherCall]);
+    expect(await apiRegistry.getActiveCalls('comp-empty')).toEqual([]);
+  });
+
+  it('remove a última chamada sem republicar a lista antiga do Redis', async () => {
+    const call = await service.registerCall(descriptor);
+    // Simula uma lista válida já publicada por uma instância anterior.
+    await redisServiceMock.set('synexa:active_calls:comp-1', [call], 3600);
+    const apiRegistry = new ActiveCallsRegistryService(redisServiceMock);
+    expect(await apiRegistry.getActiveCalls('comp-1')).toEqual([call]);
+
+    await service.unregisterCall(call.channelId);
+
+    expect(await apiRegistry.getActiveCalls('comp-1')).toEqual([]);
+    expect(await apiRegistry.getCallFromRedis(call.callId)).toBeUndefined();
+    expect(await service.getActiveCalls('comp-1')).toEqual([]);
+    expect(service.getCall(call.channelId)).toBeUndefined();
+  });
+
+  it('preserva as outras chamadas ao remover uma chamada da empresa', async () => {
+    await service.registerCall(descriptor);
+    const remaining = await service.registerCall({
+      ...descriptor,
+      callId: 'call-456',
+      channelId: 'chan-2',
+    });
+
+    await service.unregisterCall(descriptor.callId);
+
+    const apiRegistry = new ActiveCallsRegistryService(redisServiceMock);
+    expect(await apiRegistry.getActiveCalls('comp-1')).toEqual([remaining]);
+  });
+
+  it('mantém o registro local quando o Redis está indisponível', async () => {
+    redisServiceMock.set.mockRejectedValue(new Error('Redis unavailable'));
+    const call = await service.registerCall(descriptor);
+    expect(await service.getActiveCalls('comp-1')).toEqual([call]);
+
+    redisServiceMock.del.mockRejectedValue(new Error('Redis unavailable'));
+    redisServiceMock.get.mockRejectedValue(new Error('Redis unavailable'));
+    await service.unregisterCall(call.callId);
+    expect(await service.getActiveCalls('comp-1')).toEqual([]);
   });
 
   it('deve registrar e recuperar uma chamada ativa', async () => {

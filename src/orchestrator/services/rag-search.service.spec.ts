@@ -40,6 +40,9 @@ describe('RagSearchService - cache de embedding', () => {
     redisGet.mockResolvedValue(null);
 
     prisma = {
+      painel_clients: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'client-1' }),
+      },
       $queryRawUnsafe: jest.fn().mockResolvedValue([]),
       tool_calls: {
         create: jest.fn().mockResolvedValue({ id: 'tc-1' }),
@@ -50,7 +53,11 @@ describe('RagSearchService - cache de embedding', () => {
     service = new RagSearchService(
       prisma as unknown as PrismaService,
       {
-        resolveApiKey: jest.fn().mockResolvedValue('api-key'),
+        resolveApiKey: jest
+          .fn()
+          .mockImplementation(async (_client, provider) =>
+            provider === 'openai' ? 'test-placeholder' : '',
+          ),
       } as unknown as ProviderKeyResolverService,
       { get: redisGet, set: redisSet } as unknown as RedisService,
     );
@@ -76,7 +83,7 @@ describe('RagSearchService - cache de embedding', () => {
     );
 
     expect(redisGet).toHaveBeenCalledWith(
-      `rag:emb:${createHash('sha256').update('query teste').digest('hex')}`,
+      `rag:emb:company-1:client-1:${createHash('sha256').update('query teste').digest('hex')}`,
     );
     expect(mockedEmbeddingsCreate).not.toHaveBeenCalled();
     expect(redisSet).not.toHaveBeenCalled();
@@ -86,6 +93,7 @@ describe('RagSearchService - cache de embedding', () => {
       'client-1',
       ['kb-1'],
       5,
+      'company-1',
     );
     expect(prisma.tool_calls.update).toHaveBeenCalled();
     expect(results).toEqual([]);
@@ -108,10 +116,10 @@ describe('RagSearchService - cache de embedding', () => {
     );
 
     expect(redisGet).toHaveBeenCalledWith(
-      `rag:emb:${createHash('sha256').update('query nova').digest('hex')}`,
+      `rag:emb:company-1:client-1:${createHash('sha256').update('query nova').digest('hex')}`,
     );
     expect(redisSet).toHaveBeenCalledWith(
-      `rag:emb:${createHash('sha256').update('query nova').digest('hex')}`,
+      `rag:emb:company-1:client-1:${createHash('sha256').update('query nova').digest('hex')}`,
       expect.objectContaining({
         provider: 'openai',
         model: 'text-embedding-3-small',
@@ -119,5 +127,73 @@ describe('RagSearchService - cache de embedding', () => {
       }),
       300,
     );
+  });
+
+  it('rejects another company client before provider resolution and SQL', async () => {
+    prisma.painel_clients.findFirst.mockResolvedValue(null);
+    await expect(
+      service.searchRag(
+        baseAgentConfig,
+        'query',
+        'foreign-client',
+        5,
+        'run',
+        'conv',
+        'msg',
+        'company-1',
+      ),
+    ).rejects.toThrow('Client not found');
+    expect(mockedEmbeddingsCreate).not.toHaveBeenCalled();
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    expect(prisma.tool_calls.create).not.toHaveBeenCalled();
+  });
+
+  it('scopes the vector query and textual fallback by company and parent relationships', async () => {
+    mockedEmbeddingsCreate.mockResolvedValue({ data: [{ embedding: [0.1] }] });
+    prisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
+      if (!sql.includes('ILIKE')) throw new Error('Vector unavailable');
+      return [];
+    });
+    await service.searchRag(
+      baseAgentConfig,
+      'query',
+      'client-1',
+      5,
+      'run',
+      'conv',
+      'msg',
+      'company-1',
+    );
+    const queries = prisma.$queryRawUnsafe.mock.calls;
+    expect(queries[0][0]).toContain('ke.company_id = $5::uuid');
+    expect(queries[0][0]).toContain('kc.company_id = ke.company_id');
+    expect(queries[0].slice(-1)[0]).toBe('company-1');
+    const fallbackQuery = prisma.$queryRawUnsafe.mock.calls.find(
+      ([sql]: [string]) => sql.includes('ILIKE'),
+    );
+    expect(fallbackQuery[0]).toContain('kc.company_id = $6::uuid');
+    expect(fallbackQuery[0]).toContain('kd.company_id = kc.company_id');
+    expect(fallbackQuery.slice(-1)[0]).toBe('company-1');
+  });
+
+  it('does not reuse embedding cache across companies or clients', async () => {
+    mockedEmbeddingsCreate.mockResolvedValue({ data: [{ embedding: [0.1] }] });
+    for (const [company, client] of [
+      ['a', 'a1'],
+      ['a', 'a2'],
+      ['b', 'b1'],
+    ]) {
+      await service.searchRag(
+        baseAgentConfig,
+        'same query',
+        client,
+        5,
+        'run',
+        'conv',
+        'msg',
+        company,
+      );
+    }
+    expect(new Set(redisGet.mock.calls.map(([key]) => key)).size).toBe(3);
   });
 });

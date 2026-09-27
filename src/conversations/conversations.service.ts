@@ -437,14 +437,14 @@ export class ConversationsService {
           ${
             query.search?.trim()
               ? Prisma.sql`concat_ws(' ', c.id::text, eu.name, eu.metadata->>'document_number', eu.metadata->>'cpf',
-            pc.company_name, (SELECT m.content FROM messages m WHERE m.conversation_id = c.id
+            pc.company_name, (SELECT m.content FROM messages m WHERE m.conversation_id = c.id AND m.company_id = c.company_id
                              ORDER BY m.created_at DESC, m.id DESC LIMIT 1))`
               : Prisma.sql`''::text`
           } AS search_text
         FROM conversations c
         LEFT JOIN conversation_state cs ON cs.conversation_id = c.id
-        LEFT JOIN end_users eu ON eu.id = c.end_user_id
-        LEFT JOIN painel_clients pc ON pc.id = c.client_id
+        LEFT JOIN end_users eu ON eu.id = c.end_user_id AND eu.company_id = c.company_id
+        LEFT JOIN painel_clients pc ON pc.id = c.client_id AND pc.company_id = c.company_id
         WHERE c.company_id = ${companyId}::uuid
           ${query.client_id ? Prisma.sql`AND c.client_id = ${query.client_id}::uuid` : Prisma.empty}
       ), flags AS (

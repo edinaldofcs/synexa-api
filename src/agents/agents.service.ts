@@ -178,6 +178,9 @@ export class AgentsService {
     let agentRecord: any = dto.agent_data;
     if (!agentRecord && dto.agent_id) {
       agentRecord = await this.agentsRepository.findOne(dto.agent_id);
+      if (!agentRecord || agentRecord.client_id !== clientId) {
+        throw new NotFoundException('Agente não encontrado');
+      }
     }
 
     if (!agentRecord) {

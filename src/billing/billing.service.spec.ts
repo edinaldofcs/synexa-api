@@ -94,6 +94,38 @@ describe('BillingService', () => {
     expect(query.values).toContain('00000000-0000-0000-0000-000000000001');
   });
 
+  it('should cache each monthly summary separately and reuse the same month', async () => {
+    const cache = new Map<string, unknown>();
+    mockRedisService.get.mockImplementation(async (key: string) =>
+      cache.get(key),
+    );
+    mockRedisService.set.mockImplementation(
+      async (key: string, value: unknown) => {
+        cache.set(key, value);
+      },
+    );
+    mockPrismaService.$queryRaw.mockResolvedValue([]);
+    const companyId = '00000000-0000-0000-0000-000000000001';
+
+    const august = await service.getUsageSummary(
+      companyId,
+      new Date(2026, 7, 1),
+    );
+    const september = await service.getUsageSummary(
+      companyId,
+      new Date(2026, 8, 1),
+    );
+    const augustAgain = await service.getUsageSummary(
+      companyId,
+      new Date(2026, 7, 15),
+    );
+
+    expect(august.period).toBe('2026-08');
+    expect(september.period).toBe('2026-09');
+    expect(augustAgain).toEqual(august);
+    expect(mockPrismaService.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
   it('should include cartesia-cascade sessions in the voice filter', async () => {
     mockPrismaService.$queryRaw.mockResolvedValueOnce([
       {

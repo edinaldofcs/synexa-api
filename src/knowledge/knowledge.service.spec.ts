@@ -94,3 +94,79 @@ describe('KnowledgeService regressions', () => {
     );
   });
 });
+
+describe('KnowledgeService tenant relationships', () => {
+  const base = { id: 'base', company_id: 'company', client_id: 'client' };
+  const db = {
+    painel_clients: {
+      findUnique: jest.fn().mockResolvedValue({ company_id: 'company' }),
+    },
+    knowledge_bases: { findUnique: jest.fn().mockResolvedValue(base) },
+    knowledge_documents: { create: jest.fn().mockResolvedValue({ id: 'doc' }) },
+    media_assets: { findFirst: jest.fn() },
+    $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+  };
+  const queue = { addKnowledgeJob: jest.fn() };
+  const service = new KnowledgeService(
+    db as any,
+    queue as any,
+    {} as any,
+    {} as any,
+    {} as any,
+  );
+  const asTenant = (action: () => Promise<unknown>) =>
+    tenantLocalStorage.run(
+      { userId: 'user', companyId: 'company', role: 'company_admin' },
+      action,
+    );
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('rejects a foreign media reference before persistence or enqueue', async () => {
+    db.media_assets.findFirst.mockResolvedValue(null);
+    await expect(
+      asTenant(() =>
+        service.createDocument(
+          'base',
+          { title: 'Doc', content: 'text', media_asset_id: 'foreign' },
+          'user',
+        ),
+      ),
+    ).rejects.toThrow('Media asset not found');
+    expect(db.knowledge_documents.create).not.toHaveBeenCalled();
+    expect(queue.addKnowledgeJob).not.toHaveBeenCalled();
+    expect(db.media_assets.findFirst).toHaveBeenCalledWith({
+      where: { id: 'foreign', company_id: 'company', client_id: 'client' },
+      select: { id: true },
+    });
+  });
+
+  it('accepts media belonging to the same company and client', async () => {
+    db.media_assets.findFirst.mockResolvedValue({ id: 'own-media' });
+    await asTenant(() =>
+      service.createDocument(
+        'base',
+        { title: 'Doc', content: 'text', media_asset_id: 'own-media' },
+        'user',
+      ),
+    );
+    expect(db.knowledge_documents.create).toHaveBeenCalled();
+    expect(queue.addKnowledgeJob).toHaveBeenCalledWith({ document_id: 'doc' });
+  });
+
+  it('binds the authorized company to vector SQL and checks parent ownership', async () => {
+    jest.spyOn(service as any, 'createEmbedding').mockResolvedValue([0.1]);
+    await asTenant(() =>
+      service.search('base', { query: 'text', limit: 5 }, 'user'),
+    );
+    const [sql, , baseId, clientId, , companyId] =
+      db.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('ke.company_id = $5::uuid');
+    expect(sql).toContain('kd.company_id = kc.company_id');
+    expect([baseId, clientId, companyId]).toEqual([
+      'base',
+      'client',
+      'company',
+    ]);
+  });
+});

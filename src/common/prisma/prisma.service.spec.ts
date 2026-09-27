@@ -1,7 +1,13 @@
 import {
   applyTenantInjection,
   TENANT_SUPPORTED_MODELS,
+  TENANT_RELATION_PATHS,
+  PrismaService,
 } from './prisma.service';
+import { tenantLocalStorage } from '../auth/tenant-context';
+import { randomUUID } from 'crypto';
+import { KnowledgeService } from '../../knowledge/knowledge.service';
+import { ClientMetadataService } from '../metadata/client-metadata.service';
 
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -86,11 +92,47 @@ describe('applyTenantInjection', () => {
     expect(result.where).toEqual({ id: 'x' });
   });
 
-  it('does nothing for models without company_id column', () => {
+  it('scopes subordinate models through their parent without a company_id column', () => {
     const args: any = { where: { id: 'x' } };
     applyTenantInjection('painel_agents', 'findMany', args, COMPANY_ID);
     expect(args.where.company_id).toBeUndefined();
+    expect(args.where.AND).toEqual([
+      { painel_clients: { company_id: COMPANY_ID } },
+    ]);
   });
+
+  it.each(Object.entries(TENANT_RELATION_PATHS))(
+    'scopes reads and mutations of %s without overwriting filters',
+    (model, path) => {
+      for (const operation of [
+        'findUnique',
+        'findMany',
+        'count',
+        'update',
+        'updateMany',
+        'delete',
+        'deleteMany',
+        'upsert',
+      ]) {
+        const existing = { is_active: true };
+        const args: any = {
+          where: {
+            id: 'foreign-id',
+            AND: existing,
+            OR: [{ client_id: 'foreign-client' }],
+          },
+        };
+        applyTenantInjection(model, operation, args, COMPANY_ID);
+        expect(args.where.id).toBe('foreign-id');
+        expect(args.where.OR).toEqual([{ client_id: 'foreign-client' }]);
+        const scope = path.reduceRight(
+          (value, relation) => ({ [relation]: value }),
+          { company_id: COMPANY_ID } as any,
+        );
+        expect(args.where.AND).toEqual([existing, scope]);
+      }
+    },
+  );
 
   it('forces tenant on findUnique by id (blocks cross-tenant by-id access)', () => {
     const args: any = { where: { id: 'target-id' } };
@@ -114,3 +156,248 @@ describe('applyTenantInjection', () => {
     expect(args.where.status).toBe('active');
   });
 });
+
+const tenantTestUrl = process.env.TENANT_ISOLATION_TEST_DATABASE_URL;
+(tenantTestUrl ? describe : describe.skip)(
+  'tenant isolation on disposable PostgreSQL',
+  () => {
+    let prisma: PrismaService;
+    let previousUrl: string | undefined;
+    const companyA = randomUUID(),
+      companyB = randomUUID();
+    const clientA = randomUUID(),
+      clientB = randomUUID();
+    const agentA = randomUUID(),
+      agentB = randomUUID();
+
+    beforeAll(async () => {
+      const url = new URL(tenantTestUrl!);
+      if (
+        url.hostname !== '127.0.0.1' ||
+        url.pathname !== '/tenant_isolation_test'
+      ) {
+        throw new Error(
+          'Requires the disposable loopback tenant_isolation_test database',
+        );
+      }
+      previousUrl = process.env.DATABASE_URL;
+      process.env.DATABASE_URL = tenantTestUrl;
+      prisma = new PrismaService();
+      await prisma.$connect();
+      await prisma.companies.createMany({
+        data: [
+          { id: companyA, name: 'A' },
+          { id: companyB, name: 'B' },
+        ],
+      });
+      await prisma.painel_clients.createMany({
+        data: [
+          { id: clientA, company_id: companyA, company_name: 'A' },
+          { id: clientB, company_id: companyB, company_name: 'B' },
+        ],
+      });
+      await prisma.painel_agents.createMany({
+        data: [
+          { id: agentA, client_id: clientA, service_step: 'A' },
+          { id: agentB, client_id: clientB, service_step: 'B' },
+        ],
+      });
+    });
+
+    afterAll(async () => {
+      if (prisma) {
+        await prisma.companies.deleteMany({
+          where: { id: { in: [companyA, companyB] } },
+        });
+        await prisma.$disconnect();
+      }
+      if (previousUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousUrl;
+    });
+
+    it('blocks foreign IDs, OR filters, writes and deletes while allowing own records', async () => {
+      await tenantLocalStorage.run(
+        { companyId: companyA, role: 'company_admin' },
+        async () => {
+          expect(
+            await prisma.painel_agents.findUnique({ where: { id: agentB } }),
+          ).toBeNull();
+          expect(
+            await prisma.painel_agents.findMany({
+              where: { OR: [{ id: agentA }, { id: agentB }] },
+            }),
+          ).toEqual([expect.objectContaining({ id: agentA })]);
+          await expect(
+            prisma.painel_agents.update({
+              where: { id: agentB },
+              data: { service_step: 'changed' },
+            }),
+          ).rejects.toMatchObject({ code: 'P2025' });
+          await expect(
+            prisma.painel_agents.delete({ where: { id: agentB } }),
+          ).rejects.toMatchObject({ code: 'P2025' });
+          expect(
+            await prisma.painel_agents.updateMany({
+              data: { service_step: 'own changed' },
+            }),
+          ).toEqual({ count: 1 });
+          await prisma.$transaction(async (tx) => {
+            expect(
+              await tx.painel_agents.findUnique({ where: { id: agentB } }),
+            ).toBeNull();
+          });
+        },
+      );
+      expect(
+        (
+          await prisma.painel_agents.findUniqueOrThrow({
+            where: { id: agentB },
+          })
+        ).service_step,
+      ).toBe('B');
+    });
+
+    it('does not expose a foreign document through an inconsistent knowledge relationship', async () => {
+      const baseA = randomUUID(),
+        baseB = randomUUID();
+      const docA = randomUUID(),
+        docB = randomUUID();
+      const chunkA = randomUUID(),
+        corruptChunk = randomUUID();
+      await prisma.knowledge_bases.createMany({
+        data: [
+          { id: baseA, client_id: clientA, company_id: companyA, name: 'A' },
+          { id: baseB, client_id: clientB, company_id: companyB, name: 'B' },
+        ],
+      });
+      await prisma.knowledge_documents.createMany({
+        data: [
+          {
+            id: docA,
+            knowledge_base_id: baseA,
+            client_id: clientA,
+            company_id: companyA,
+            title: 'Allowed',
+          },
+          {
+            id: docB,
+            knowledge_base_id: baseB,
+            client_id: clientB,
+            company_id: companyB,
+            title: 'Private B',
+          },
+        ],
+      });
+      await prisma.knowledge_chunks.createMany({
+        data: [
+          {
+            id: chunkA,
+            knowledge_base_id: baseA,
+            document_id: docA,
+            client_id: clientA,
+            company_id: companyA,
+            content: 'Own content',
+            chunk_index: 0,
+          },
+          {
+            id: corruptChunk,
+            knowledge_base_id: baseA,
+            document_id: docB,
+            client_id: clientA,
+            company_id: companyA,
+            content: 'Foreign link',
+            chunk_index: 1,
+          },
+        ],
+      });
+      const embedding = Array.from({ length: 1536 }, (_, index) =>
+        index === 0 ? 1 : 0,
+      );
+      for (const chunk of [chunkA, corruptChunk]) {
+        await prisma.$executeRaw`INSERT INTO knowledge_embeddings
+          (id, company_id, client_id, knowledge_base_id, chunk_id, provider, model, dimensions, embedding)
+          VALUES (${randomUUID()}::uuid, ${companyA}::uuid, ${clientA}::uuid, ${baseA}::uuid, ${chunk}::uuid,
+            'test', 'test', 1536, ${JSON.stringify(embedding)}::vector)`;
+      }
+      const knowledge = new KnowledgeService(
+        prisma,
+        {} as any,
+        {} as any,
+        {} as any,
+        {} as any,
+      );
+      jest
+        .spyOn(knowledge as any, 'createEmbedding')
+        .mockResolvedValue(embedding);
+      await tenantLocalStorage.run(
+        { companyId: companyA, userId: 'tester', role: 'company_admin' },
+        async () => {
+          const results = await knowledge.search(
+            baseA,
+            { query: 'text', limit: 5 },
+            'tester',
+          );
+          expect(results).toEqual([
+            expect.objectContaining({ id: chunkA, document_title: 'Allowed' }),
+          ]);
+          await expect(
+            knowledge.search(baseB, { query: 'text' }, 'tester'),
+          ).rejects.toThrow('Knowledge base not found');
+        },
+      );
+    });
+
+    it('refreshes metadata only for an authorized client', async () => {
+      await prisma.painel_clients.update({
+        where: { id: clientB },
+        data: { metadata: { sentinel: 'private' } },
+      });
+      const metadata = new ClientMetadataService(prisma);
+      await tenantLocalStorage.run(
+        { companyId: companyA, role: 'company_admin' },
+        async () => {
+          await metadata.refresh(clientB);
+          await metadata.refresh(clientA);
+        },
+      );
+      expect(
+        (
+          await prisma.painel_clients.findUniqueOrThrow({
+            where: { id: clientB },
+          })
+        ).metadata,
+      ).toEqual({ sentinel: 'private' });
+      expect(
+        (
+          await prisma.painel_clients.findUniqueOrThrow({
+            where: { id: clientA },
+          })
+        ).metadata,
+      ).toEqual(expect.objectContaining({ company_name: 'A' }));
+    });
+
+    it('preserves authorized platform administration and scopes impersonation', async () => {
+      await tenantLocalStorage.run(
+        { companyId: companyA, role: 'platform_admin' },
+        async () => {
+          expect(
+            await prisma.painel_agents.count({
+              where: { id: { in: [agentA, agentB] } },
+            }),
+          ).toBe(2);
+        },
+      );
+      await tenantLocalStorage.run(
+        { companyId: companyB, role: 'company_admin' },
+        async () => {
+          expect(
+            await prisma.painel_agents.findUnique({ where: { id: agentA } }),
+          ).toBeNull();
+          expect(
+            await prisma.painel_agents.findUnique({ where: { id: agentB } }),
+          ).not.toBeNull();
+        },
+      );
+    });
+  },
+);

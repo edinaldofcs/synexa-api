@@ -2,6 +2,8 @@ import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   Controller,
+  Header,
+  HttpCode,
   Get,
   Post,
   Patch,
@@ -21,10 +23,83 @@ import {
   UpdateWebhookEndpointDto,
 } from './dto/create-webhook-endpoint.dto';
 import { randomBytes } from 'crypto';
+import { CallPreviewDto } from './dto/call-preview.dto';
+import { buildCallExportPayload } from './services/call-export-payload';
 
 @Controller('webhooks')
 export class WebhooksController {
   constructor(private readonly prisma: PrismaService) {}
+
+  @Post('clients/:clientId/call-preview')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  async previewCall(
+    @CurrentUser() user: any,
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Body() body: CallPreviewDto,
+  ) {
+    const ctx = extractTenantContext(user);
+    if (!ctx.companyId)
+      throw new UnauthorizedException('Empresa não identificada');
+    const client = await this.prisma.painel_clients.findFirst({
+      where: { id: clientId, company_id: ctx.companyId },
+      select: { id: true },
+    });
+    if (!client) throw new NotFoundException('Cliente não encontrado');
+    const endpoint = await this.prisma.webhook_endpoints.findFirst({
+      where: {
+        client_id: clientId,
+        enabled: true,
+        events: { array_contains: 'call.completed' },
+      },
+      select: { retry_policy: true },
+    });
+    const includeTranscript =
+      (endpoint?.retry_policy as Record<string, unknown> | null)
+        ?.include_transcript === true;
+    const endedAt = new Date();
+    return {
+      configured: !!endpoint,
+      include_transcript: includeTranscript,
+      payload: buildCallExportPayload({
+        eventId: 'preview-event',
+        companyId: ctx.companyId,
+        clientId,
+        conversation: {
+          id: 'preview-call',
+          started_at: new Date(
+            endedAt.getTime() - body.duration_seconds * 1000,
+          ),
+          current_agent_id: body.agent_id || null,
+          metadata: {
+            caller: body.caller_number || null,
+            did: body.dialed_number || null,
+            hangup_cause: body.end_reason || 'completed',
+          },
+        },
+        endedAt,
+        variables: body.variables,
+        messages: includeTranscript
+          ? body.transcript.map((entry) => ({
+              sender_type: entry.role === 'user' ? 'customer' : 'ai',
+              content: entry.text,
+              created_at: null,
+            }))
+          : undefined,
+        tools: body.tools.map((tool) => ({
+          tool_name: tool.tool_name,
+          status:
+            tool.status === 'executing'
+              ? 'running'
+              : tool.status === 'success'
+                ? 'completed'
+                : 'failed',
+          result: tool.result ?? null,
+          completed_at: null,
+        })),
+      }),
+    };
+  }
 
   @Get('endpoints')
   async listEndpoints(

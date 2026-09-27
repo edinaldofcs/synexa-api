@@ -1,3 +1,4 @@
+import { buildCallExportPayload } from './call-export-payload';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, call_exports } from '@prisma/client';
@@ -195,54 +196,19 @@ export class CallExportsService implements OnModuleInit {
         orderBy: { created_at: 'asc' },
       }),
     ]);
-    const metadata = (conversation.metadata || {}) as Record<string, unknown>;
     const endedAt = conversation.closed_at || conversation.voice_finalized_at!;
-    const payload = {
-      schema_version: 1,
-      event: 'call.completed',
-      event_id: row.id,
-      occurred_at: endedAt.toISOString(),
-      company_id: row.company_id,
-      client_id: row.client_id,
-      call: {
-        id: conversation.id,
-        external_id: interaction?.call_id || metadata.call_id || null,
-        started_at: conversation.started_at,
-        ended_at: endedAt,
-        duration_seconds:
-          interaction?.duration_seconds ??
-          Math.max(
-            0,
-            Math.round(
-              (endedAt.getTime() -
-                (conversation.started_at || endedAt).getTime()) /
-                1000,
-            ),
-          ),
-        end_reason: recoveredCall
-          ? 'connection_lost'
-          : interaction?.hangup_cause || metadata.hangup_cause || 'completed',
-        agent_id:
-          interaction?.agent_id ||
-          metadata.agent_id ||
-          conversation.current_agent_id ||
-          null,
-        caller_number: metadata.caller || null,
-        dialed_number: metadata.did || interaction?.company_identifier || null,
-        customer_identifier: interaction?.client_identifier || null,
-        customer_name: interaction?.client_name || null,
-        variables: state?.state || interaction?.context_variables || {},
-        summary: interaction?.summary || null,
-        transcript: messages,
-        tools,
-        usage: interaction
-          ? {
-              total_tokens: interaction.total_tokens,
-              estimated_cost_usd: interaction.estimated_cost_usd,
-            }
-          : null,
-      },
-    };
+    const payload = buildCallExportPayload({
+      eventId: row.id,
+      companyId: row.company_id,
+      clientId: row.client_id,
+      conversation,
+      endedAt,
+      recoveredCall,
+      interaction,
+      variables: state?.state,
+      messages,
+      tools,
+    });
     await this.update(row.id, token, {
       status: 'pending',
       payload_enc: encrypt(JSON.stringify(payload), this.key()),

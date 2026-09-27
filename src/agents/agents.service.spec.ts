@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { AgentsService } from './agents.service';
+import { AgentsController } from './agents.controller';
 
 describe('AgentsService', () => {
   const mockRepository = {
@@ -38,6 +39,53 @@ describe('AgentsService', () => {
   });
 
   describe('Tenant security', () => {
+    it('não revela o prompt de um agente de outro cliente', async () => {
+      mockRepository.findOne.mockResolvedValue({
+        id: 'foreign-agent',
+        client_id: 'other-client',
+        system_prompt: 'private',
+      });
+      await expect(
+        service.previewPrompt(
+          clientId,
+          { agent_id: 'foreign-agent' },
+          companyId,
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('permite a prévia de um agente do cliente autorizado', async () => {
+      mockRepository.findOne.mockResolvedValue({
+        id: 'own-agent',
+        client_id: clientId,
+        system_prompt: 'Own prompt',
+      });
+      await expect(
+        service.previewPrompt(clientId, { agent_id: 'own-agent' }, companyId),
+      ).resolves.toEqual(
+        expect.objectContaining({ resolved_prompt: expect.any(String) }),
+      );
+    });
+
+    it('não consulta ferramentas de outro cliente usando um agente próprio', async () => {
+      const executor = {
+        loadAgentTools: jest.fn(),
+        buildAgentConfigFromRecord: jest.fn(),
+      };
+      const agents = {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'agent', client_id: clientId }),
+      };
+      const controller = new AgentsController(agents as any, executor as any);
+      await expect(
+        controller.listAgentTools('other-client', 'agent', {
+          company_id: companyId,
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(executor.loadAgentTools).not.toHaveBeenCalled();
+    });
+
     it('rejeita criação para cliente de outra empresa', async () => {
       mockPrisma.painel_clients.findUnique.mockResolvedValue({
         company_id: 'other-company',
@@ -50,6 +98,37 @@ describe('AgentsService', () => {
   });
 
   describe('Agent creation & initial uniqueness', () => {
+    it('carrega o catálogo de ferramentas do cliente do agente autorizado', async () => {
+      const agent = {
+        id: 'agent',
+        client_id: clientId,
+        allowed_tool_names: [],
+        transitions: {},
+      };
+      const executor = {
+        loadAgentTools: jest
+          .fn()
+          .mockResolvedValue({ apiTools: [], availableTools: [] }),
+        buildAgentConfigFromRecord: jest.fn().mockReturnValue({}),
+      };
+      const controller = new AgentsController(
+        { findOne: jest.fn().mockResolvedValue(agent) } as any,
+        executor as any,
+      );
+      await expect(
+        controller.listAgentTools(clientId, agent.id, {
+          company_id: companyId,
+        }),
+      ).resolves.toEqual({
+        agent_id: agent.id,
+        tools: [],
+        available_tool_names: [],
+      });
+      expect(executor.loadAgentTools).toHaveBeenCalledWith(
+        expect.objectContaining({ clientId }),
+      );
+    });
+
     it('cria agente e desmarca outros agentes como inicial quando is_initial é true', async () => {
       mockRepository.create.mockResolvedValue({
         id: 'agent-1',

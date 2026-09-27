@@ -7,9 +7,9 @@ import { tenantLocalStorage } from '../auth/tenant-context';
  *
  * NOTA ARQUITETURAL DE SEGURANÇA MULTI-TENANT:
  * Em produção, o isolamento multi-tenant é garantido na camada de aplicação por esta extensão Prisma.
- * Modelos subordinados (ex: painel_agents, painel_subagents, painel_apis, painel_tracks) possuem vínculo
- * com 'painel_clients'. Queries nesses modelos DEVEM sempre ser filtradas via relação com o cliente
- * (ex: client.company_id == tenant.companyId) para manter o isolamento estrito.
+ * Modelos subordinados são filtrados pela relação com seu proprietário.
+ * SQL bruto, relações em include/select e vínculos nas escritas ainda exigem
+ * validação explícita nos serviços; não passam por este filtro de modelo.
  */
 export const TENANT_SUPPORTED_MODELS = [
   'sip_accounts',
@@ -38,6 +38,17 @@ export const TENANT_SUPPORTED_MODELS = [
   'call_exports',
   'telephony_endpoints',
 ];
+
+export const TENANT_RELATION_PATHS: Record<string, string[]> = {
+  painel_agents: ['painel_clients'],
+  painel_subagents: ['painel_clients'],
+  painel_apis: ['painel_clients'],
+  painel_tracks: ['painel_clients'],
+  webhook_endpoints: ['painel_clients'],
+  webhook_deliveries: ['webhook_endpoints', 'painel_clients'],
+  message_parts: ['messages'],
+  conversation_state: ['conversations'],
+};
 
 const WHERE_SCOPED_OPERATIONS = [
   'findFirst',
@@ -70,11 +81,34 @@ export function applyTenantInjection(
     return args;
   }
 
-  if (!companyId || !model || !TENANT_SUPPORTED_MODELS.includes(model)) {
+  if (!companyId || !model) {
     return args;
   }
 
   const anyArgs = args as any;
+  const relationPath = TENANT_RELATION_PATHS[model];
+  if (relationPath) {
+    if (WHERE_SCOPED_OPERATIONS.includes(operation)) {
+      const scope = relationPath.reduceRight<Record<string, unknown>>(
+        (filter, relation) => ({ [relation]: filter }),
+        { company_id: companyId },
+      );
+      const where = anyArgs.where || {};
+      anyArgs.where = {
+        ...where,
+        AND: [
+          ...(Array.isArray(where.AND)
+            ? where.AND
+            : where.AND
+              ? [where.AND]
+              : []),
+          scope,
+        ],
+      };
+    }
+    return args;
+  }
+  if (!TENANT_SUPPORTED_MODELS.includes(model)) return args;
 
   // Em operações que usam cláusula 'where', injeta o tenant ID
   if (WHERE_SCOPED_OPERATIONS.includes(operation)) {

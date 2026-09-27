@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -76,6 +76,12 @@ export class RagSearchService {
       return [];
     }
 
+    const client = await this.prisma.painel_clients.findFirst({
+      where: { id: clientId, company_id: companyId },
+      select: { id: true },
+    });
+    if (!client) throw new NotFoundException('Client not found');
+
     // Resolve todos os provedores viáveis que possuem chaves configuradas
     const providersToTry: { name: string; apiKey: string }[] = [];
     const preferred =
@@ -140,7 +146,9 @@ export class RagSearchService {
 
     let lastError: Error | null = null;
 
-    const embeddingCacheKey = `rag:emb:${createHash('sha256')
+    const embeddingCacheKey = `rag:emb:${companyId}:${clientId}:${createHash(
+      'sha256',
+    )
       .update(query)
       .digest('hex')}`;
     let cachedEmbedding: {
@@ -246,9 +254,14 @@ export class RagSearchService {
             1 - (ke.embedding <=> $1::vector) AS score
           FROM knowledge_embeddings ke
           JOIN knowledge_chunks kc ON kc.id = ke.chunk_id
+            AND kc.company_id = ke.company_id AND kc.client_id = ke.client_id
+            AND kc.knowledge_base_id = ke.knowledge_base_id
           JOIN knowledge_documents kd ON kd.id = kc.document_id
+            AND kd.company_id = kc.company_id AND kd.client_id = kc.client_id
+            AND kd.knowledge_base_id = kc.knowledge_base_id
           WHERE ke.client_id = $2::uuid
             AND ke.knowledge_base_id = ANY($3::uuid[])
+            AND ke.company_id = $5::uuid
           ORDER BY ke.embedding <=> $1::vector
           LIMIT $4
           `,
@@ -256,6 +269,7 @@ export class RagSearchService {
           clientId,
           agentConfig.allowed_knowledge_base_ids,
           Math.min(Math.max(limit || 5, 1), 10),
+          companyId,
         );
 
         await this.prisma.tool_calls.update({
@@ -283,9 +297,7 @@ export class RagSearchService {
 
     // Se todos os provedores de embedding externos falharem, executa busca híbrida textual/semântica de contingência
     try {
-      this.logger.log(
-        `Executando busca textual de contingência para a query: "${query}"`,
-      );
+      this.logger.log('Executando busca textual de contingência');
       const words = query
         .toLowerCase()
         .replace(/[^\w\s\u00C0-\u00FF]/g, ' ')
@@ -316,8 +328,11 @@ export class RagSearchService {
           0.88::float8 AS score
         FROM knowledge_chunks kc
         JOIN knowledge_documents kd ON kd.id = kc.document_id
+          AND kd.company_id = kc.company_id AND kd.client_id = kc.client_id
+          AND kd.knowledge_base_id = kc.knowledge_base_id
         WHERE kc.client_id = $1::uuid
           AND kc.knowledge_base_id = ANY($2::uuid[])
+          AND kc.company_id = $6::uuid
           AND (
             kc.content ILIKE $3
             OR kd.title ILIKE $3
@@ -333,6 +348,7 @@ export class RagSearchService {
         searchPattern,
         wordPatterns,
         Math.min(Math.max(limit || 5, 1), 10),
+        companyId,
       );
 
       await this.prisma.tool_calls.update({

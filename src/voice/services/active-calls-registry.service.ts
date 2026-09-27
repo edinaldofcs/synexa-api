@@ -119,16 +119,7 @@ export class ActiveCallsRegistryService {
   public async getActiveCalls(
     companyId: string,
   ): Promise<ActiveCallDescriptor[]> {
-    const results: ActiveCallDescriptor[] = [];
-    const seen = new Set<string>();
-
-    for (const call of this.calls.values()) {
-      if (call.companyId === companyId && !seen.has(call.callId)) {
-        seen.add(call.callId);
-        results.push(call);
-      }
-    }
-
+    const results = this.getLocalActiveCalls(companyId);
     if (results.length > 0) {
       return results;
     }
@@ -215,9 +206,25 @@ export class ActiveCallsRegistryService {
     }
   }
 
+  private getLocalActiveCalls(companyId: string): ActiveCallDescriptor[] {
+    const results: ActiveCallDescriptor[] = [];
+    const seen = new Set<string>();
+
+    for (const call of this.calls.values()) {
+      if (call.companyId === companyId && !seen.has(call.callId)) {
+        seen.add(call.callId);
+        results.push(call);
+      }
+    }
+
+    return results;
+  }
+
   private async syncCompanyCallsToRedis(companyId: string): Promise<void> {
     if (!companyId) return;
-    const calls = this.getActiveCalls(companyId);
+    // Publica somente o estado local, inclusive vazio após a última chamada.
+    // O fallback de leitura do Redis poderia recuperar chamadas já encerradas.
+    const calls = this.getLocalActiveCalls(companyId);
     await this.redis.set(`synexa:active_calls:${companyId}`, calls, 3600);
   }
 }

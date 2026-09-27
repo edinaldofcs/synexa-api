@@ -164,11 +164,15 @@ export class BillingService {
   ): Promise<BillingSummaryResponse> {
     const clientId = this.assertOptionalClientId(filters.clientId);
     const useCustomWindow = Boolean(filters.from || filters.to);
+    const targetDate = periodDate || new Date();
 
     return this.withBillingCache(
       'summary',
       companyId,
       {
+        period: useCustomWindow
+          ? null
+          : `${targetDate.getFullYear()}-${targetDate.getMonth() + 1}`,
         from: filters.from ?? null,
         to: filters.to ?? null,
         clientId: clientId ?? null,
@@ -182,7 +186,6 @@ export class BillingService {
           windowFrom = window.from;
           windowTo = window.to;
         } else {
-          const targetDate = periodDate || new Date();
           windowFrom = new Date(
             targetDate.getFullYear(),
             targetDate.getMonth(),

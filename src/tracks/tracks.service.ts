@@ -27,6 +27,11 @@ export class TracksService {
     companyId: string,
   ) {
     await this.validateClientAccess(clientId, companyId);
+    await this.validateAgentAccess(
+      createTrackDto.agent_id,
+      clientId,
+      companyId,
+    );
     return this.tracksRepository.create(
       clientId,
       createTrackDto as Record<string, unknown>,
@@ -63,10 +68,35 @@ export class TracksService {
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`Track with ID ${id} not found`);
     }
+    await this.validateAgentAccess(
+      updateTrackDto.agent_id,
+      track.client_id,
+      companyId,
+    );
     return this.tracksRepository.update(
       id,
       updateTrackDto as Record<string, unknown>,
     );
+  }
+
+  private async validateAgentAccess(
+    agentId: unknown,
+    clientId: string,
+    companyId: string,
+  ) {
+    if (agentId === undefined || agentId === null) return;
+    if (typeof agentId !== 'string' || !agentId) {
+      throw new NotFoundException('Agente não encontrado');
+    }
+    const agent = await this.prisma.painel_agents.findFirst({
+      where: {
+        id: agentId,
+        client_id: clientId,
+        painel_clients: { company_id: companyId },
+      },
+      select: { id: true },
+    });
+    if (!agent) throw new NotFoundException('Agente não encontrado');
   }
 
   async remove(id: string, companyId: string) {

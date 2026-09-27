@@ -10,6 +10,7 @@ describe('TracksService', () => {
   };
   const prisma = {
     painel_clients: { findUnique: jest.fn() },
+    painel_agents: { findFirst: jest.fn() },
   };
   const service = new TracksService(repository as never, prisma as never);
 
@@ -68,5 +69,43 @@ describe('TracksService', () => {
     await expect(
       service.findAllByClient('client-1', companyId),
     ).rejects.toBeInstanceOf(Error);
+  });
+
+  it('rejects linking a track to an agent outside its client on create and update', async () => {
+    prisma.painel_agents.findFirst.mockResolvedValue(null);
+    repository.findOne.mockResolvedValue({
+      id: 'track-1',
+      client_id: 'client-1',
+    });
+    await expect(
+      service.create('client-1', { agent_id: 'foreign-agent' }, companyId),
+    ).rejects.toThrow('Agente não encontrado');
+    await expect(
+      service.update('track-1', { agent_id: 'foreign-agent' }, companyId),
+    ).rejects.toThrow('Agente não encontrado');
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(repository.update).not.toHaveBeenCalled();
+    expect(prisma.painel_agents.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'foreign-agent',
+        client_id: 'client-1',
+        painel_clients: { company_id: companyId },
+      },
+      select: { id: true },
+    });
+  });
+
+  it('allows an agent of the same client and allows clearing the link', async () => {
+    prisma.painel_agents.findFirst.mockResolvedValue({ id: 'own-agent' });
+    repository.findOne.mockResolvedValue({
+      id: 'track-1',
+      client_id: 'client-1',
+    });
+    await service.update('track-1', { agent_id: 'own-agent' }, companyId);
+    await service.update('track-1', { agent_id: null }, companyId);
+    expect(repository.update).toHaveBeenLastCalledWith('track-1', {
+      agent_id: null,
+    });
+    expect(prisma.painel_agents.findFirst).toHaveBeenCalledTimes(1);
   });
 });

@@ -64,6 +64,7 @@ describe('AgentsService - Simulation & Preview', () => {
     it('deve buscar agente no repositório se agent_id for fornecido', async () => {
       mockRepository.findOne.mockResolvedValue({
         id: 'agent-123',
+        client_id: clientId,
         system_prompt: 'Roteiro de teste para {{empresa}}.',
       });
 

@@ -75,6 +75,18 @@ export class KnowledgeService {
   ) {
     const base = await this.getAuthorizedBase(baseId, userId);
 
+    if (dto.media_asset_id) {
+      const media = await this.prisma.media_assets.findFirst({
+        where: {
+          id: dto.media_asset_id,
+          company_id: base.company_id,
+          client_id: base.client_id,
+        },
+        select: { id: true },
+      });
+      if (!media) throw new NotFoundException('Media asset not found');
+    }
+
     const document = await this.prisma.knowledge_documents.create({
       data: {
         company_id: base.company_id,
@@ -120,9 +132,14 @@ export class KnowledgeService {
         1 - (ke.embedding <=> $1::vector) AS score
       FROM knowledge_embeddings ke
       JOIN knowledge_chunks kc ON kc.id = ke.chunk_id
+        AND kc.company_id = ke.company_id AND kc.client_id = ke.client_id
+        AND kc.knowledge_base_id = ke.knowledge_base_id
       JOIN knowledge_documents kd ON kd.id = kc.document_id
+        AND kd.company_id = kc.company_id AND kd.client_id = kc.client_id
+        AND kd.knowledge_base_id = kc.knowledge_base_id
       WHERE ke.knowledge_base_id = $2::uuid
         AND ke.client_id = $3::uuid
+        AND ke.company_id = $5::uuid
       ORDER BY ke.embedding <=> $1::vector
       LIMIT $4
       `,
@@ -130,6 +147,7 @@ export class KnowledgeService {
       base.id,
       base.client_id,
       limit,
+      base.company_id,
     );
   }
 

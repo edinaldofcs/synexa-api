@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  NotFoundException,
 } from '@nestjs/common';
 import { AgentsService } from './agents.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
@@ -36,6 +37,9 @@ export class AgentsController {
     @CurrentUser() user: { company_id: string },
   ) {
     const agent = await this.agentsService.findOne(agentId, user.company_id);
+    if (agent.client_id !== clientId) {
+      throw new NotFoundException('Agente não encontrado');
+    }
     const catalog = await this.apiToolExecutor.loadAgentTools({
       clientId,
       agent: {
