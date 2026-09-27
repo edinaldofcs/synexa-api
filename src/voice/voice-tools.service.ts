@@ -432,9 +432,11 @@ export class VoiceToolsService {
                 audit,
                 capture?.entry.id,
               );
-              if (nextResult && nextResult.ok) {
-                if (Array.isArray((nextResult as any)._chainTrail)) {
-                  chainTrail.push(...(nextResult as any)._chainTrail);
+              if (nextResult) {
+                const { _chainTrail: nestedTrail, ...childResponse } =
+                  nextResult as Record<string, unknown>;
+                if (Array.isArray(nestedTrail)) {
+                  chainTrail.push(...nestedTrail);
                 }
                 chainTrail.unshift({
                   from: tool.apiName,
@@ -442,12 +444,22 @@ export class VoiceToolsService {
                   to: nextApi.name,
                   toId: nextApi.id,
                   arguments: nextArgs,
-                  response: nextResult as Record<string, unknown>,
+                  response: childResponse,
                   timestamp: new Date().toISOString(),
                 });
+                // Keep failed executions visible and propagate the failing tool's
+                // fallback through every parent instead of reporting root success.
+                if (nextResult.ok === false) {
+                  return {
+                    ...consolidatedData,
+                    ...childResponse,
+                    ok: false,
+                    _chainTrail: chainTrail,
+                  };
+                }
                 consolidatedData = {
                   ...consolidatedData,
-                  ...nextResult,
+                  ...childResponse,
                   tem_ofertas: true,
                 };
               }

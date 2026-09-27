@@ -1,9 +1,14 @@
 import { VoiceCallSession } from './voice-call-session';
 import { buildVoiceFarewellToolResponse } from '../services/voice-runtime.util';
 
-it.each(['live_api', 'hybrid'])(
-  'keeps late API and chain results on their original transcript turn in %s',
-  async (engine) => {
+it.each([
+  ['live_api', true],
+  ['hybrid', true],
+  ['live_api', false],
+  ['hybrid', false],
+] as const)(
+  'keeps late API and chain results on their original transcript turn in %s (success: %s)',
+  async (engine, success) => {
     const events: any[] = [];
     let resolveFirst!: (value: unknown) => void;
     const firstResult = new Promise((resolve) => {
@@ -76,12 +81,13 @@ it.each(['live_api', 'hybrid'])(
       await callbacks.onToolCall([
         { id: 'call-2', name: 'debts', args: { customer: 2 } },
       ]);
+      const childResponse = success
+        ? { ok: true, plans: [1] }
+        : { ok: false, error: 'extraction_empty', message: 'Sem ofertas' };
       const response = {
-        ok: true,
         balance: 10,
-        _chainTrail: [
-          { from: 'debts', to: 'offers', response: { plans: [1] } },
-        ],
+        ...childResponse,
+        _chainTrail: [{ from: 'debts', to: 'offers', response: childResponse }],
       };
       resolveFirst(response);
       await pending;
@@ -115,6 +121,12 @@ it.each(['live_api', 'hybrid'])(
         response: { ok: false, error: 'timeout' },
       });
       expect(chain.turn_id).toBe(transcripts[0].turn_id);
+      expect(chain.response).toEqual(childResponse);
+      if (!success) {
+        expect(
+          events.some((event) => event.type === 'flow_telephony_variables'),
+        ).toBe(false);
+      }
       expect(chain.execution_id).not.toBe(starts[0].execution_id);
       expect(provider.sendToolResponse).toHaveBeenCalledWith([
         { id: 'call-1', name: 'debts', response },

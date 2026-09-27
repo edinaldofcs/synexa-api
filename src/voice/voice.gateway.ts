@@ -1377,7 +1377,7 @@ export class VoiceGateway
                         response: step.response,
                         timestamp: step.timestamp,
                       },
-                      'info',
+                      step.response?.ok === false ? 'warn' : 'info',
                     );
                     sendToClient({
                       type: 'tool_chaining',

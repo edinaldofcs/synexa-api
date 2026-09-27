@@ -926,6 +926,29 @@ export class VoiceCallSession {
                         );
                     }
 
+                    // Notifica encadeamento se houver _chainTrail
+                    if (Array.isArray((response as any)?._chainTrail)) {
+                      for (const step of (response as any)._chainTrail) {
+                        this.config.onEvent?.({
+                          type: 'flow_telephony_chaining',
+                          turn_id: auditTurnId,
+                          execution_id: randomUUID(),
+                          agent_id: auditAgentId,
+                          occurred_at:
+                            step.timestamp || new Date().toISOString(),
+                          channelId: this.id,
+                          clientId: this.config.clientId,
+                          from: step.from,
+                          to: step.to,
+                          fromId: step.fromId,
+                          toId: step.toId,
+                          arguments: step.arguments,
+                          response: step.response,
+                          timestamp: step.timestamp,
+                        });
+                      }
+                    }
+
                     if (
                       response &&
                       typeof response === 'object' &&
@@ -952,29 +975,6 @@ export class VoiceCallSession {
                         ...this.sessionState,
                         ...returnedState,
                       };
-
-                      // Notifica encadeamento se houver _chainTrail
-                      if (Array.isArray(apiResponse?._chainTrail)) {
-                        for (const step of apiResponse._chainTrail) {
-                          this.config.onEvent?.({
-                            type: 'flow_telephony_chaining',
-                            turn_id: auditTurnId,
-                            execution_id: randomUUID(),
-                            agent_id: auditAgentId,
-                            occurred_at:
-                              step.timestamp || new Date().toISOString(),
-                            channelId: this.id,
-                            clientId: this.config.clientId,
-                            from: step.from,
-                            to: step.to,
-                            fromId: step.fromId,
-                            toId: step.toId,
-                            arguments: step.arguments,
-                            response: step.response,
-                            timestamp: step.timestamp,
-                          });
-                        }
-                      }
 
                       // Notifica variáveis de sessão enriquecidas
                       this.config.onEvent?.({

@@ -263,6 +263,7 @@ describe('webhook-only HTTP audit', () => {
       id: '22222222-2222-2222-2222-222222222222',
       name: 'Child',
       url: 'https://example.com/child',
+      extract_data: { balance: 'balance', _fallback_message: 'Falha filha' },
     };
     const { service, prisma } = buildPrisma(api);
     prisma.painel_apis.findMany.mockResolvedValue([api, child]);
@@ -305,8 +306,109 @@ describe('webhook-only HTTP audit', () => {
       body: { detail: 'child-rejected' },
     });
     expect(audit[1].request.url).toBe('https://example.com/child');
+    expect(result).toMatchObject({
+      ok: false,
+      status: 422,
+      message: 'Falha filha',
+    });
+    expect((result as any)._chainTrail).toEqual([
+      expect.objectContaining({
+        from: 'Lookup',
+        to: 'Child',
+        response: { ok: false, status: 422, message: 'Falha filha' },
+      }),
+    ]);
     expect(JSON.stringify(result)).not.toContain('full-response');
   });
+
+  it.each(['empty', 'timeout', 'nested-empty'])(
+    'propagates chained %s failures with a flat trace and webhook-only raw audit',
+    async (failure) => {
+      const child = {
+        ...api,
+        id: '22222222-2222-2222-2222-222222222222',
+        name: 'Child',
+        url: 'https://example.com/child',
+        extract_data: {
+          balance: 'balance',
+          _fallback_message: 'Fallback filha',
+        },
+      };
+      const grandchild = {
+        ...child,
+        id: '33333333-3333-3333-3333-333333333333',
+        name: 'Grandchild',
+        extract_data: {
+          balance: 'balance',
+          _fallback_message: 'Fallback neta',
+        },
+      };
+      const { service, prisma } = buildPrisma(api);
+      prisma.painel_apis.findMany.mockResolvedValue([api, child, grandchild]);
+      prisma.painel_apis.findFirst.mockResolvedValueOnce(child as any);
+      mockedResolveChainedApiId.mockReturnValueOnce(child.id);
+      const jsonResponse = (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      const fetchMock = jest.spyOn(global, 'fetch');
+      fetchMock.mockResolvedValueOnce(jsonResponse({ balance: 10 }));
+      if (failure === 'nested-empty') {
+        prisma.painel_apis.findFirst.mockResolvedValueOnce(grandchild as any);
+        mockedResolveChainedApiId.mockReturnValueOnce(grandchild.id);
+        fetchMock.mockResolvedValueOnce(jsonResponse({ balance: 20 }));
+      }
+      if (failure === 'timeout') {
+        fetchMock.mockRejectedValueOnce(
+          new DOMException('Timed out', 'AbortError'),
+        );
+      } else {
+        fetchMock.mockResolvedValueOnce(
+          jsonResponse({ private_raw: 'not mapped' }),
+        );
+      }
+      const audit: HttpToolAudit[] = [];
+      const result = await service.execute(
+        'client',
+        'agent',
+        'lookup',
+        { cpf: '123' },
+        {},
+        undefined,
+        audit,
+      );
+      const count = failure === 'nested-empty' ? 3 : 2;
+      const fallback =
+        failure === 'nested-empty' ? 'Fallback neta' : 'Fallback filha';
+      expect(result).toMatchObject({ ok: false, message: fallback });
+      if (failure !== 'timeout')
+        expect(result).toMatchObject({
+          status: 200,
+          error: 'extraction_empty',
+        });
+      expect(fetchMock).toHaveBeenCalledTimes(count);
+      expect(mockedResolveChainedApiId).toHaveBeenCalledTimes(count - 1);
+      expect(audit).toHaveLength(count);
+      expect(audit[1].parent_id).toBe(audit[0].id);
+      if (count === 3) expect(audit[2].parent_id).toBe(audit[1].id);
+      const trail = (result as any)._chainTrail;
+      expect(trail.map((step: any) => step.to)).toEqual(
+        count === 3 ? ['Child', 'Grandchild'] : ['Child'],
+      );
+      for (const step of trail) {
+        expect(step.response).toMatchObject({ ok: false, message: fallback });
+        expect(step.response).not.toHaveProperty('_chainTrail');
+        expect(step.arguments.cpf).toBe('123');
+      }
+      expect(result).not.toHaveProperty('tem_ofertas');
+      expect(JSON.stringify(result)).not.toContain('private_raw');
+      if (failure !== 'timeout')
+        expect(audit[count - 1].response?.body).toEqual({
+          private_raw: 'not mapped',
+        });
+    },
+  );
 });
 
 describe('VoiceToolsService - encadeamento (tenant scope & cycle guard)', () => {
