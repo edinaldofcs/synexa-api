@@ -10,6 +10,7 @@ it.each([
   'keeps late API and chain results on their original transcript turn in %s (success: %s)',
   async (engine, success) => {
     const events: any[] = [];
+    const waiting = jest.fn();
     let resolveFirst!: (value: unknown) => void;
     const firstResult = new Promise((resolve) => {
       resolveFirst = resolve;
@@ -38,6 +39,7 @@ it.each([
       telephonyAdapter: {
         id: 'call',
         providerName: 'test',
+        setWaiting: waiting,
         metadata: { customVariables: {} },
         onAudio: jest.fn(),
         onCallEnd: jest.fn(),
@@ -76,6 +78,8 @@ it.each([
         { id: 'call-1', name: 'debts', args: { customer: 1 } },
       ]);
       await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 1050));
+      expect(waiting).toHaveBeenLastCalledWith(true);
       await callbacks.onAiTranscript('Consultando');
       await callbacks.onUserTranscript('Consultar outro cliente');
       await callbacks.onToolCall([
@@ -91,6 +95,7 @@ it.each([
       };
       resolveFirst(response);
       await pending;
+      expect(waiting).toHaveBeenLastCalledWith(false);
       const transcripts = events.filter(
         (event) => event.type === 'flow_telephony_transcript',
       );

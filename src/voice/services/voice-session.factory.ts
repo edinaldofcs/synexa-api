@@ -1,3 +1,4 @@
+import { WaitingMusicService } from '../../media/waiting-music.service';
 import { CompanyVoiceQuotaService } from './company-voice-quota.service';
 import { InworldVoiceService } from './inworld-voice.service';
 import { resolveVoiceFlowSettings } from './voice-flow-settings';
@@ -47,6 +48,8 @@ export interface SessionSlotCheck {
  */
 @Injectable()
 export class VoiceSessionFactory {
+  @Inject(WaitingMusicService)
+  private readonly waitingMusic: WaitingMusicService;
   private readonly logger = new Logger(VoiceSessionFactory.name);
   @Inject(CompanyVoiceQuotaService)
   private readonly companyQuota: CompanyVoiceQuotaService;
@@ -356,6 +359,7 @@ export class VoiceSessionFactory {
             ? resolvedVoiceName
             : 'Mariana';
     const config: VoiceCallSessionConfig = {
+      waitingMusic: clientMeta.waiting_music,
       inworldApiKey,
       voiceBehavior:
         clientMeta.voice_behavior as VoiceCallSessionConfig['voiceBehavior'],
@@ -436,6 +440,7 @@ export class VoiceSessionFactory {
         pricingService: this.pricingService,
         prisma: this.prisma,
         voiceToolsService: this.voiceToolsService,
+        waitingMusicService: this.waitingMusic,
         greetingCacheService: this.greetingCacheService,
         config: {
           ...config,

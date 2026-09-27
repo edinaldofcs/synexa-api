@@ -1,3 +1,4 @@
+import { TelephonyOutboundPacer } from '../telephony-outbound-pacer';
 import { Logger } from '@nestjs/common';
 import WebSocket from 'ws';
 import {
@@ -178,7 +179,27 @@ export class CallFlexAdapter implements ITelephonyAdapter {
     this.callStartCallback?.();
   }
 
-  public sendAudio(pcm16: Buffer): void {
+  private readonly pacer = new TelephonyOutboundPacer(
+    (frame) => this.sendAudioFrame(frame),
+    { sampleRate: 24000 },
+  );
+  public setWaitingMusic(pcm: Buffer, volume: number): void {
+    this.pacer.setWaitingMusic(pcm, volume);
+  }
+  public setWaiting(active: boolean): void {
+    this.pacer.setWaiting(active);
+  }
+  public setSpeechActive(active: boolean): void {
+    this.pacer.setSpeechActive(active);
+  }
+  public clearQueuedAudio(): void {
+    this.pacer.clear();
+  }
+  public sendAudio(pcm: Buffer): void {
+    this.pacer.enqueue(pcm);
+  }
+
+  private sendAudioFrame(pcm16: Buffer): void {
     if (!this.ws || this.isClosed || this.ws.readyState !== WebSocket.OPEN)
       return;
 
@@ -246,6 +267,7 @@ export class CallFlexAdapter implements ITelephonyAdapter {
   }
 
   public close(): void {
+    this.pacer.dispose();
     if (this.isClosed) return;
     this.isClosed = true;
     if (this.ws) {

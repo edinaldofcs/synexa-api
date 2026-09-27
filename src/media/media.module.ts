@@ -1,3 +1,4 @@
+import { WaitingMusicModule } from './waiting-music.module';
 import { Module } from '@nestjs/common';
 import { CommonModule } from '../common/common.module';
 import { MediaController } from './media.controller';
@@ -17,10 +18,10 @@ const storageProviderFactory = {
 };
 
 @Module({
-  imports: [CommonModule],
+  imports: [CommonModule, WaitingMusicModule],
   controllers: [MediaController],
   providers: [MediaService, storageProviderFactory],
-  exports: [MediaService, storageProviderFactory],
+  exports: [WaitingMusicModule, MediaService, storageProviderFactory],
 })
 export class MediaModule {
   static readonly STORAGE_PROVIDER = 'STORAGE_PROVIDER';

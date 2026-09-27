@@ -77,6 +77,27 @@ export class WebRtcAdapter implements ITelephonyAdapter {
     this.audioCallback(pcm16);
   }
 
+  setWaitingMusic(
+    _pcm: Buffer,
+    volume: number,
+    clientId?: string,
+    assetId?: string,
+  ): void {
+    if (this.socket.readyState === WebSocket.OPEN)
+      this.socket.send(
+        JSON.stringify({
+          type: 'waiting_music_config',
+          clientId,
+          media_asset_id: assetId,
+          volume,
+        }),
+      );
+  }
+  setWaiting(active: boolean): void {
+    if (this.socket.readyState === WebSocket.OPEN)
+      this.socket.send(JSON.stringify({ type: 'api_wait', active }));
+  }
+
   sendAudio(pcm16: Buffer): void {
     if (this.socket.readyState !== WebSocket.OPEN) return;
     this.socket.send(

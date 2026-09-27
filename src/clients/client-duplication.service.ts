@@ -44,6 +44,7 @@ const CONFIG_KEYS = new Set([
   'gemini_live',
   'voice_behavior',
   'voice_settings',
+  'waiting_music',
   'tts_provider',
   'stt_provider',
   'llm_providers',
@@ -216,14 +217,21 @@ export class ClientDuplicationService {
     }
     const assetIds = [
       ...new Set(
-        rows.knowledge_documents
+        [
+          ...rows.knowledge_documents,
+          (client.metadata as any)?.waiting_music || {},
+        ]
           .map((doc) => doc.media_asset_id)
           .filter(Boolean),
       ),
     ];
     rows.media_assets = assetIds.length
       ? await db.media_assets.findMany({
-          where: { id: { in: assetIds }, company_id: client.company_id },
+          where: {
+            id: { in: assetIds },
+            company_id: client.company_id,
+            client_id: clientId,
+          },
           orderBy: { id: 'asc' },
         })
       : [];

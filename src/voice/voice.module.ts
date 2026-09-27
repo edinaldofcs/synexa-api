@@ -1,3 +1,4 @@
+import { WaitingMusicModule } from '../media/waiting-music.module';
 import { CompanyVoiceQuotaService } from './services/company-voice-quota.service';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
@@ -42,6 +43,7 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
 
 @Module({
   imports: [
+    WaitingMusicModule,
     CommonModule,
     ...(voiceStandalone
       ? [ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])]

@@ -1,3 +1,6 @@
+import { ApiWaitController } from '../services/api-wait-controller';
+import { WaitingMusicService } from '../../media/waiting-music.service';
+import { readWaitingMusic, wavToPcm } from '../../media/waiting-music.util';
 import { randomUUID } from 'crypto';
 import {
   VoiceAuditTurn,
@@ -62,6 +65,7 @@ export interface VoiceGateRuntimeConfig {
 }
 
 export interface VoiceCallSessionConfig {
+  waitingMusic?: unknown;
   geminiLive?: unknown;
   voiceBehavior?: {
     greetingMessage?: string;
@@ -189,6 +193,15 @@ export class VoiceCallSession {
     this.liveAudioTap = tap;
   }
 
+  private readonly apiWait = new ApiWaitController(
+    (active) => this.telephonyAdapter.setWaiting?.(active),
+    () =>
+      this.logger.warn({
+        event: 'waiting_music_transport_failed',
+        call_id: this.id,
+      }),
+  );
+
   constructor(options: {
     telephonyAdapter: ITelephonyAdapter;
     liveProvider: IVoiceProvider;
@@ -197,6 +210,7 @@ export class VoiceCallSession {
     prisma: PrismaService;
     voiceToolsService?: VoiceToolsService;
     greetingCacheService?: VoiceGreetingCacheService;
+    waitingMusicService?: WaitingMusicService;
     config: VoiceCallSessionConfig;
   }) {
     this.telephonyAdapter = options.telephonyAdapter;
@@ -208,6 +222,32 @@ export class VoiceCallSession {
     this.greetingCacheService = options.greetingCacheService;
     this.config = options.config;
     this.id = this.telephonyAdapter.id;
+    const music = readWaitingMusic(this.config.waitingMusic);
+    if (
+      music.enabled &&
+      music.media_asset_id &&
+      this.config.clientId &&
+      options.waitingMusicService
+    ) {
+      void options.waitingMusicService
+        .audio(this.config.clientId, music.media_asset_id)
+        .then((wav) => {
+          if (!this.isEnded)
+            this.telephonyAdapter.setWaitingMusic?.(
+              wavToPcm(wav),
+              music.volume,
+              this.config.clientId,
+              music.media_asset_id!,
+            );
+        })
+        .catch(() =>
+          this.logger.warn({
+            event: 'waiting_music_unavailable',
+            call_id: this.id,
+            client_id: this.config.clientId,
+          }),
+        );
+    }
     this.inactivity = new VoiceInactivity(
       readInactivityTurns(this.config.voiceBehavior),
       (text) =>
@@ -472,6 +512,7 @@ export class VoiceCallSession {
       let agentSwitchInProgress = false;
       let pendingSwitchTurn: string | null = null;
       const switchTelephonyAgent = async (targetAgent: any) => {
+        this.apiWait.cancel();
         if (
           this.isEnded ||
           agentSwitchInProgress ||
@@ -803,6 +844,7 @@ export class VoiceCallSession {
                       );
                       this.hangupCause = 'ai_requested';
                       this.pendingAiHangup = true;
+                      this.apiWait.dispose();
 
                       // Watchdog de segurança para não prender o canal da operadora/Asterisk (16s)
                       if (this.hangupWatchdogTimer) {
@@ -878,14 +920,16 @@ export class VoiceCallSession {
                           call.name,
                           call.args || {},
                         )
-                      : await this.voiceToolsService.execute(
-                          clientId,
-                          selectedAgent.id,
-                          call.name,
-                          call.args || {},
-                          this.sessionState,
-                          undefined,
-                          audit,
+                      : await this.apiWait.run(() =>
+                          this.voiceToolsService!.execute(
+                            clientId,
+                            selectedAgent.id,
+                            call.name,
+                            call.args || {},
+                            this.sessionState,
+                            undefined,
+                            audit,
+                          ),
                         );
 
                     // Persiste a chamada de tool da voz na tabela tool_calls
@@ -1503,6 +1547,7 @@ export class VoiceCallSession {
    * Encerra a sessão, desliga o canal e persiste telemetria.
    */
   public async end(reason?: string): Promise<void> {
+    this.apiWait.dispose();
     if (this.isEnded) return;
     this.isEnded = true;
     // Stop media immediately; persistence may be unavailable during quota loss.

@@ -1,3 +1,6 @@
+import { ApiWaitController } from './services/api-wait-controller';
+import { WaitingMusicService } from '../media/waiting-music.service';
+import { readWaitingMusic } from '../media/waiting-music.util';
 import { randomUUID } from 'crypto';
 import { sealToolAudit, type HttpToolAudit } from './services/voice-tool-audit';
 import {
@@ -127,6 +130,9 @@ export class VoiceGateway
 
   @WebSocketServer()
   server: WsServer;
+
+  @Inject(WaitingMusicService)
+  private readonly waitingMusic: WaitingMusicService;
 
   constructor(
     private readonly voiceService: VoiceService,
@@ -410,6 +416,14 @@ export class VoiceGateway
       await this.telemetryService.persistConversationState(session);
     };
 
+    const apiWait = new ApiWaitController(
+      (active) => sendToClient({ type: 'api_wait', active }),
+      () =>
+        this.logger.warn({
+          event: 'waiting_music_transport_failed',
+          client_id: session.clientId,
+        }),
+    );
     let stopHeartbeat: (() => void) | undefined;
     let exportEnabled = false;
     const pendingWork = new VoiceWorkTracker();
@@ -419,6 +433,7 @@ export class VoiceGateway
     const closeVoiceSession = async (reason = 'connection_closed') => {
       if (voiceSessionClosed) return closingPromise;
       voiceSessionClosed = true;
+      apiWait.dispose();
       if (pendingHangupTimer) {
         clearTimeout(pendingHangupTimer);
         pendingHangupTimer = null;
@@ -765,6 +780,27 @@ export class VoiceGateway
             const clientMeta =
               (clientDb?.metadata as Record<string, unknown>) || {};
 
+            const music = readWaitingMusic(clientMeta.waiting_music);
+            if (music.enabled && music.media_asset_id && session.clientId) {
+              const musicClientId = session.clientId;
+              void this.waitingMusic
+                .asset(musicClientId, music.media_asset_id)
+                .then(() => {
+                  if (!voiceSessionClosed)
+                    sendToClient({
+                      type: 'waiting_music_config',
+                      clientId: musicClientId,
+                      ...music,
+                    });
+                })
+                .catch(() =>
+                  this.logger.warn({
+                    event: 'waiting_music_unavailable',
+                    client_id: musicClientId,
+                  }),
+                );
+            }
+
             // Extrai variáveis padrão da sessão configuradas no cliente (inbound_variable_mapping)
             // Paridade com a telefonia Asterisk/SIP (VoiceCallSession)
             const defaultSessionVars: Record<string, any> = {};
@@ -1106,6 +1142,7 @@ export class VoiceGateway
                   const despedida =
                     (call.args?.mensagem_despedida as string) || '';
                   session.pendingAiHangup = true;
+                  apiWait.dispose();
                   sendDebug(
                     'session',
                     '📞 IA solicitou encerramento da chamada (finalizar_chamada). Aguardando conclusão da fala da IA.',
@@ -1232,14 +1269,16 @@ export class VoiceGateway
                         call.name,
                         args,
                       )
-                    : await this.voiceToolsService.execute(
-                        session.clientId,
-                        session.agentId,
-                        call.name,
-                        args,
-                        session.state,
-                        undefined,
-                        audit,
+                    : await apiWait.run(() =>
+                        this.voiceToolsService.execute(
+                          session.clientId!,
+                          session.agentId!,
+                          call.name,
+                          args,
+                          session.state,
+                          undefined,
+                          audit,
+                        ),
                       );
                 } catch (err: any) {
                   // O Gemini Live exige toolResponse para cada call: uma
@@ -2515,6 +2554,7 @@ export class VoiceGateway
 
             let agentSwitchInProgress = false;
             switchAgent = async (targetAgent, reason, handoffText) => {
+              apiWait.cancel();
               if (
                 !targetAgent ||
                 targetAgent.id === session.agentId ||

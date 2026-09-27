@@ -42,6 +42,45 @@ export class TelephonyOutboundPacer {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastOutSample = 0;
   private disposed = false;
+  private music?: Buffer;
+  private musicOffset = 0;
+  private musicActive = false;
+  private speechActive = false;
+  private speechUntil = 0;
+  private musicGain = 0.2;
+
+  public setWaitingMusic(pcm24k: Buffer, volume: number): void {
+    this.music = AudioResampler.resample(pcm24k, 24000, this.sampleRate);
+    this.musicOffset = 0;
+    this.musicGain = Math.max(0, Math.min(100, volume)) / 100;
+    if (this.musicActive) this.startPacer();
+  }
+  public setWaiting(active: boolean): void {
+    this.musicActive = active;
+    if (!active) this.musicOffset = 0;
+    else this.startPacer();
+  }
+  public setSpeechActive(active: boolean): void {
+    this.speechActive = active;
+  }
+  private musicFrame(): Buffer | undefined {
+    if (
+      !this.musicActive ||
+      this.speechActive ||
+      Date.now() < this.speechUntil ||
+      !this.music?.length
+    )
+      return;
+    const frame = Buffer.alloc(this.frameBytes);
+    for (let offset = 0; offset < frame.length; offset += 2) {
+      frame.writeInt16LE(
+        Math.round(this.music.readInt16LE(this.musicOffset) * this.musicGain),
+        offset,
+      );
+      this.musicOffset = (this.musicOffset + 2) % this.music.length;
+    }
+    return frame;
+  }
 
   constructor(
     private readonly sink: (pcmFrame: Buffer) => void,
@@ -80,11 +119,14 @@ export class TelephonyOutboundPacer {
     this.queue = [];
     this.queueBytes = 0;
     this.pending = Buffer.alloc(0);
+    this.speechUntil = 0;
   }
 
   /** Encerra o pacer (fim da chamada). */
   public dispose(): void {
     this.disposed = true;
+    this.music = undefined;
+    this.musicActive = false;
     this.clear();
     this.stopTimer();
   }
@@ -107,13 +149,18 @@ export class TelephonyOutboundPacer {
    * nunca entra em underflow no meio da fala. Encerra apenas no dispose().
    */
   private startPacer(): void {
-    if (this.timer) return;
-    if (this.queue.length < PREBUFFER_FRAMES) return;
+    if (this.timer || this.disposed) return;
+    if (
+      this.queue.length < PREBUFFER_FRAMES &&
+      !(this.musicActive && this.music?.length)
+    )
+      return;
 
     let deadline = Date.now();
     const tick = () => {
       const frame = this.queue.shift();
       if (frame) {
+        this.speechUntil = Date.now() + 150;
         this.queueBytes -= frame.length;
         // Retomada após silêncio: fade-in curto elimina o clique
         if (this.lastOutSample === 0) this.applyFadeIn(frame);
@@ -123,7 +170,7 @@ export class TelephonyOutboundPacer {
       } else {
         // Fila vazia: silêncio mantém o fluxo contínuo, com cauda decaindo
         // do último sample para não estalar
-        this.sink(this.buildSilenceFrame());
+        this.sink(this.musicFrame() || this.buildSilenceFrame());
       }
       if (this.disposed) {
         this.timer = null;

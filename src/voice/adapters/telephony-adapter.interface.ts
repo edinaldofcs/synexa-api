@@ -59,6 +59,14 @@ export interface ITelephonyAdapter {
    * barge-in/interrupção para que a IA pare imediatamente de falar.
    */
   clearQueuedAudio?(): void;
+  setWaitingMusic?(
+    pcm24k: Buffer,
+    volume: number,
+    clientId?: string,
+    assetId?: string,
+  ): void;
+  setWaiting?(active: boolean): void;
+  setSpeechActive?(active: boolean): void;
 
   /**
    * Encerra e desliga a chamada no PBX/Telefonia.

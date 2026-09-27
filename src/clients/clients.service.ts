@@ -1,3 +1,5 @@
+import { WaitingMusicService } from '../media/waiting-music.service';
+import { Inject } from '@nestjs/common';
 import { testCustomVoiceEndpoint } from './voice-provider-test';
 import {
   ClientDuplicationService,
@@ -28,6 +30,8 @@ import { TelephonyEndpointResolverService } from '../voice/services/telephony-en
 
 @Injectable()
 export class ClientsService {
+  @Inject(WaitingMusicService)
+  private readonly waitingMusic: WaitingMusicService;
   private readonly logger = new Logger(ClientsService.name);
 
   constructor(
@@ -149,6 +153,11 @@ export class ClientsService {
     if (test_sip_extension?.trim()) {
       meta.test_sip_extension = test_sip_extension.trim();
     }
+    if ('waiting_music' in meta)
+      meta.waiting_music = await this.waitingMusic.validateConfig(
+        null,
+        meta.waiting_music,
+      );
     rest.metadata = meta;
 
     const client = await this.clientsRepository.create({
@@ -434,6 +443,11 @@ export class ClientsService {
         delete next[key];
         if (current[key] !== undefined) next[key] = current[key];
       }
+      if ('waiting_music' in next)
+        next.waiting_music = await this.waitingMusic.validateConfig(
+          id,
+          next.waiting_music,
+        );
       restDto.metadata = next;
     }
 

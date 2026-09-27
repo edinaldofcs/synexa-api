@@ -93,6 +93,16 @@ export class TwilioMediaStreamsAdapter implements ITelephonyAdapter {
     }
   }
 
+  public setWaitingMusic(pcm: Buffer, volume: number): void {
+    this.pacer.setWaitingMusic(pcm, volume);
+  }
+  public setWaiting(active: boolean): void {
+    this.pacer.setWaiting(active);
+  }
+  public setSpeechActive(active: boolean): void {
+    this.pacer.setSpeechActive(active);
+  }
+
   public sendAudio(pcm24k: Buffer): void {
     if (this.isClosed || !this.streamSid || !this.isWsOpen()) return;
     this.pacer.enqueue(pcm24k);

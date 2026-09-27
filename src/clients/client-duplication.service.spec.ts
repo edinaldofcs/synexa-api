@@ -8,6 +8,68 @@ import {
 import { DuplicateClientDto } from './dto/duplicate-client.dto';
 
 describe('Flow duplication contract', () => {
+  it('includes waiting music files in the snapshot and remaps the selected asset', async () => {
+    const clientId = randomUUID(),
+      assetId = randomUUID(),
+      targetId = randomUUID();
+    const music = { enabled: true, media_asset_id: assetId, volume: 20 };
+    const db: any = {
+      painel_clients: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: clientId,
+          company_id: 'company',
+          metadata: { waiting_music: music },
+        }),
+      },
+      media_assets: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { id: assetId, client_id: clientId, company_id: 'company' },
+          ]),
+      },
+    };
+    for (const table of [
+      'painel_agents',
+      'painel_subagents',
+      'painel_apis',
+      'painel_tracks',
+      'provider_credentials',
+      'knowledge_bases',
+      'knowledge_documents',
+      'knowledge_chunks',
+      'telephony_endpoints',
+      'knowledge_embeddings',
+    ])
+      db[table] = { findMany: jest.fn().mockResolvedValue([]) };
+    const service = new ClientDuplicationService(
+      db,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    const snapshot = await (service as any).snapshot(db, clientId, {
+      id: 'user',
+      company_id: 'company',
+      role: 'company_admin',
+    });
+    expect(snapshot.rows.media_assets).toHaveLength(1);
+    expect(db.media_assets.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: { in: [assetId] },
+          company_id: 'company',
+          client_id: clientId,
+        },
+      }),
+    );
+    expect(
+      remapFlowReferences(
+        snapshot.client.metadata,
+        new Map([[assetId, targetId]]),
+      ),
+    ).toEqual({ waiting_music: { ...music, media_asset_id: targetId } });
+  });
   it('remaps nested references and UUID keys while preserving literal prompt text', () => {
     const old = randomUUID(),
       next = randomUUID();
