@@ -58,7 +58,7 @@ describe('Public commercial assistant', () => {
     });
     await service.reply(body);
     const prompt = create.mock.calls[0][0].messages[0].content;
-    expect(prompt).toContain('assistente comercial virtual da Voicelabs');
+    expect(prompt).toContain('assistente comercial virtual da Voiccelabs');
     expect(prompt).not.toContain('Synexa');
     expect(prompt).toContain('contact@rhytmid.com');
     expect(redis.checkRateLimit).toHaveBeenCalledWith(

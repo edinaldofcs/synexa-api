@@ -5,5 +5,5 @@ export enum BrandId {
 
 // Cosmetic identity only. Never use a brand to resolve companies or permissions.
 export function getBrandName(brand: BrandId = BrandId.Synexa): string {
-  return brand === BrandId.Voicelabs ? 'Voicelabs' : 'Synexa';
+  return brand === BrandId.Voicelabs ? 'Voiccelabs' : 'Synexa';
 }
