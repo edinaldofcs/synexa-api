@@ -96,6 +96,44 @@ describe('VoiceGreetingCacheService', () => {
   });
 
   describe('resolveOrSynthesizeGreeting', () => {
+    it('prioritizes nome_cliente over a stale generic name for synthesis and cache', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      const result = await service.resolveOrSynthesizeGreeting({
+        provider: 'cartesia',
+        voiceId: 'test',
+        apiKey: 'synthetic',
+        template: 'Olá {{nome_cliente}}!',
+        customerName: 'Edinaldo',
+        variables: { nome: 'Edinaldo', nome_cliente: 'Leonardo' },
+      });
+      expect(result.text).toBe('Olá Leonardo!');
+      expect(result.sanitizedName).toBe('Leonardo');
+      expect(mockRedis.get.mock.calls[0][0]).toMatch(/:leonardo$/);
+    });
+    it('resolves caller names and the anonymous fallback before caching audio', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      const template =
+        '[SE nome_cliente]Olá, falo com {{nome_cliente}}?[SENÃO]Olá, com quem eu falo?[FIM SE]';
+      for (const name of ['Leonardo', 'Mariana', '']) {
+        const result = await service.resolveOrSynthesizeGreeting({
+          provider: 'cartesia',
+          voiceId: 'test',
+          apiKey: 'synthetic',
+          template,
+          variables: { nome_cliente: name },
+        });
+        expect(result.text).toBe(
+          name ? `Olá, falo com ${name}?` : 'Olá, com quem eu falo?',
+        );
+        expect(mockSynthesizer.synthesize).toHaveBeenLastCalledWith(
+          result.text,
+          expect.any(Object),
+        );
+      }
+      expect(new Set(mockRedis.get.mock.calls.map(([key]) => key)).size).toBe(
+        3,
+      );
+    });
     it('deve retornar áudio do cache com fromCache=true em caso de HIT (0ms)', async () => {
       const samplePcm = Buffer.from('audio-em-cache');
       mockRedis.get.mockResolvedValueOnce(samplePcm.toString('base64'));

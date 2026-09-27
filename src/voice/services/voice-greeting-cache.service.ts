@@ -7,6 +7,7 @@ import {
   selectVoiceGreetingVariation,
 } from './voice-runtime.util';
 import { resolvePromptTemplateString } from '../../common/utils/prompt-variables.util';
+import { resolveConditionalString } from '../../common/utils/conditional-prompt.util';
 
 export interface GreetingCacheKeyOptions {
   companyId?: string;
@@ -134,9 +135,9 @@ export class VoiceGreetingCacheService {
     options: ResolveGreetingAudioOptions,
   ): Promise<ResolveGreetingResult> {
     const sanitizedName = sanitizeCustomerName(
-      options.customerName ||
-        options.variables?.nome ||
-        options.variables?.nome_cliente,
+      options.variables?.nome_cliente ||
+        options.customerName ||
+        options.variables?.nome,
     );
 
     const mergedVariables: Record<string, unknown> = {
@@ -148,7 +149,10 @@ export class VoiceGreetingCacheService {
 
     let text = options.template;
     try {
-      text = resolvePromptTemplateString(text, mergedVariables);
+      text = resolvePromptTemplateString(
+        resolveConditionalString(text, mergedVariables),
+        mergedVariables,
+      );
     } catch {
       // Interpolação falhou: mantém o texto original
     }

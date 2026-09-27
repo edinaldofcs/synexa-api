@@ -8,6 +8,7 @@ import {
   resolveVoiceGreeting,
   resolveMaxCallDurationSec,
   buildGreetingTurn,
+  buildSwitchTurn,
   VOICE_GREETING_TURN,
   buildVoiceSystemPrompt,
   VOICE_HANGUP_PROMPT_INSTRUCTION,
@@ -19,6 +20,34 @@ import {
   buildVoiceFarewellToolResponse,
   VOICE_HANGUP_WATCHDOG_TIMEOUT_MS,
 } from './voice-runtime.util';
+
+describe('personalized greeting fallback', () => {
+  const agent = {
+    transitions: {
+      capabilities: {
+        greeting_message:
+          '[SE nome_cliente]Olá, falo com {{nome_cliente}}?[SENÃO]Olá, com quem eu falo?[FIM SE]',
+      },
+    },
+  };
+  it.each([
+    [{ nome_cliente: 'Leonardo' }, 'Olá, falo com Leonardo?'],
+    [{ nome_cliente: 'Mariana' }, 'Olá, falo com Mariana?'],
+    [{ nome_cliente: '' }, 'Olá, com quem eu falo?'],
+    [{}, 'Olá, com quem eu falo?'],
+  ])(
+    'resolves the current caller for opening and transfer turns',
+    (variables, expected) => {
+      for (const turn of [
+        buildGreetingTurn(agent, variables),
+        buildSwitchTurn(agent, undefined, variables),
+      ]) {
+        expect(turn).toContain(expected);
+        expect(turn).not.toMatch(/\[SE|SENÃO|FIM SE|\{\{|Edinaldo/);
+      }
+    },
+  );
+});
 
 describe('mergeApiReturnIntoState', () => {
   it('espelha chaves do extract_data na RAIZ do estado (paridade com o texto)', () => {

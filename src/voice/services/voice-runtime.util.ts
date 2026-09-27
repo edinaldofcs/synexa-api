@@ -1,5 +1,6 @@
 import { buildAgentPromptFromBlocks } from '../../agents/utils/agent-prompt-builder.util';
 import { resolvePromptTemplateString } from '../../common/utils/prompt-variables.util';
+import { resolveConditionalString } from '../../common/utils/conditional-prompt.util';
 import type { VoiceGateRuntimeConfig } from '../sessions/voice-call-session';
 
 /**
@@ -340,12 +341,13 @@ export function buildGreetingTurn(
   const configured = resolveVoiceGreeting(agent);
   if (!configured) return VOICE_GREETING_TURN;
   let message = configured;
-  if (Object.keys(variables).length) {
-    try {
-      message = resolvePromptTemplateString(message, variables);
-    } catch {
-      // interpolação falhou: usa o texto original
-    }
+  try {
+    message = resolvePromptTemplateString(
+      resolveConditionalString(message, variables),
+      variables,
+    );
+  } catch {
+    // interpolação falhou: usa o texto original
   }
   return (
     '[EVENTO DO SISTEMA] A chamada acabou de ser conectada e o cliente ainda não disse nada. ' +
@@ -368,12 +370,13 @@ export function buildSwitchTurn(
   const configuredGreeting = resolveVoiceGreeting(agent);
   if (configuredGreeting) {
     let message = configuredGreeting;
-    if (Object.keys(variables).length) {
-      try {
-        message = resolvePromptTemplateString(message, variables);
-      } catch {
-        // interpolação falhou: usa o texto original
-      }
+    try {
+      message = resolvePromptTemplateString(
+        resolveConditionalString(message, variables),
+        variables,
+      );
+    } catch {
+      // interpolação falhou: usa o texto original
     }
     return (
       `[EVENTO DO SISTEMA: TRANSFERÊNCIA DE ATENDIMENTO]\n` +
