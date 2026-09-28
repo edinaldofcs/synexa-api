@@ -123,6 +123,10 @@ export class TwilioMediaStreamsAdapter implements ITelephonyAdapter {
     }
   }
 
+  public getQueuedAudioMs(): number {
+    return this.pacer.getMetrics().queuedMs;
+  }
+
   public hangup(reason = 'normal_hangup'): void {
     if (this.isClosed) return;
     this.logger.log(`📞 [Twilio] Encerrando stream (${reason})`);

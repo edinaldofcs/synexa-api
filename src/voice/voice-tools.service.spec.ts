@@ -66,6 +66,49 @@ afterEach(() => {
 });
 
 describe('webhook-only HTTP audit', () => {
+  it('saves AI input before the next voice API reads its configured session variable', async () => {
+    const first = {
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Primeira',
+      method: 'POST',
+      url: 'https://example.com/first',
+      body: {
+        documento: {
+          source: 'ai',
+          save_to_session: true,
+          session_variable: '{{CPFConsulta}}',
+        },
+      },
+    };
+    const next = {
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Segunda',
+      method: 'POST',
+      url: 'https://example.com/second',
+      body: { cpf: { source: 'system', value: 'CPFConsulta', required: true } },
+    };
+    const { service, prisma } = buildPrisma(first);
+    prisma.painel_apis.findMany.mockResolvedValue([first, next]);
+    prisma.painel_apis.findFirst.mockResolvedValue(next as any);
+    mockedResolveChainedApiId.mockReset().mockReturnValueOnce(next.id);
+    const requests = captureFetch({ ok: true, body: { accepted: true } });
+    const state = {};
+    const result = await service.execute(
+      'client',
+      'agent',
+      'primeira',
+      { documento: '00123456789' },
+      state,
+    );
+    expect(requests).toHaveLength(2);
+    expect(JSON.parse(requests[1].init.body as string)).toEqual({
+      cpf: '00123456789',
+    });
+    expect(state).toMatchObject({ CPFConsulta: '00123456789' });
+    expect(state).not.toHaveProperty('cpf');
+    expect(result).toMatchObject({ ok: true, CPFConsulta: '00123456789' });
+  });
+
   const api = {
     id: '11111111-1111-1111-1111-111111111111',
     name: 'Lookup',
@@ -209,7 +252,7 @@ describe('webhook-only HTTP audit', () => {
     });
     expect(audit[0].extracted_variables).toEqual({ balance: 10 });
     expect(JSON.stringify(audit)).not.toContain('test-audit-credential');
-    expect(state).toEqual({ amount: 25 });
+    expect(state).toMatchObject({ amount: 25, balance: 10 });
   });
 
   it('keeps error bodies in audit while the model receives the existing fallback', async () => {
@@ -596,7 +639,7 @@ describe('VoiceToolsService - resolução de payload (source system/sessão)', (
     });
   });
 
-  it('deve resolver cpf da sessão mesmo quando salva como cliente_cpf (alias)', async () => {
+  it('não deve usar alias quando a variável configurada não existe', async () => {
     const service = buildService({
       id: apiId,
       name: 'Gerar Acordo',
@@ -617,9 +660,7 @@ describe('VoiceToolsService - resolução de payload (source system/sessão)', (
     );
 
     expect(result.ok).toBe(true);
-    expect(JSON.parse(String(requests[0].init.body))).toEqual({
-      cpf: '08334993942',
-    });
+    expect(JSON.parse(String(requests[0].init.body))).toEqual({});
   });
 
   it('NÃO deve enviar o nome da variável literal quando nada é resolvido', async () => {
@@ -647,7 +688,7 @@ describe('VoiceToolsService - resolução de payload (source system/sessão)', (
     expect(Object.values(sentBody)).not.toContain('cpf');
   });
 
-  it('deve usar fallback dos argumentos da IA quando a sessão não tem a variável', async () => {
+  it('não deve usar argumentos da IA para campos da sessão', async () => {
     const service = buildService({
       id: apiId,
       name: 'Gerar Acordo',
@@ -667,9 +708,7 @@ describe('VoiceToolsService - resolução de payload (source system/sessão)', (
       { outro_dado: 'x' },
     );
 
-    expect(JSON.parse(String(requests[0].init.body))).toEqual({
-      cpf: '08334993942',
-    });
+    expect(JSON.parse(String(requests[0].init.body))).toEqual({});
   });
 
   it('deve resolver parâmetro de URL a partir da sessão quando ausente nos argumentos', async () => {
@@ -920,6 +959,32 @@ describe('VoiceToolsService - cache Redis por (clientId, agentId)', () => {
       expect(res.status_string).toBe('true');
       expect(typeof res.fallback_string).toBe('string');
       expect(res.fallback_string).toBe('false');
+    });
+  });
+});
+
+describe('explicit extraction parity', () => {
+  it('preserves casing, nested paths, array projection and modifiers', () => {
+    const service = new VoiceToolsService({} as any, {} as any, {} as any);
+    const result = (service as any).applyExtractData(
+      {
+        person: { name: ' Nome completo ' },
+        items: [{ value: 10 }, { value: 20 }],
+        confirmed: false,
+      },
+      {
+        '{{Pessoa}}': {
+          path: 'person.name',
+          modifier: 'trim',
+        },
+        Valores: { path: 'items[*].value', max_items: 1 },
+        Confirmou: { path: 'confirmed' },
+      },
+    );
+    expect(result).toEqual({
+      Pessoa: 'Nome completo',
+      Valores: [10],
+      Confirmou: false,
     });
   });
 });

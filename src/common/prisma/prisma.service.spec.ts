@@ -7,7 +7,6 @@ import {
 import { tenantLocalStorage } from '../auth/tenant-context';
 import { randomUUID } from 'crypto';
 import { KnowledgeService } from '../../knowledge/knowledge.service';
-import { ClientMetadataService } from '../metadata/client-metadata.service';
 
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -45,7 +44,6 @@ describe('applyTenantInjection', () => {
     for (const model of [
       'credential_audit_logs',
       'provider_credentials',
-      'painel_interactions',
       'voice_session_telemetry',
       'telephony_endpoints',
     ]) {
@@ -192,8 +190,18 @@ const tenantTestUrl = process.env.TENANT_ISOLATION_TEST_DATABASE_URL;
       });
       await prisma.painel_clients.createMany({
         data: [
-          { id: clientA, company_id: companyA, company_name: 'A' },
-          { id: clientB, company_id: companyB, company_name: 'B' },
+          {
+            id: clientA,
+            company_id: companyA,
+            company_name: 'A',
+            agent_name: 'A',
+          },
+          {
+            id: clientB,
+            company_id: companyB,
+            company_name: 'B',
+            agent_name: 'B',
+          },
         ],
       });
       await prisma.painel_agents.createMany({
@@ -347,17 +355,22 @@ const tenantTestUrl = process.env.TENANT_ISOLATION_TEST_DATABASE_URL;
       );
     });
 
-    it('refreshes metadata only for an authorized client', async () => {
+    it('does not update another tenant metadata through Prisma', async () => {
       await prisma.painel_clients.update({
         where: { id: clientB },
         data: { metadata: { sentinel: 'private' } },
       });
-      const metadata = new ClientMetadataService(prisma);
       await tenantLocalStorage.run(
         { companyId: companyA, role: 'company_admin' },
         async () => {
-          await metadata.refresh(clientB);
-          await metadata.refresh(clientA);
+          await prisma.painel_clients.updateMany({
+            where: { id: clientB },
+            data: { metadata: { changed: true } },
+          });
+          await prisma.painel_clients.updateMany({
+            where: { id: clientA },
+            data: { metadata: { configured: true } },
+          });
         },
       );
       expect(
@@ -373,7 +386,7 @@ const tenantTestUrl = process.env.TENANT_ISOLATION_TEST_DATABASE_URL;
             where: { id: clientA },
           })
         ).metadata,
-      ).toEqual(expect.objectContaining({ company_name: 'A' }));
+      ).toEqual(expect.objectContaining({ configured: true }));
     });
 
     it('preserves authorized platform administration and scopes impersonation', async () => {

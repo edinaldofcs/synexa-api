@@ -1,3 +1,4 @@
+import { isSafePath } from '../../../common/utils/session-variables.util';
 import { Logger } from '@nestjs/common';
 import * as net from 'net';
 import {
@@ -25,6 +26,7 @@ export interface FastAgiRawEnvironment {
 export interface FastAgiAdapterOptions {
   /** Conexao passou pela allowlist de IP e/ou shared secret do ingresso */
   trusted?: boolean;
+  allowedVariables?: string[];
 }
 
 // Chaves de roteamento: so sao honradas em ingressos confiaveis (allowlist
@@ -58,10 +60,18 @@ const DIALPLAN_VARIABLE_KEYS = new Set([
   'LEAD_ID',
 ]);
 
-function isAllowedDialplanVariable(key: string): boolean {
+function isSensitiveVariable(key: string) {
+  return /secret|password|credential|token|api_?key|authorization/i.test(key);
+}
+
+function isAllowedDialplanVariable(
+  key: string,
+  configured: string[] = [],
+): boolean {
   const upper = key.toUpperCase();
   return (
     ROUTING_VARIABLE_KEYS.has(upper) ||
+    configured.includes(key) ||
     DIALPLAN_VARIABLE_KEYS.has(upper) ||
     DIALPLAN_VARIABLE_PREFIXES.some((prefix) => upper.startsWith(prefix))
   );
@@ -119,7 +129,7 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
       // Trata variáveis com prefixo personalizado ou argumentos AGI
       if (key.startsWith('agi_variable_')) {
         const cleanKey = key.replace('agi_variable_', '');
-        if (cleanKey.toUpperCase() === 'SYNEXA_SECRET') continue;
+        if (isSensitiveVariable(cleanKey) || !isSafePath(cleanKey)) continue;
         if (!isAllowedDialplanVariable(cleanKey)) {
           warnDropped(cleanKey, 'allowlist');
           continue;
@@ -133,7 +143,7 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
         key.toUpperCase().startsWith('SYNEXA_') ||
         key.toUpperCase().startsWith('VAR_')
       ) {
-        if (key.toUpperCase() === 'SYNEXA_SECRET') continue;
+        if (isSensitiveVariable(key) || !isSafePath(key)) continue;
         if (ROUTING_VARIABLE_KEYS.has(key.toUpperCase()) && !trusted) {
           warnDropped(key, 'untrusted');
           continue;
@@ -147,12 +157,12 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
       try {
         const parsed = JSON.parse(rawEnv.agi_arg_3) as Record<string, unknown>;
         for (const [key, value] of Object.entries(parsed)) {
-          if (key.toUpperCase() === 'SYNEXA_SECRET') continue;
+          if (isSensitiveVariable(key) || !isSafePath(key)) continue;
           if (ROUTING_VARIABLE_KEYS.has(key.toUpperCase()) && !trusted) {
             warnDropped(key, 'untrusted');
             continue;
           }
-          if (!isAllowedDialplanVariable(key)) {
+          if (!isAllowedDialplanVariable(key, options.allowedVariables)) {
             warnDropped(key, 'allowlist');
             continue;
           }
@@ -177,6 +187,29 @@ export class AsteriskFastAgiAdapter implements ITelephonyAdapter {
     };
 
     this.setupSocketEvents();
+  }
+
+  importConfiguredVariables(rawEnv: FastAgiRawEnvironment, fields: string[]) {
+    const configured = new Set(fields.map((field) => field.split('.')[0]));
+    let json: Record<string, unknown> = {};
+    try {
+      json = JSON.parse(rawEnv.agi_arg_3 || '{}');
+    } catch {
+      /* No JSON business envelope. */
+    }
+    for (const key of configured) {
+      if (
+        !isSafePath(key) ||
+        isSensitiveVariable(key) ||
+        key.toUpperCase().startsWith('SYNEXA_') ||
+        ROUTING_VARIABLE_KEYS.has(key.toUpperCase())
+      )
+        continue;
+      const value = rawEnv[`agi_variable_${key}`] ?? json?.[key];
+      if (value !== undefined)
+        this.metadata.customVariables![key] =
+          typeof value === 'string' ? this.tryParseJson(value) : value;
+    }
   }
 
   private setupSocketEvents(): void {

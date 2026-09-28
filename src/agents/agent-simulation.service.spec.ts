@@ -25,11 +25,7 @@ describe('AgentsService - Simulation & Preview', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new AgentsService(
-      mockRepository as never,
-      mockMetadata as never,
-      mockPrisma as never,
-    );
+    service = new AgentsService(mockRepository as never, mockPrisma as never);
 
     mockPrisma.painel_clients.findUnique.mockResolvedValue({
       id: clientId,

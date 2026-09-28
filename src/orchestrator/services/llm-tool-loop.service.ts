@@ -30,6 +30,7 @@ export interface LlmToolLoopParams {
   systemPrompt?: string;
   history: MemoryMessage[];
   tools: ApiTool[];
+  sessionState?: Record<string, unknown>;
   context?: {
     clientId?: string;
     companyId?: string;
@@ -68,6 +69,9 @@ export class LlmToolLoopService {
   ) {}
 
   async run(params: LlmToolLoopParams): Promise<LlmToolLoopResult> {
+    params.sessionState ??= await this.apiToolExecutor.getSessionState(
+      params.context?.conversationId,
+    );
     const nativeRagContext = params.context
       ? {
           agentConfig: params.context.agentConfig,
@@ -206,6 +210,7 @@ export class LlmToolLoopService {
             context: {
               message: params.message,
               nativeRagContext,
+              sessionState: params.sessionState,
               callLlm: (subParams) => this.run(subParams),
             },
           });
@@ -492,6 +497,7 @@ export class LlmToolLoopService {
             context: {
               message,
               nativeRagContext,
+              sessionState: params.sessionState,
               callLlm: (subParams) => this.run(subParams),
             },
           });

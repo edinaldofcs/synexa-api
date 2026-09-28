@@ -1,3 +1,8 @@
+import {
+  readVariable,
+  variableKey,
+  isBusinessVariable,
+} from '../utils/session-variables.util';
 import { Injectable, Logger } from '@nestjs/common';
 
 export interface NativeToolDeclaration {
@@ -269,28 +274,10 @@ export class NativeToolsService {
       return { ok: false, error: 'O par??metro "value" ?? obrigat??rio.' };
     }
 
-    const cleanKey = rawKey
-      .replace(/[[\]{}]/g, '')
-      .trim()
-      .toLowerCase();
-
+    const cleanKey = variableKey(rawKey);
+    if (!isBusinessVariable(cleanKey))
+      return { ok: false, error: 'INVALID_VARIABLE' };
     sessionState[cleanKey] = rawValue;
-    sessionState[rawKey] = rawValue;
-
-    // Aliases sem??nticos autom??ticos
-    if (cleanKey === 'cpf' || cleanKey === 'cnpj_cpf') {
-      sessionState.cnpj_cpf = rawValue;
-      sessionState.cpf = rawValue;
-      sessionState.documento = rawValue;
-    } else if (
-      cleanKey === 'cliente_nome' ||
-      cleanKey === 'nome_cliente' ||
-      cleanKey === 'nome'
-    ) {
-      sessionState.cliente_nome = rawValue;
-      sessionState.nome_cliente = rawValue;
-      sessionState.nome = rawValue;
-    }
 
     return {
       ok: true,
@@ -426,50 +413,7 @@ export class NativeToolsService {
     state: Record<string, unknown>,
     key: string,
   ): unknown {
-    if (!state || typeof state !== 'object') return undefined;
-
-    const cleanKey = key.replace(/[[\]{}]/g, '').trim();
-
-    if (state[key] !== undefined) return state[key];
-    if (state[cleanKey] !== undefined) return state[cleanKey];
-
-    const lowerClean = cleanKey.toLowerCase();
-    for (const [k, v] of Object.entries(state)) {
-      if (k.toLowerCase() === lowerClean) {
-        return v;
-      }
-    }
-
-    // Aliases sem??nticos
-    const docKeys = ['cpf', 'cnpj_cpf', 'documento', 'cnpj', 'x-cpf', 'xcpf'];
-    if (docKeys.includes(lowerClean)) {
-      for (const alias of docKeys) {
-        for (const [k, v] of Object.entries(state)) {
-          if (k.toLowerCase() === alias && v !== undefined && v !== null) {
-            return v;
-          }
-        }
-      }
-    }
-
-    const phoneKeys = [
-      'telefone',
-      'phone',
-      'caller_number',
-      'celular',
-      'whatsapp',
-    ];
-    if (phoneKeys.includes(lowerClean)) {
-      for (const alias of phoneKeys) {
-        for (const [k, v] of Object.entries(state)) {
-          if (k.toLowerCase() === alias && v !== undefined && v !== null) {
-            return v;
-          }
-        }
-      }
-    }
-
-    return undefined;
+    return readVariable(state, key);
   }
 
   /**

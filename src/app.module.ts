@@ -9,10 +9,8 @@ import { CommonModule } from './common/common.module';
 import { AuthModule } from './common/auth/auth.module';
 import { MailModule } from './common/mail/mail.module';
 import { AdminModule } from './admin/admin.module';
-import { ChatModule } from './chat/chat.module';
 import { ClientsModule } from './clients/clients.module';
 import { AgentsModule } from './agents/agents.module';
-import { TracksModule } from './tracks/tracks.module';
 import { ApisModule } from './apis/apis.module';
 import { ChannelsModule } from './channels/channels.module';
 import { ConversationsModule } from './conversations/conversations.module';
@@ -47,13 +45,11 @@ import { AppService } from './app.service';
     MailModule,
     AuthModule.forRoot(),
     AdminModule,
-    ChatModule,
     ClientsModule,
     PromptTemplatesModule,
     LandingModule,
     AgentsModule,
     SubagentsModule,
-    TracksModule,
     ApisModule,
     ChannelsModule,
     ConversationsModule,

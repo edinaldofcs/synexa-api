@@ -1,3 +1,13 @@
+import { applyExtractModifier } from '../../common/utils/api-extraction.util';
+import { validateExtraction } from '../../common/utils/extraction-validation.util';
+import {
+  readExtractionPath,
+  isSafePath,
+  readVariable,
+  variableKey,
+  businessVariables,
+  savedRequestVariables,
+} from '../../common/utils/session-variables.util';
 import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -28,6 +38,7 @@ export interface ApiTool {
   method?: string | null;
   url?: string | null;
   headers?: unknown;
+  config?: unknown;
   body?: unknown;
   parameters?: unknown;
   extract_data?: unknown;
@@ -51,6 +62,7 @@ export interface NativeRagRuntimeContext {
 
 export interface ToolCallContext {
   message: string;
+  sessionState?: Record<string, unknown>;
   nativeRagContext?: NativeRagRuntimeContext;
   /** Callback de chamada LLM (usado por subagentes) — invertido para evitar
    *  dependência circular com o loop de LLM. */
@@ -63,6 +75,7 @@ export interface ToolCallContext {
     systemPrompt?: string;
     history: Array<{ role: 'user' | 'assistant'; content: string }>;
     tools: ApiTool[];
+    sessionState?: Record<string, unknown>;
     context?: NativeRagRuntimeContext;
   }) => Promise<{
     text: string;
@@ -201,11 +214,12 @@ export class ApiToolExecutorService {
     return apis.map((api) => ({
       id: api.id,
       name: api.name,
-      functionName: this.toFunctionName(api.name, api.id),
+      functionName: api.function_name || this.toFunctionName(api.name, api.id),
       description: api.description,
       method: api.method,
       url: api.url,
       headers: api.headers,
+      config: api.config,
       body: api.body,
       parameters: api.parameters,
       extract_data: api.extract_data,
@@ -364,14 +378,15 @@ export class ApiToolExecutorService {
         context.nativeRagContext?.companyId || '',
         context.nativeRagContext?.conversationId,
         context.callLlm,
+        context.sessionState,
       );
       return { name: functionName, arguments: args, result };
     }
 
     if (tool) {
-      const sessionState = await this.getSessionState(
-        context.nativeRagContext?.conversationId,
-      );
+      const sessionState =
+        context.sessionState ??
+        (await this.getSessionState(context.nativeRagContext?.conversationId));
       const result = await this.executeApiTool(tool, args, sessionState);
       return { name: tool.name, arguments: args, result };
     }
@@ -402,6 +417,7 @@ export class ApiToolExecutorService {
     companyId: string,
     conversationId?: string,
     callLlm?: ToolCallContext['callLlm'],
+    sessionState?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const cleanName = subagentFnName.replace(/^subagent_/, '').toLowerCase();
     const isUuid = (val: string) =>
@@ -488,6 +504,7 @@ export class ApiToolExecutorService {
         systemPrompt: subagent.system_prompt,
         history: [],
         tools: subagentApiTools,
+        sessionState,
         context: {
           clientId: resolvedClientId,
           companyId,
@@ -608,6 +625,12 @@ export class ApiToolExecutorService {
       }
     }
 
+    const sentVariables = {
+      ...savedRequestVariables(tool.parameters, args),
+      ...savedRequestVariables(tool.body, init.body ? body : undefined),
+    };
+    sessionState ??= {};
+    Object.assign(sessionState, sentVariables);
     const response = await publicFetch(url, init);
     const contentType = response.headers.get('content-type') || '';
     // Respostas 204/corpo vazio não têm JSON válido: ler como texto e só
@@ -639,7 +662,9 @@ export class ApiToolExecutorService {
     } = {
       ok: response.ok,
       status: response.status,
-      data: extracted,
+      data: Object.keys(sentVariables).length
+        ? { ...sentVariables, ...businessVariables(extracted) }
+        : extracted,
       raw,
     };
 
@@ -647,9 +672,10 @@ export class ApiToolExecutorService {
       throw new Error(`Erro ao executar ${tool.name}: ${response.status}`);
     }
 
-    // Encadeamento: regras condicionais (_chaining) ou direto (next_api_id/next_tool)
-    const legacyNextApiId =
-      (headers.next_api_id as string) || (tool as any).next_tool;
+    if (sessionState) Object.assign(sessionState, businessVariables(extracted));
+
+    // Encadeamento: regras condicionais (_chaining) ou direto (next_api_id)
+    const legacyNextApiId = this.asRecord(tool.config).next_api_id as string;
     const nextApiId = resolveChainedApiId(
       tool.extract_data,
       extracted,
@@ -673,12 +699,16 @@ export class ApiToolExecutorService {
           if (nextApi) {
             const nextTool = {
               id: nextApi.id,
+              client_id: tool.client_id,
               name: nextApi.name,
-              functionName: this.toFunctionName(nextApi.name, nextApi.id),
+              functionName:
+                nextApi.function_name ||
+                this.toFunctionName(nextApi.name, nextApi.id),
               description: nextApi.description,
               method: nextApi.method,
               url: nextApi.url,
               headers: nextApi.headers,
+              config: nextApi.config,
               body: nextApi.body,
               parameters: nextApi.parameters,
               extract_data: nextApi.extract_data,
@@ -709,7 +739,6 @@ export class ApiToolExecutorService {
                 nextResult.data !== null
                   ? nextResult.data
                   : {}),
-                tem_ofertas: true,
               };
               result.chained_result = nextResult;
             }
@@ -754,44 +783,8 @@ export class ApiToolExecutorService {
       // 1. Salva dados extraídos do retorno da API
       const resultData = (toolCall.result as any)?.data;
       if (resultData && typeof resultData === 'object') {
-        Object.assign(merged, resultData);
-      }
-
-      // 2. Salva campos enviados no Body / Parâmetros configurados para persistir na sessão
-      const matchedTool = apiTools.find(
-        (t) =>
-          t.name === toolCall.name ||
-          t.functionName === toolCall.name ||
-          normalize(t.name) === normalize(toolCall.name),
-      );
-      if (matchedTool && toolCall.arguments) {
-        const bodyConfig = this.asRecord(matchedTool.body);
-        const paramConfig = this.asRecord(matchedTool.parameters);
-        const allConfigs = { ...paramConfig, ...bodyConfig };
-
-        for (const [key, cfg] of Object.entries(allConfigs)) {
-          const fieldCfg = this.asRecord(cfg);
-          if (
-            fieldCfg.save_to_session === true ||
-            fieldCfg.save_to_session === 'true' ||
-            fieldCfg.save_to_context === true ||
-            fieldCfg.save_to_state === true
-          ) {
-            const sessionVarName =
-              typeof fieldCfg.session_variable === 'string' &&
-              fieldCfg.session_variable.trim()
-                ? fieldCfg.session_variable.trim()
-                : key.replace(/\./g, '_');
-
-            let val = (toolCall.arguments as Record<string, unknown>)[key];
-            if (val === undefined && key.includes('.')) {
-              const leafKey = key.split('.').pop()!;
-              val = (toolCall.arguments as Record<string, unknown>)[leafKey];
-            }
-            if (val !== undefined) {
-              merged[sessionVarName] = val;
-            }
-          }
+        if ((toolCall.result as any)?.ok !== false) {
+          Object.assign(merged, businessVariables(resultData));
         }
       }
     }
@@ -854,6 +847,7 @@ export class ApiToolExecutorService {
 
     const body = this.asRecord(tool.body);
     for (const [key, config] of Object.entries(body)) {
+      if (!isSafePath(key)) throw new Error('INVALID_PATH');
       const cfg = this.asRecord(config);
       if (cfg.source === 'null' || cfg.type === 'null') {
         continue; // Campos fixos nulos não exigem preenchimento da IA
@@ -958,11 +952,7 @@ export class ApiToolExecutorService {
     state: Record<string, unknown> | undefined,
     path: string,
   ): unknown {
-    if (!state || !path) return undefined;
-    return path.split('.').reduce<unknown>((current, part) => {
-      if (!current || typeof current !== 'object') return undefined;
-      return (current as Record<string, unknown>)[part];
-    }, state);
+    return readVariable(state, path);
   }
 
   private extractUrlParams(url: string) {
@@ -1017,68 +1007,8 @@ export class ApiToolExecutorService {
     }
   }
 
-  private applyExtractModifier(value: unknown, modifier?: string): unknown {
-    if (value === null || value === undefined || value === '') return value;
-
-    switch (modifier) {
-      case 'currency_brl': {
-        const num = Number(value);
-        if (isNaN(num)) return value;
-        return num.toLocaleString('pt-BR', {
-          style: 'currency',
-          currency: 'BRL',
-        });
-      }
-      case 'date_format_br': {
-        const d = new Date(String(value));
-        if (isNaN(d.getTime())) return value;
-        return d.toLocaleDateString('pt-BR', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        });
-      }
-      case 'mask_cpf': {
-        const digits = String(value).replace(/\D/g, '');
-        if (digits.length === 11) {
-          return digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
-        }
-        return value;
-      }
-      case 'mask_cnpj': {
-        const digits = String(value).replace(/\D/g, '');
-        if (digits.length === 14) {
-          return digits.replace(
-            /(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,
-            '$1.$2.$3/$4-$5',
-          );
-        }
-        return value;
-      }
-      case 'mask_phone': {
-        const digits = String(value).replace(/\D/g, '');
-        if (digits.length === 11) {
-          return digits.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
-        }
-        if (digits.length === 10) {
-          return digits.replace(/(\d{2})(\d{4})(\d{4})/, '($1) $2-$3');
-        }
-        return value;
-      }
-      case 'uppercase':
-        return String(value).toUpperCase();
-      case 'lowercase':
-        return String(value).toLowerCase();
-      case 'trim':
-        return String(value).trim();
-      default:
-        return value;
-    }
-  }
-
   private setDeepValue(target: any, path: string, value: unknown) {
+    if (!isSafePath(path)) throw new Error('INVALID_PATH');
     const parts = path.split('.');
     let current = target;
 
@@ -1123,6 +1053,7 @@ export class ApiToolExecutorService {
     let isRootArray = false;
 
     for (const [key, config] of Object.entries(body)) {
+      if (!isSafePath(key)) throw new Error('INVALID_PATH');
       const cfg = this.asRecord(config);
       let resolvedValue: unknown = undefined;
 
@@ -1140,28 +1071,16 @@ export class ApiToolExecutorService {
           resolvedValue = this.lookupSessionValue(sessionState, key);
         }
       } else if (cfg.source === 'system') {
-        // "Dado de Outra API / Sessão": resolve na ordem estado da sessão ->
-        // argumentos da IA. Se nada for encontrado, o campo é OMITIDO
-        // (nunca enviar o nome da variável literal como valor).
-        // Fallbacks de CPF só se aplicam a campos de CPF — nunca vaziam o
-        // CPF para campos system sem relação (ex.: valor, protocolo).
-        const varName =
-          typeof cfg.value === 'string'
-            ? cfg.value.replace(/[{}]/g, '').trim()
-            : '';
-        const isCpfField =
-          varName.toLowerCase().includes('cpf') ||
-          key.toLowerCase().includes('cpf');
-        resolvedValue =
-          this.lookupSessionValue(sessionState, varName) ??
-          this.lookupSessionValue(sessionState, key) ??
-          (isCpfField
-            ? this.lookupSessionValue(sessionState, 'cliente_cpf')
-            : undefined) ??
-          (isCpfField ? (args as any)['cliente_cpf'] : undefined) ??
-          (isCpfField ? (args as any)['cpf'] : undefined) ??
-          (args as any)[varName] ??
-          (args as any)[key];
+        const source = typeof cfg.value === 'string' ? cfg.value : '';
+        resolvedValue = readVariable(sessionState, source);
+        if (
+          (resolvedValue === undefined ||
+            resolvedValue === null ||
+            resolvedValue === '') &&
+          cfg.required === true
+        ) {
+          throw new Error('SESSION_VARIABLE_REQUIRED: ' + source);
+        }
       } else if ('value' in cfg) {
         const rawVal = cfg.value;
         if (
@@ -1253,16 +1172,33 @@ export class ApiToolExecutorService {
   }
 
   private applyExtractData(raw: unknown, extractData: unknown) {
+    validateExtraction(extractData);
     const map = this.asRecord(extractData);
-    if (!Object.keys(map).length || typeof raw !== 'object' || raw === null) {
+    if (!Object.keys(map).length) {
       return raw;
     }
 
     const output: Record<string, unknown> = {};
-    for (const [key, config] of Object.entries(map)) {
-      if (key === '_chaining') continue;
+    for (const [rawKey, config] of Object.entries(map)) {
+      const key = variableKey(rawKey);
+      if (
+        [
+          '_chaining',
+          '_fallback_message',
+          'fallback_message',
+          'validate_field',
+        ].includes(key)
+      )
+        continue;
       if (typeof config === 'string') {
         output[key] = this.getByPath(raw as Record<string, unknown>, config);
+      } else if (
+        config &&
+        typeof config === 'object' &&
+        'value' in config &&
+        !('path' in config)
+      ) {
+        output[key] = (config as any).value;
       } else if (
         typeof config === 'object' &&
         config !== null &&
@@ -1298,7 +1234,7 @@ export class ApiToolExecutorService {
         }
 
         if (cfg.modifier && (!cfg.rules?.length || matchedRule)) {
-          value = this.applyExtractModifier(value, cfg.modifier);
+          value = applyExtractModifier(value, cfg.modifier);
         }
 
         const isMissing = value === null || value === undefined || value === '';
@@ -1373,6 +1309,14 @@ export class ApiToolExecutorService {
     }
 
     if (val === null || val === undefined) return false;
+    if (
+      typeof val === 'boolean' &&
+      (compareVal === 'true' || compareVal === 'false') &&
+      (op === '==' || op === '!=')
+    ) {
+      const equal = val === (compareVal === 'true');
+      return op === '==' ? equal : !equal;
+    }
 
     if (
       op === '==' &&
@@ -1492,78 +1436,7 @@ export class ApiToolExecutorService {
   }
 
   private getByPath(value: unknown, path: string): unknown {
-    if (!path || value == null) return null;
-
-    const res = this.resolveByPathDirect(value, path);
-    if (res !== null && res !== undefined) return res;
-
-    // Fallback: se o objeto possui encapsulamento .data (comum em n8n e APIs REST)
-    if (
-      typeof value === 'object' &&
-      value !== null &&
-      'data' in value &&
-      !path.startsWith('data.')
-    ) {
-      const dataRes = this.resolveByPathDirect((value as any).data, path);
-      if (dataRes !== null && dataRes !== undefined) return dataRes;
-    }
-
-    return null;
-  }
-
-  private resolveByPathDirect(value: unknown, path: string): unknown {
-    if (!path || value == null) return null;
-
-    const steps: { key: string; index: string | null }[] = [];
-    const regex = /([^\].[]+)(?:\[([^\]]+)])?/g;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(path)) !== null) {
-      steps.push({
-        key: match[1].trim(),
-        index: match[2] !== undefined ? match[2].trim() : null,
-      });
-    }
-
-    let current: any = value;
-    for (let i = 0; i < steps.length; i++) {
-      if (current == null) return null;
-      const { key, index } = steps[i];
-
-      current = current[key];
-
-      if (index !== null) {
-        if (current == null) return null;
-
-        if (index === '*') {
-          if (Array.isArray(current)) {
-            const remainingPath = steps
-              .slice(i + 1)
-              .map((s) => s.key + (s.index !== null ? `[${s.index}]` : ''))
-              .join('.');
-
-            if (remainingPath) {
-              // Retorna imediatamente o array mapeado: continuar o loop
-              // tentaria acessar [key] sobre a lista e sobrescreveria o
-              // resultado com undefined/null.
-              return current
-                .map((item: any) => this.getByPath(item, remainingPath))
-                .filter((v: any) => v !== null && v !== undefined);
-            }
-          } else {
-            return null;
-          }
-        } else {
-          const idx = parseInt(index);
-          if (Array.isArray(current)) {
-            current = isNaN(idx) ? current[current.length - 1] : current[idx];
-          } else {
-            return null;
-          }
-        }
-      }
-    }
-
-    return current;
+    return readExtractionPath(value, path);
   }
 
   parseToolArguments(raw: unknown): Record<string, unknown> {

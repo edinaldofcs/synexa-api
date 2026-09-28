@@ -1,3 +1,4 @@
+import { businessVariables } from '../../common/utils/session-variables.util';
 import { buildAgentPromptFromBlocks } from '../../agents/utils/agent-prompt-builder.util';
 import { resolvePromptTemplateString } from '../../common/utils/prompt-variables.util';
 import { resolveConditionalString } from '../../common/utils/conditional-prompt.util';
@@ -85,14 +86,15 @@ export function mergeApiReturnIntoState(
 ): Record<string, unknown> {
   const { returnedState, sessionSaves = {}, keepRetornoApi = true } = options;
   const hasReturnedState = Object.keys(returnedState).length > 0;
-  return {
+  const merged = {
     ...state,
     ...(hasReturnedState && keepRetornoApi
       ? { retorno_api: returnedState }
       : {}),
-    ...(hasReturnedState ? returnedState : {}),
-    ...sessionSaves,
+    ...(hasReturnedState ? businessVariables(returnedState) : {}),
+    ...businessVariables(sessionSaves),
   };
+  return merged;
 }
 
 /**

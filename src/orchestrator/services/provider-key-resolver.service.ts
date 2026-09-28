@@ -86,18 +86,6 @@ export class ProviderKeyResolverService {
           select: { metadata: true, company_id: true },
         });
 
-        const providers = (client?.metadata as any)?.llm_providers || {};
-        const config = providers[provider] || providers[providerLower];
-        const apiKey = decryptSafe(config?.apiKey);
-        if (
-          apiKey &&
-          apiKey.trim() &&
-          !apiKey.includes('***') &&
-          apiKey !== 'stored'
-        ) {
-          return apiKey.trim();
-        }
-
         // 3. Fallback: busca em outros clientes da mesma empresa
         if (client?.company_id) {
           const companyCred = await this.prisma.provider_credentials.findFirst({
@@ -191,64 +179,25 @@ export class ProviderKeyResolverService {
       }
     } catch {}
 
-    // 2. Fallback: metadata
-    const client = await this.prisma.painel_clients.findUnique({
-      where: { id: clientId },
-      select: { metadata: true },
-    });
-
-    const providers = (client?.metadata as any)?.llm_providers || {};
-    const config = providers[provider] || providers[providerLower] || {};
-    let apiKey = config.apiKey || '';
-
-    if (apiKey && typeof apiKey === 'string' && apiKey.startsWith('enc:')) {
-      const encryptionKey = this.getEncryptionKey();
-      if (encryptionKey) {
-        try {
-          apiKey = decrypt(apiKey.slice(4), encryptionKey);
-        } catch {
-          apiKey = '';
-        }
-      } else {
-        apiKey = '';
-      }
-    }
-
-    if (!apiKey) {
-      const envKeyName = `${provider.toUpperCase()}_API_KEY`;
-      apiKey =
-        this.configService.get<string>(envKeyName) ||
-        process.env[envKeyName] ||
-        '';
-    }
-
     return {
-      apiKey,
-      enabledModels: config.enabledModels || [],
+      apiKey: await this.resolveApiKey(clientId, providerLower),
+      enabledModels: [],
     };
   }
 
-  /**
-   * Retorna a config não-secreta armazenada no metadata do cliente
-   * (painel_clients.metadata.llm_providers[provider]) — usada por providers
-   * custom BYO (tts-custom/stt-custom) para baseUrl, voz, taxas, timeouts.
-   */
+  /** Non-secret BYO endpoint settings remain configurable in client metadata. */
   async resolveProviderSettings(
     clientId: string,
     provider: string,
   ): Promise<Record<string, any>> {
-    try {
-      const client = await this.prisma.painel_clients.findUnique({
-        where: { id: clientId },
-        select: { metadata: true },
-      });
-      const providers = (client?.metadata as any)?.llm_providers || {};
-      const config = providers[provider] || providers[provider.toLowerCase()];
-      if (!config || typeof config !== 'object') return {};
-      const { apiKey: _apiKey, ...nonSecret } = config;
-      return nonSecret as Record<string, any>;
-    } catch {
-      return {};
-    }
+    const client = await this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+      select: { metadata: true },
+    });
+    const providers = (client?.metadata as any)?.llm_providers || {};
+    const config = providers[provider] || providers[provider.toLowerCase()];
+    if (!config || typeof config !== 'object') return {};
+    const { apiKey, api_key, ...settings } = config;
+    return settings;
   }
 }

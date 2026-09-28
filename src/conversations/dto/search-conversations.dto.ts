@@ -12,8 +12,7 @@ import {
 
 export class SearchConversationsDto {
   @IsOptional() @IsUUID() client_id?: string;
-  @IsOptional() @IsIn(['active', 'closed', 'deals', 'cpc']) filter?: string;
-  @IsOptional() @IsIn(['all', 'deals', 'cpc']) outcome?: string;
+  @IsOptional() @IsIn(['active', 'closed']) filter?: string;
   @IsOptional()
   @IsIn(['all', 'whatsapp', 'voice', 'webchat', 'api'])
   channel?: string;

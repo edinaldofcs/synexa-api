@@ -203,7 +203,9 @@ describe('AudioSocketAdapter', () => {
       adapter.sendAudio(Buffer.alloc(2920, 0x11)); // 3 frames → pacer inicia
       jest.advanceTimersByTime(20); // 1 frame enviado
       adapter.sendAudio(Buffer.alloc(2920, 0x22)); // +3 frames (fila: 5)
+      expect(adapter.getQueuedAudioMs()).toBeGreaterThan(0);
       adapter.clearQueuedAudio();
+      expect(adapter.getQueuedAudioMs()).toBe(0);
       jest.advanceTimersByTime(60); // 3 ticks após o clear
 
       const frames = audioFramesFrom(writes);

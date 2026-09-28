@@ -1,10 +1,10 @@
+import { clientIdentity } from '../common/utils/session-variables.util';
 import {
   Injectable,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 import {
@@ -19,30 +19,22 @@ import { evaluateConditionsWithDetails } from '../orchestrator/utils/condition-e
 export class AgentsService {
   constructor(
     private readonly agentsRepository: AgentsRepository,
-    private readonly metadataService: ClientMetadataService,
     private readonly prisma: PrismaService,
   ) {}
 
-  private async validateClientAccess(clientId: string, companyId: string) {
+  private async validateClientAccess(
+    clientId: string,
+    companyId: string,
+    requireIdentity = false,
+  ) {
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: clientId },
-      select: { company_id: true },
+      select: { company_id: true, agent_name: true, company_name: true },
     });
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`Client not found`);
     }
-  }
-
-  private async enforceInitialAgentUniqueness(agent: any) {
-    if (!agent?.is_initial || !agent?.client_id) return;
-    await this.prisma.painel_agents.updateMany({
-      where: {
-        client_id: agent.client_id,
-        is_initial: true,
-        id: { not: agent.id },
-      },
-      data: { is_initial: false },
-    });
+    if (requireIdentity) clientIdentity(client);
   }
 
   private splitLlmProvider(
@@ -66,7 +58,11 @@ export class AgentsService {
     createAgentDto: CreateAgentDto | Record<string, unknown>,
     companyId: string,
   ) {
-    await this.validateClientAccess(clientId, companyId);
+    await this.validateClientAccess(
+      clientId,
+      companyId,
+      createAgentDto.is_active !== false,
+    );
     const [data, transitions] = this.splitLlmProvider(
       createAgentDto as Record<string, unknown>,
     );
@@ -83,8 +79,6 @@ export class AgentsService {
       ...data,
       transitions,
     });
-    await this.enforceInitialAgentUniqueness(agent);
-    if (agent) void this.metadataService.refresh(agent.client_id);
     return this.mergeLlmProvider(agent);
   }
 
@@ -106,7 +100,7 @@ export class AgentsService {
     const agent = await this.agentsRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
-      select: { company_id: true },
+      select: { company_id: true, agent_name: true, company_name: true },
     });
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`Agent with ID ${id} not found`);
@@ -122,11 +116,12 @@ export class AgentsService {
     const agent = await this.agentsRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
-      select: { company_id: true },
+      select: { company_id: true, agent_name: true, company_name: true },
     });
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`Agent with ID ${id} not found`);
     }
+    if (updateAgentDto.is_active === true) clientIdentity(client);
     const [data, transitions] = this.splitLlmProvider(
       updateAgentDto as Record<string, unknown>,
     );
@@ -147,8 +142,6 @@ export class AgentsService {
       ...data,
       transitions: mergedTransitions,
     });
-    await this.enforceInitialAgentUniqueness(updated);
-    if (updated) void this.metadataService.refresh(updated.client_id);
     return this.mergeLlmProvider(updated);
   }
 
@@ -156,14 +149,13 @@ export class AgentsService {
     const agent = await this.agentsRepository.findOne(id);
     const client = await this.prisma.painel_clients.findUnique({
       where: { id: agent.client_id },
-      select: { company_id: true },
+      select: { company_id: true, agent_name: true, company_name: true },
     });
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`Agent with ID ${id} not found`);
     }
     const { agent: removedAgent, result } =
       await this.agentsRepository.remove(id);
-    if (removedAgent) void this.metadataService.refresh(removedAgent.client_id);
     return result;
   }
 

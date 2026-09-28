@@ -172,6 +172,8 @@ describe('VoiceGateway security', () => {
           tool_calls: { create: jest.fn().mockResolvedValue({}) },
           painel_clients: {
             findUnique: jest.fn().mockResolvedValue({
+              agent_name: 'Ana',
+              company_name: 'Empresa',
               id: 'bot',
               metadata: { voice_engine: 'live_api' },
             }),
@@ -281,6 +283,8 @@ describe('VoiceGateway security', () => {
       const prisma = {
         painel_clients: {
           findUnique: jest.fn().mockResolvedValue({
+            agent_name: 'Ana',
+            company_name: 'Empresa',
             id: 'bot',
             audio_gate_enabled: true,
             metadata: { voice_engine: 'live_api' },
@@ -458,6 +462,8 @@ describe('VoiceGateway security', () => {
     const prisma = {
       painel_clients: {
         findUnique: jest.fn().mockResolvedValue({
+          agent_name: 'Ana',
+          company_name: 'Empresa',
           id: 'bot-10',
           max_concurrent_calls: 10,
           metadata: {},
@@ -578,6 +584,8 @@ describe('VoiceGateway security', () => {
       const prisma = {
         painel_clients: {
           findUnique: jest.fn().mockResolvedValue({
+            agent_name: 'Ana',
+            company_name: 'Empresa',
             id: 'bot-1',
             max_concurrent_calls: 10,
             metadata: {},
@@ -718,6 +726,8 @@ describe('VoiceGateway security', () => {
     const prisma = {
       painel_clients: {
         findUnique: jest.fn().mockResolvedValue({
+          agent_name: 'Ana',
+          company_name: 'Empresa',
           id: 'bot-1',
           max_concurrent_calls: 10,
           metadata: { voice_engine: 'hybrid' },

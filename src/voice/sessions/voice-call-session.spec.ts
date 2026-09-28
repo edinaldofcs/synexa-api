@@ -2,6 +2,106 @@ import { VoiceCallSession } from './voice-call-session';
 import { buildVoiceFarewellToolResponse } from '../services/voice-runtime.util';
 
 it.each([
+  [true, false, 3000, 'Pode parar', true, false],
+  [false, false, 3000, 'Pode parar', false, false],
+  [true, true, 3000, 'Pode parar', false, false],
+  [true, false, 0, 'Pode parar', false, false],
+  [true, false, 3000, '  ', false, false],
+  [true, true, 3000, 'Pode parar', false, true],
+  [false, true, 3000, 'Pode parar', false, true],
+] as const)(
+  'interrompe a cauda telefônica após turnComplete: permitido=%s saudação=%s fila=%s texto=%s',
+  async (allowed, greeting, queuedMs, text, expected, initial) => {
+    jest.useFakeTimers();
+    let queue = queuedMs as number;
+    const clearQueuedAudio = jest.fn(() => {
+      queue = 0;
+    });
+    const adapter = {
+      id: 'call',
+      metadata: { customVariables: {} },
+      onAudio: jest.fn(),
+      onCallEnd: jest.fn(),
+      start: jest.fn(),
+      close: jest.fn(),
+      sendAudio: jest.fn(),
+      finishAudio: jest.fn(),
+      clearQueuedAudio,
+      getQueuedAudioMs: () => queue,
+    };
+    const provider = {
+      connect: jest.fn(),
+      close: jest.fn(),
+      setInterruptionBlocked: jest.fn(),
+    };
+    const processChunk = jest.fn().mockReturnValue({ forwardChunks: [] });
+    const session = new VoiceCallSession({
+      telephonyAdapter: adapter as any,
+      liveProvider: provider as any,
+      audioGateService: {
+        createSession: () => ({
+          notifyAiSpeakingChanged: jest.fn(),
+          getStats: jest.fn(),
+          processChunk,
+        }),
+      } as any,
+      pricingService: { calculateVoiceLiveCost: () => 0 } as any,
+      prisma: {
+        painel_clients: {
+          findUnique: jest.fn().mockResolvedValue({
+            agent_name: 'Ana',
+            company_name: 'Empresa',
+          }),
+        },
+      } as any,
+      config: {
+        clientId: 'client',
+        voiceEngine: 'live_api',
+        selectedAgent: {
+          id: 'agent',
+          allow_interrupted: allowed,
+          is_initial: initial,
+        },
+      },
+    });
+    try {
+      await session.start();
+      const callbacks = provider.connect.mock.calls[0][0];
+      callbacks.onAudio(Buffer.alloc(960).toString('base64'));
+      callbacks.onTurnComplete();
+      if (!initial) session.isGreetingPlaying = greeting;
+      else expect(session.isGreetingPlaying).toBe(true);
+      adapter.onAudio.mock.calls[0][0](Buffer.alloc(640));
+      expect(processChunk).toHaveBeenLastCalledWith(
+        expect.any(String),
+        queuedMs > 0,
+      );
+      await callbacks.onUserTranscript(text);
+      expect(clearQueuedAudio).toHaveBeenCalledTimes(expected ? 1 : 0);
+      expect(session.interruptedCount).toBe(expected ? 1 : 0);
+      // Fragmentos posteriores não contam outra interrupção da mesma fila.
+      await callbacks.onUserTranscript(text);
+      expect(clearQueuedAudio).toHaveBeenCalledTimes(expected ? 1 : 0);
+      if (initial) {
+        callbacks.onInterrupted();
+        expect(clearQueuedAudio).not.toHaveBeenCalled();
+        expect(provider.setInterruptionBlocked).toHaveBeenLastCalledWith(true);
+        await jest.advanceTimersByTimeAsync(queuedMs + 200);
+        expect(session.isGreetingPlaying).toBe(false);
+        expect(provider.setInterruptionBlocked).toHaveBeenLastCalledWith(false);
+        callbacks.onAudio(Buffer.alloc(960).toString('base64'));
+        callbacks.onTurnComplete();
+        await callbacks.onUserTranscript(text);
+        expect(clearQueuedAudio).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      }
+    } finally {
+      await session.end('test-completed');
+      jest.useRealTimers();
+    }
+  },
+);
+
+it.each([
   ['live_api', true],
   ['hybrid', true],
   ['live_api', false],
@@ -58,7 +158,11 @@ it.each([
         calculateHybridVoiceCost: () => 0,
       } as any,
       prisma: {
-        painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
+        painel_clients: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ agent_name: 'Ana', company_name: 'Empresa' }),
+        },
         painel_agents: { findMany: jest.fn().mockResolvedValue([]) },
       } as any,
       voiceToolsService: tools as any,
@@ -189,7 +293,11 @@ describe('Telephony farewell tool', () => {
         calculateVoiceLiveCost: jest.fn().mockReturnValue(0),
       } as any,
       prisma: {
-        painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
+        painel_clients: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ agent_name: 'Ana', company_name: 'Empresa' }),
+        },
       } as any,
       config: {
         clientId: 'client',
@@ -258,7 +366,12 @@ describe('Telephony farewell tool', () => {
         } as any,
         pricingService: {} as any,
         prisma: {
-          painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
+          painel_clients: {
+            findUnique: jest.fn().mockResolvedValue({
+              agent_name: 'Ana',
+              company_name: 'Empresa',
+            }),
+          },
         } as any,
         config: {
           clientId: 'client',
@@ -390,7 +503,11 @@ describe('Telephony agent transition', () => {
       } as any,
       pricingService: {} as any,
       prisma: {
-        painel_clients: { findUnique: jest.fn().mockResolvedValue(null) },
+        painel_clients: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ agent_name: 'Ana', company_name: 'Empresa' }),
+        },
         painel_agents: { findMany: jest.fn().mockResolvedValue([nextAgent]) },
       } as any,
       voiceToolsService: tools as any,

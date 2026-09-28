@@ -186,12 +186,12 @@ describe('prompt-variables.util', () => {
       expect(result).toBe('Dia: 21 | Ano: 2026');
     });
 
-    it('suporta fatiamento através de aliases comuns', () => {
+    it('não infere aliases ao fatiar variáveis', () => {
       const template = 'Cliente abreviado: {{cliente[:6]}}';
       const variables = { nome_cliente: 'Carlos Eduardo' };
 
       const result = resolvePromptTemplateString(template, variables);
-      expect(result).toBe('Cliente abreviado: Carlos');
+      expect(result).toBe('Cliente abreviado: {{cliente[:6]}}');
     });
 
     it('preserva variáveis desconhecidas mesmo com instrução de slice', () => {

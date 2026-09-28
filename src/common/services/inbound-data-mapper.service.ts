@@ -1,3 +1,9 @@
+import { validateVariableDefinitions } from '../utils/extraction-validation.util';
+import {
+  readVariable,
+  variableKey,
+  isBusinessVariable,
+} from '../utils/session-variables.util';
 import { Injectable, Logger } from '@nestjs/common';
 
 export type InboundTransformType =
@@ -66,54 +72,34 @@ export class InboundDataMapperService {
     channel?: string,
   ): Record<string, unknown> {
     const mappedState: Record<string, unknown> = {};
-
-    // 1. Inicializa com variáveis padrão da sessão (se configuradas)
-    if (config?.default_variables) {
-      if (Array.isArray(config.default_variables)) {
-        for (const item of config.default_variables) {
-          if (item?.key) {
-            const cleanKey = item.key.replace(/[[\]{}]/g, '').trim();
-            mappedState[cleanKey] = item.value;
-            mappedState[item.key] = item.value;
-          }
-        }
-      } else if (typeof config.default_variables === 'object') {
-        for (const [key, val] of Object.entries(config.default_variables)) {
-          const cleanKey = key.replace(/[[\]{}]/g, '').trim();
-          mappedState[cleanKey] = val;
-          mappedState[key] = val;
-        }
-      }
+    const defaults = config?.default_variables;
+    for (const [key, value] of Array.isArray(defaults)
+      ? defaults.map((item) => [item.key, item.value] as const)
+      : Object.entries(defaults || {})) {
+      const clean = variableKey(key);
+      if (isBusinessVariable(clean)) mappedState[clean] = value;
     }
-
-    // Se não houver dados brutos recebidos, retorna as variáveis padrão
-    if (!rawData || typeof rawData !== 'object') {
-      return mappedState;
-    }
-
-    const rules = config?.rules || [];
-    const isEnabled = config?.enabled !== false;
-    const preserveUnmapped = config?.preserve_unmapped !== false;
-
-    // Normaliza canal
-    const normalizedChannel = (channel || 'all').toLowerCase();
-
-    // Se as regras estiverem desabilitadas, retorna os dados brutos combinados com defaults
-    if (!isEnabled || rules.length === 0) {
-      return { ...mappedState, ...rawData };
-    }
-
-    const appliedSourceKeys = new Set<string>();
-
+    const raw =
+      rawData && typeof rawData === 'object' && !Array.isArray(rawData)
+        ? rawData
+        : {};
+    const rules = config?.enabled === false ? [] : config?.rules || [];
+    validateVariableDefinitions(
+      rules.map((rule) => ({
+        key: rule.target_variable,
+        report_target: (rule as unknown as Record<string, unknown>)
+          .report_target,
+      })),
+    );
+    const normalized = (channel || 'all').toLowerCase();
+    const appliedSources = new Set<string>();
+    const explicitTargets = new Set<string>();
     for (const rule of rules) {
-      if (!rule.source_field || !rule.target_variable) continue;
-
-      // Verifica compatibilidade de canal
-      const ruleChannel = (rule.source_channel || 'all').toLowerCase();
-      const channelMatches =
-        ruleChannel === 'all' ||
-        ruleChannel === normalizedChannel ||
-        (ruleChannel === 'voice' &&
+      const sourceChannel = rule.source_channel || 'all';
+      const matches =
+        sourceChannel === 'all' ||
+        sourceChannel === normalized ||
+        (sourceChannel === 'voice' &&
           [
             'voice',
             'telephony',
@@ -121,180 +107,41 @@ export class InboundDataMapperService {
             'callflex',
             'asterisk',
             'sip',
-          ].includes(normalizedChannel)) ||
-        (['webhook', 'api', 'external_system'].includes(ruleChannel) &&
-          ['webhook', 'api', 'external_system'].includes(normalizedChannel));
-
-      if (!channelMatches) continue;
-
-      // Busca o valor na entrada bruta (case-insensitive e busca direta)
-      const rawValue = this.extractValue(rawData, rule.source_field);
-      appliedSourceKeys.add(rule.source_field.toLowerCase());
-
-      let finalValue: unknown = rawValue;
-
-      // Se o valor for nulo/indefinido/string vazia, aplica default_value se existir
+            'audiosocket',
+            'asterisk_fastagi',
+            'webrtc',
+            'twilio',
+            'vonage',
+          ].includes(normalized)) ||
+        (['webhook', 'api', 'external_system'].includes(sourceChannel) &&
+          ['webhook', 'api', 'external_system'].includes(normalized));
+      if (!matches) continue;
+      let value = readVariable(raw, rule.source_field);
+      appliedSources.add(variableKey(rule.source_field).split('.')[0]);
       if (
-        (finalValue === undefined ||
-          finalValue === null ||
-          (typeof finalValue === 'string' && finalValue.trim() === '')) &&
-        rule.default_value !== undefined &&
-        rule.default_value !== ''
-      ) {
-        finalValue = rule.default_value;
-      }
-
-      // Aplica transformações de tipo e sanitização
-      if (
-        finalValue !== undefined &&
-        finalValue !== null &&
-        finalValue !== ''
-      ) {
-        finalValue = this.applyTransformation(finalValue, rule.transform, rule);
-
-        // Remove colchetes ou chaves que o usuário possa ter digitado (ex: [[cnpj_cpf]] -> cnpj_cpf)
-        const cleanTarget = rule.target_variable.replace(/[[\]{}]/g, '').trim();
-
-        mappedState[cleanTarget] = finalValue;
-        mappedState[rule.target_variable] = finalValue;
-
-        // Aliases automáticos para garantir interpolação nos prompts
-        if (cleanTarget === 'cnpj_cpf' || cleanTarget === 'cpf') {
-          mappedState.cnpj_cpf = finalValue;
-          mappedState.cpf = finalValue;
-          mappedState.documento = finalValue;
-        } else if (
-          cleanTarget === 'cliente_nome' ||
-          cleanTarget === 'nome_cliente' ||
-          cleanTarget === 'nome_contato'
-        ) {
-          mappedState.cliente_nome = finalValue;
-          mappedState.nome_cliente = finalValue;
-          mappedState.nome_contato = finalValue;
-        }
-      }
-    }
-
-    // Preserva campos não mapeados se configurado
-    if (preserveUnmapped) {
-      for (const [key, value] of Object.entries(rawData)) {
-        const cleanKey = key.replace(/[[\]{}]/g, '').trim();
-        if (
-          !appliedSourceKeys.has(key.toLowerCase()) &&
-          !appliedSourceKeys.has(cleanKey.toLowerCase()) &&
-          !Object.prototype.hasOwnProperty.call(mappedState, key) &&
-          !Object.prototype.hasOwnProperty.call(mappedState, cleanKey)
-        ) {
-          mappedState[cleanKey] = value;
-          mappedState[key] = value;
-        }
-      }
-    }
-
-    return mappedState;
-  }
-
-  /**
-   * Extrai valor do payload bruto com suporte a case-insensitive, normalização de caracteres e aliases
-   */
-  private extractValue(
-    obj: Record<string, unknown>,
-    keyOrPath: string,
-  ): unknown {
-    const cleanKey = keyOrPath.replace(/[[\]{}]/g, '').trim();
-
-    if (Object.prototype.hasOwnProperty.call(obj, keyOrPath)) {
-      return obj[keyOrPath];
-    }
-    if (Object.prototype.hasOwnProperty.call(obj, cleanKey)) {
-      return obj[cleanKey];
-    }
-
-    // Busca por caminho pontilhado (dot notation)
-    if (keyOrPath.includes('.')) {
-      const parts = keyOrPath.split('.');
-      let current: any = obj;
-      for (const part of parts) {
-        if (
-          current === null ||
-          current === undefined ||
-          typeof current !== 'object'
-        ) {
-          current = undefined;
-          break;
-        }
-        current = current[part];
-      }
-      if (current !== undefined) return current;
-    }
-
-    // Busca flexível: case-insensitive e ignorando separadores (- e _)
-    const normalizedTarget = cleanKey.toLowerCase().replace(/[-_]/g, '');
-    for (const [k, v] of Object.entries(obj)) {
-      const normalizedK = k.toLowerCase().replace(/[-_]/g, '');
-      if (normalizedK === normalizedTarget) {
-        return v;
-      }
-    }
-
-    // Aliases semânticos para telefonia SIP
-    if (
-      ['xcpf', 'cpf', 'cnpjcpf', 'documento', 'param'].includes(
-        normalizedTarget,
+        value === undefined ||
+        value === null ||
+        (typeof value === 'string' && !value.trim())
       )
-    ) {
-      for (const alias of [
-        'cpf',
-        'cnpj_cpf',
-        'documento',
-        'param',
-        'codigo',
-        'SYNEXA_CPF',
-        'X-CPF',
-        'x_cpf',
-      ]) {
+        value = rule.default_value;
+      if (value === undefined || value === null || value === '') continue;
+      value = this.applyTransformation(value, rule.transform, rule);
+      const target = variableKey(rule.target_variable);
+      mappedState[target] = value;
+      explicitTargets.add(target);
+    }
+    if (config?.preserve_unmapped !== false) {
+      for (const [key, value] of Object.entries(raw)) {
+        const clean = variableKey(key);
         if (
-          obj[alias] !== undefined &&
-          obj[alias] !== null &&
-          obj[alias] !== ''
-        ) {
-          return obj[alias];
-        }
+          isBusinessVariable(clean) &&
+          !appliedSources.has(clean) &&
+          !explicitTargets.has(clean)
+        )
+          mappedState[clean] = value;
       }
     }
-
-    if (
-      [
-        'xclientenome',
-        'clientenome',
-        'nomecliente',
-        'nomecontato',
-        'nome',
-        'callername',
-      ].includes(normalizedTarget)
-    ) {
-      for (const alias of [
-        'cliente_nome',
-        'nome_cliente',
-        'nome_contato',
-        'caller_name',
-        'nome',
-        'SYNEXA_CLIENTE_NOME',
-        'X-Cliente-Nome',
-        'x_cliente_nome',
-      ]) {
-        if (
-          obj[alias] !== undefined &&
-          obj[alias] !== null &&
-          obj[alias] !== '' &&
-          String(obj[alias]).toLowerCase() !== 'microsip'
-        ) {
-          return obj[alias];
-        }
-      }
-    }
-
-    return undefined;
+    return mappedState;
   }
 
   /**

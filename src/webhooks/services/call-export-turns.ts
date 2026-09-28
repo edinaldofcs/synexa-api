@@ -31,7 +31,6 @@ export interface ExportTool {
 export function buildCallTurns(
   messages: ExportMessage[] | undefined,
   tools: ExportTool[],
-  compact = false,
 ) {
   const turns = new Map<
     string,
@@ -99,9 +98,7 @@ export function buildCallTurns(
       agent_id: audit?.agent_id || tool.agent_id || null,
       tool_name: tool.tool_name,
       arguments: redactAudit(tool.arguments ?? null),
-      model_result: redactAudit(
-        compact ? withoutChainTrail(tool.result) : (tool.result ?? null),
-      ),
+      model_result: redactAudit(withoutChainTrail(tool.result)),
       status: tool.status,
       started_at: tool.created_at ?? null,
       completed_at: tool.completed_at ?? null,

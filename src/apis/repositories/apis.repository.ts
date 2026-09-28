@@ -18,7 +18,7 @@ const KNOWN_FIELDS = new Set([
   'extract_data',
   'visible_to_agent',
   'active',
-  'next_tool',
+  'headers',
 ]);
 
 @Injectable()
@@ -33,15 +33,15 @@ export class ApisRepository {
       if (KNOWN_FIELDS.has(dbKey)) db[dbKey] = v;
       else meta[k] = v;
     }
-    return { ...db, headers: meta };
+    return { ...db, config: meta };
   }
 
   private flat(api: Record<string, unknown> | null) {
     if (!api) return api;
-    const { headers, ...rest } = api;
+    const { config, ...rest } = api;
     const meta =
-      typeof headers === 'object' && headers !== null
-        ? (headers as Record<string, unknown>)
+      typeof config === 'object' && config !== null
+        ? (config as Record<string, unknown>)
         : {};
     const merged = { ...meta, ...rest } as Record<string, unknown>;
 
@@ -78,14 +78,14 @@ export class ApisRepository {
   async update(id: string, payload: Record<string, unknown>) {
     const raw = await this.prisma.painel_apis.findUnique({ where: { id } });
     if (!raw) throw new NotFoundException(`API with ID ${id} not found`);
-    const existingHeaders =
-      typeof raw.headers === 'object' && raw.headers !== null
-        ? (raw.headers as Record<string, unknown>)
+    const existingConfig =
+      typeof raw.config === 'object' && raw.config !== null
+        ? (raw.config as Record<string, unknown>)
         : {};
     const dbPayload = this.splitPayload(payload);
-    dbPayload.headers = {
-      ...existingHeaders,
-      ...dbPayload.headers,
+    dbPayload.config = {
+      ...existingConfig,
+      ...dbPayload.config,
     };
     const api = await this.prisma.painel_apis.update({
       where: { id },

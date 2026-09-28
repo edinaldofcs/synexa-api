@@ -2,6 +2,7 @@ generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
 }
+
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
@@ -9,156 +10,140 @@ datasource db {
 }
 
 model companies {
-  sip_accounts sip_accounts[]
-  max_concurrent_calls Int @default(5)
-  call_exports call_exports[]
-  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name       String
-  status     String?    @default("active")
-  created_at DateTime?  @default(now()) @db.Timestamptz(6)
-  updated_at DateTime?  @default(now()) @db.Timestamptz(6)
-  users      users[]
-  conversations conversations[]
-  messages    messages[]
-  painel_clients   painel_clients[]
-  channel_connections channel_connections[]
-  end_users          end_users[]
-  channel_identities channel_identities[]
-  inbound_events     inbound_events[]
-  media_assets        media_assets[]
-  outbox_events       outbox_events[]
-  message_events      message_events[]
-  tool_calls          tool_calls[]
-  agent_runs          agent_runs[]
-  knowledge_bases     knowledge_bases[]
-  knowledge_documents knowledge_documents[]
-  knowledge_chunks    knowledge_chunks[]
-  knowledge_embeddings knowledge_embeddings[]
-  provider_credentials provider_credentials[]
-  credential_audit_logs credential_audit_logs[]
+  sip_accounts            sip_accounts[]
+  max_concurrent_calls    Int                       @default(5)
+  call_exports            call_exports[]
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                    String
+  status                  String?                   @default("active")
+  created_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  users                   users[]
+  conversations           conversations[]
+  messages                messages[]
+  painel_clients          painel_clients[]
+  channel_connections     channel_connections[]
+  end_users               end_users[]
+  channel_identities      channel_identities[]
+  inbound_events          inbound_events[]
+  media_assets            media_assets[]
+  outbox_events           outbox_events[]
+  message_events          message_events[]
+  tool_calls              tool_calls[]
+  agent_runs              agent_runs[]
+  knowledge_bases         knowledge_bases[]
+  knowledge_documents     knowledge_documents[]
+  knowledge_chunks        knowledge_chunks[]
+  knowledge_embeddings    knowledge_embeddings[]
+  provider_credentials    provider_credentials[]
+  credential_audit_logs   credential_audit_logs[]
   voice_session_telemetry voice_session_telemetry[]
-  telephony_endpoints telephony_endpoints[]
-  painel_interactions painel_interactions[]
+  telephony_endpoints     telephony_endpoints[]
+  prompt_templates        prompt_templates[]
 }
 
 model users {
-  id            String    @id @db.Uuid
-  company_id    String    @db.Uuid
-  name          String?
-  email         String?   @unique
-  password_hash String?
-  invitation_pending Boolean @default(false)
-  role          String    @default("operator")
-  created_at    DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
-  companies     companies @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  conversations conversations[]
+  id                 String    @id @db.Uuid
+  company_id         String    @db.Uuid
+  name               String?
+  email              String?   @unique
+  password_hash      String?
+  invitation_pending Boolean   @default(false)
+  role               String    @default("operator")
+  created_at         DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime? @default(now()) @db.Timestamptz(6)
+  companies          companies @relation(fields: [company_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([company_id])
 }
 
 model conversations {
-  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id              String    @db.Uuid
-  client_id               String?   @db.Uuid
-  channel_connection_id   String?   @db.Uuid
-  end_user_id             String?   @db.Uuid
-  origin_channel          String?
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id                String    @db.Uuid
+  client_id                 String?   @db.Uuid
+  channel_connection_id     String?   @db.Uuid
+  end_user_id               String?   @db.Uuid
+  origin_channel            String?
   external_conversation_key String?
-  mode                    String?   @default("auto")
-  status                  String    @default("active")
-  current_agent_id        String?   @db.Uuid
-  current_step            String?
-  priority                Int?      @default(0)
-  assigned_to             String?   @db.Uuid
-  started_at              DateTime? @default(now()) @db.Timestamptz(6)
-  last_message_at         DateTime? @db.Timestamptz(6)
-  last_inbound_at         DateTime? @db.Timestamptz(6)
-  last_outbound_at        DateTime? @db.Timestamptz(6)
-  voice_heartbeat_at DateTime? @db.Timestamptz(6)
-  voice_finalized_at DateTime? @db.Timestamptz(6)
-  closed_at               DateTime? @db.Timestamptz(6)
-  ai_context              Json?     @db.JsonB
-  metadata                Json?     @db.JsonB
-  track_id                String?   @db.Uuid
-  tabulation_notes        String?
-  tabulated_at            DateTime? @db.Timestamptz(6)
-  tabulated_by            String?
-  tabulation_history      Json?     @default("[]") @db.JsonB
-  created_at              DateTime? @default(now()) @db.Timestamptz(6)
+  status                    String    @default("active")
+  current_agent_id          String?   @db.Uuid
+  started_at                DateTime? @default(now()) @db.Timestamptz(6)
+  last_message_at           DateTime? @db.Timestamptz(6)
+  last_inbound_at           DateTime? @db.Timestamptz(6)
+  last_outbound_at          DateTime? @db.Timestamptz(6)
+  voice_heartbeat_at        DateTime? @db.Timestamptz(6)
+  voice_finalized_at        DateTime? @db.Timestamptz(6)
+  closed_at                 DateTime? @db.Timestamptz(6)
+  metadata                  Json?     @db.JsonB
+  created_at                DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies           companies           @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients      painel_clients?     @relation(fields: [client_id], references: [id])
+  companies           companies            @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients      painel_clients?      @relation(fields: [client_id], references: [id])
   channel_connections channel_connections? @relation(fields: [channel_connection_id], references: [id])
-  end_users           end_users?          @relation(fields: [end_user_id], references: [id])
-  users               users?              @relation(fields: [assigned_to], references: [id])
-  painel_tracks       painel_tracks?      @relation(fields: [track_id], references: [id], onDelete: SetNull)
+  end_users           end_users?           @relation(fields: [end_user_id], references: [id])
 
-  messages            messages[]
-  conversation_state  conversation_state[]
-  message_events      message_events[]
-  tool_calls          tool_calls[]
-  agent_runs          agent_runs[]
+  messages                messages[]
+  conversation_state      conversation_state?
+  message_events          message_events[]
+  tool_calls              tool_calls[]
+  agent_runs              agent_runs[]
   voice_session_telemetry voice_session_telemetry?
 
+  @@unique([client_id, external_conversation_key])
   @@index([company_id])
   @@index([client_id])
-  @@index([track_id])
-  @@index([client_id, status, tabulated_at, last_message_at])
   @@index([channel_connection_id])
   @@index([end_user_id])
   @@index([status])
-  @@index([company_id, mode, status, assigned_to])
   @@index([company_id, last_message_at(sort: Desc)])
   @@index([company_id, last_inbound_at(sort: Desc)])
-  @@unique([client_id, external_conversation_key])
 }
 
 model messages {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id          String    @db.Uuid
-  conversation_id     String    @db.Uuid
-  sender_type         String    // customer, ai, human
-  channel             String    // whatsapp, sms, webchat, api
-  direction           String?   // inbound, outbound
-  message_type        String?   @default("text") // text, mixed
-  content             String?
-  attachments         Json?     @db.JsonB
-  raw_payload         Json?     @db.JsonB
-  request_id          String?
-  idempotency_key     String?
-  status              String?   @default("received") // received, processing, completed, failed
-  error_message       String?
-  delivery_status     String?   @default("sent")
-  external_message_id String?
-  channel_message_id  String?
-  metadata            Json?     @db.JsonB
-  processed_at        DateTime? @db.Timestamptz(6)
-  created_at          DateTime? @default(now()) @db.Timestamptz(6)
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id      String    @db.Uuid
+  conversation_id String    @db.Uuid
+  sender_type     String // customer, ai, human
+  channel         String // whatsapp, sms, webchat, api
+  direction       String? // inbound, outbound
+  message_type    String?   @default("text") // text, mixed
+  content         String?
+  attachments     Json?     @db.JsonB
+  raw_payload     Json?     @db.JsonB
+  request_id      String?
+  idempotency_key String?
+  status          String?   @default("received") // received, processing, completed, failed
+  error_message   String?
+  delivery_status String?   @default("sent")
+  metadata        Json?     @db.JsonB
+  processed_at    DateTime? @db.Timestamptz(6)
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  conversations   conversations   @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  companies     companies     @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  conversations conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
 
-  message_parts   message_parts[]
-  media_assets    media_assets[]
-  tool_calls      tool_calls[]
-  message_events  message_events[]
-  agent_runs      agent_runs[]     @relation("AgentRunInboundMessage")
-  response_agent_runs agent_runs[] @relation("AgentRunResponseMessage")
+  message_parts       message_parts[]
+  media_assets        media_assets[]
+  tool_calls          tool_calls[]
+  message_events      message_events[]
+  agent_runs          agent_runs[]     @relation("AgentRunInboundMessage")
+  response_agent_runs agent_runs[]     @relation("AgentRunResponseMessage")
 
+  @@unique([company_id, idempotency_key])
   @@index([conversation_id])
   @@index([conversation_id, created_at(sort: Desc)])
-  @@unique([company_id, idempotency_key])
   @@index([status])
 }
 
 model message_parts {
-  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  message_id     String   @db.Uuid
-  part_type      String   // text, image, audio, file, tool_result, rag_context, citation
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message_id     String    @db.Uuid
+  part_type      String // text, image, audio, file, tool_result, rag_context, citation
   text_content   String?
-  media_asset_id String?  @db.Uuid
-  tool_call_id   String?  @db.Uuid
-  order_index    Int      @default(0)
-  metadata       Json?    @default("{}") @db.JsonB
+  media_asset_id String?   @db.Uuid
+  tool_call_id   String?   @db.Uuid
+  order_index    Int       @default(0)
+  metadata       Json?     @default("{}") @db.JsonB
   created_at     DateTime? @default(now()) @db.Timestamptz(6)
 
   messages     messages      @relation(fields: [message_id], references: [id], onDelete: Cascade)
@@ -172,10 +157,10 @@ model message_parts {
 }
 
 model conversation_state {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  conversation_id String   @db.Uuid
-  state           Json     @default("{}") @db.JsonB
-  version         Int      @default(1)
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id String    @db.Uuid
+  state           Json      @default("{}") @db.JsonB
+  version         Int       @default(1)
   created_at      DateTime? @default(now()) @db.Timestamptz(6)
   updated_at      DateTime? @default(now()) @db.Timestamptz(6)
 
@@ -206,10 +191,10 @@ model media_assets {
   created_at     DateTime? @default(now()) @db.Timestamptz(6)
   updated_at     DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  messages       messages?      @relation(fields: [message_id], references: [id], onDelete: SetNull)
-  message_parts  message_parts[]
+  companies           companies             @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients      painel_clients        @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  messages            messages?             @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  message_parts       message_parts[]
   knowledge_documents knowledge_documents[]
 
   @@index([company_id])
@@ -220,86 +205,83 @@ model media_assets {
 }
 
 model painel_clients {
-  sip_account sip_accounts?
-  call_exports call_exports[]
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id   String    @db.Uuid
-  company_name String?
-  agent_name   String?
-  logo_url     String?
-  logo_icon    String?
+  sip_account   sip_accounts?
+  call_exports  call_exports[]
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id    String         @db.Uuid
+  company_name  String?
+  agent_name    String?
+  logo_url      String?
+  logo_icon     String?
   // Processamento da IA de texto: TRUE = BullMQ (durÃ¡vel); FALSE = execuÃ§Ã£o inline na API
-  queue_enabled Boolean @default(true)
-  tabulation_inactivity_minutes Int @default(30)
+  queue_enabled Boolean        @default(true)
 
-  companies           companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_agents       painel_agents[]
-  painel_apis         painel_apis[]
-  painel_tracks       painel_tracks[]
-  channel_connections channel_connections[]
-  webhook_endpoints   webhook_endpoints[]
-  end_users           end_users[]
-  channel_identities  channel_identities[]
-  inbound_events      inbound_events[]
-  conversations       conversations[]
-  media_assets        media_assets[]
-  outbox_events       outbox_events[]
-  message_events      message_events[]
-  tool_calls          tool_calls[]
-  agent_runs          agent_runs[]
-  painel_subagents    painel_subagents[]
-  knowledge_bases     knowledge_bases[]
-  knowledge_documents knowledge_documents[]
-  knowledge_chunks    knowledge_chunks[]
-  knowledge_embeddings knowledge_embeddings[]
-  provider_credentials provider_credentials[]
-  credential_audit_logs credential_audit_logs[]
-  voice_session_telemetry voice_session_telemetry[]
-  telephony_endpoints telephony_endpoints[]
-  painel_interactions painel_interactions[]
-  voice_name                  String?
-  audio_gate_enabled          Boolean?        @default(true)
-  audio_gate_threshold        Int?            @default(500)
-  audio_gate_hangover_margin_ms Int?          @default(500)
-  audio_gate_preroll_ms       Int?            @default(300)
-  hybrid_stt_enabled          Boolean?        @default(false)
-  gemini_thinking_budget      Int?            @default(0)
-  gemini_thinking_level       String?
-  context_compression_enabled Boolean?        @default(false)
+  companies                         companies                 @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_agents                     painel_agents[]
+  painel_apis                       painel_apis[]
+  channel_connections               channel_connections[]
+  webhook_endpoints                 webhook_endpoints[]
+  end_users                         end_users[]
+  channel_identities                channel_identities[]
+  inbound_events                    inbound_events[]
+  conversations                     conversations[]
+  media_assets                      media_assets[]
+  outbox_events                     outbox_events[]
+  message_events                    message_events[]
+  tool_calls                        tool_calls[]
+  agent_runs                        agent_runs[]
+  painel_subagents                  painel_subagents[]
+  knowledge_bases                   knowledge_bases[]
+  knowledge_documents               knowledge_documents[]
+  knowledge_chunks                  knowledge_chunks[]
+  knowledge_embeddings              knowledge_embeddings[]
+  provider_credentials              provider_credentials[]
+  credential_audit_logs             credential_audit_logs[]
+  voice_session_telemetry           voice_session_telemetry[]
+  telephony_endpoints               telephony_endpoints[]
+  voice_name                        String?
+  audio_gate_enabled                Boolean?                  @default(true)
+  audio_gate_threshold              Int?                      @default(500)
+  audio_gate_hangover_margin_ms     Int?                      @default(500)
+  audio_gate_preroll_ms             Int?                      @default(300)
+  hybrid_stt_enabled                Boolean?                  @default(false)
+  gemini_thinking_budget            Int?                      @default(0)
+  gemini_thinking_level             String?
+  context_compression_enabled       Boolean?                  @default(false)
   context_compression_target_tokens Int?
-  max_concurrent_calls        Int?
-  metadata            Json?           @default("{}") @db.JsonB
+  metadata                          Json?                     @default("{}") @db.JsonB
+  prompt_templates                  prompt_templates[]
 
   @@index([company_id])
 }
 
 model painel_agents {
-  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  client_id             String    @db.Uuid
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_id             String   @db.Uuid
   model                 String?
   service_step          String?
   execution_order       Int?
   system_prompt         String?
-  version               Int       @default(1)
-  is_active             Boolean   @default(true)
-  is_initial            Boolean   @default(false)
-  activation_conditions Json?     @db.JsonB
-  activation_mode       String?   @default("on_next_message")
-  transitions           Json?     @db.JsonB
-  allowed_tool_names    Json?     @db.JsonB
-  persona_blocks        Json?     @db.JsonB
-  allow_interrupted     Boolean?  @default(true)
-  voice_name                  String?
-  hybrid_audio_enabled  Boolean?  @default(false)
+  version               Int      @default(1)
+  is_active             Boolean  @default(true)
+  is_initial            Boolean  @default(false)
+  activation_conditions Json?    @db.JsonB
+  activation_mode       String?  @default("on_next_message")
+  transitions           Json?    @db.JsonB
+  allowed_tool_names    Json?    @db.JsonB
+  persona_blocks        Json?    @db.JsonB
+  allow_interrupted     Boolean? @default(true)
+  voice_name            String?
+  hybrid_audio_enabled  Boolean? @default(false)
   tts_provider          String?
   stt_provider          String?
-  interaction_mode      String    @default("both")
+  interaction_mode      String   @default("both")
 
-  painel_clients      painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  painel_apis         painel_apis[]
-  painel_interactions painel_interactions[]
-  painel_tracks       painel_tracks[]
-  agent_runs          agent_runs[]
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  painel_apis    painel_apis[]
+  agent_runs     agent_runs[]
+
+  @@index([client_id])
 }
 
 model painel_subagents {
@@ -317,7 +299,7 @@ model painel_subagents {
   created_at                 DateTime? @default(now()) @db.Timestamptz(6)
   updated_at                 DateTime? @default(now()) @db.Timestamptz(6)
 
-  painel_clients             painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
 
   @@index([client_id])
   @@index([is_active])
@@ -326,76 +308,56 @@ model painel_subagents {
 /// Ferramentas de IA do agente: APIs externas configurÃ¡veis por cliente,
 /// executadas pelo LLM via function calling (catÃ¡logo do ApiToolExecutorService).
 model painel_apis {
-  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  client_id        String         @db.Uuid
-  agent_id         String?        @db.Uuid
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  client_id        String   @db.Uuid
+  agent_id         String?  @db.Uuid
   name             String
   description      String?
   method           String?
   url              String?
-  headers          Json?          @db.JsonB
-  body             Json?          @db.JsonB
-  parameters       Json?          @db.JsonB
-  extract_data     Json?          @db.JsonB
-  visible_to_agent Boolean        @default(true)
-  active           Boolean        @default(true)
-  next_tool        String?
+  config           Json?    @db.JsonB
+  headers          Json?    @db.JsonB
+  body             Json?    @db.JsonB
+  parameters       Json?    @db.JsonB
+  extract_data     Json?    @db.JsonB
+  visible_to_agent Boolean  @default(true)
+  active           Boolean  @default(true)
   execution_order  Int?
-  created_at       DateTime       @default(now()) @db.Timestamptz(6)
-  updated_at       DateTime       @default(now()) @db.Timestamptz(6)
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime @default(now()) @db.Timestamptz(6)
 
-  painel_clients   painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  painel_agents    painel_agents? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  painel_agents  painel_agents? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
+  function_name  String         @default(dbgenerated())
+
+  @@unique([client_id, function_name])
+  @@index([client_id, active, execution_order])
+  @@index([agent_id])
 }
 
 /// Trilhas de Atendimento: situaÃ§Ãµes que o assistente do cliente resolve,
 /// organizadas com contexto visual (Ã­cone, cor, categoria) e frases de exemplo.
-model painel_tracks {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  client_id     String    @db.Uuid
-  code          String
-  label         String
-  description   String
-  category      String?
-  icon          String?
-  color         String?
-  examples      Json?     @db.JsonB
-  agent_id      String?   @db.Uuid
-  display_order Int       @default(0)
-  is_active     Boolean   @default(true)
-  created_at    DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at    DateTime  @default(now()) @db.Timestamptz(6)
-
-  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  painel_agents  painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
-  conversations  conversations[]
-
-  @@unique([client_id, code])
-  @@index([client_id])
-  @@index([category])
-}
 
 /// ConexÃµes de canal de entrada/saÃ­da (WhatsApp, webchat, SIP etc.)
 /// que alimentam o roteamento de eventos de mensageria.
 model channel_connections {
-  id                          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id                  String    @db.Uuid
-  client_id                   String    @db.Uuid
-  channel_type                String
-  provider                    String?
-  provider_account_id         String?
-  status                      String    @default("active")
-  config                      Json?     @db.JsonB
-  inbound_secret_hash         String?
-  default_webhook_endpoint_id String?   @db.Uuid
-  created_at                  DateTime? @default(now()) @db.Timestamptz(6)
-  updated_at                  DateTime? @default(now()) @db.Timestamptz(6)
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id          String    @db.Uuid
+  client_id           String    @db.Uuid
+  channel_type        String
+  provider            String?
+  provider_account_id String?
+  status              String    @default("active")
+  config              Json?     @db.JsonB
+  inbound_secret_hash String?
+  created_at          DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies          companies       @relation(fields: [company_id], references: [id])
-  painel_clients     painel_clients  @relation(fields: [client_id], references: [id])
-  inbound_events     inbound_events[]
-  webhook_endpoints  webhook_endpoints[]
-  conversations      conversations[]
+  companies         companies           @relation(fields: [company_id], references: [id])
+  painel_clients    painel_clients      @relation(fields: [client_id], references: [id])
+  inbound_events    inbound_events[]
+  webhook_endpoints webhook_endpoints[]
+  conversations     conversations[]
 
   @@unique([client_id, channel_type])
   @@index([company_id])
@@ -408,42 +370,46 @@ model webhook_endpoints {
   channel_connection_id String?   @db.Uuid
   url                   String
   events                Json?     @default("[]") @db.JsonB
-  secret_hash           String?
+  signing_secret_enc    String?
   retry_policy          Json?     @default("{}") @db.JsonB
   enabled               Boolean   @default(true)
   created_at            DateTime? @default(now()) @db.Timestamptz(6)
   updated_at            DateTime? @default(now()) @db.Timestamptz(6)
 
-  painel_clients       painel_clients       @relation(fields: [client_id], references: [id])
-  channel_connections  channel_connections? @relation(fields: [channel_connection_id], references: [id])
-  webhook_deliveries   webhook_deliveries[]
+  painel_clients      painel_clients       @relation(fields: [client_id], references: [id])
+  channel_connections channel_connections? @relation(fields: [channel_connection_id], references: [id])
+  webhook_deliveries  webhook_deliveries[]
 
   @@index([client_id])
+  @@index([channel_connection_id])
 }
 
 model webhook_deliveries {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  webhook_endpoint_id String  @db.Uuid
-  event             String
-  conversation_id   String?   @db.Uuid
-  inbound_message_id String?  @db.Uuid
-  response_message_id String? @db.Uuid
-  payload           Json      @db.JsonB
-  attempt           Int       @default(1)
-  max_attempts      Int       @default(3)
-  status            String    @default("pending") // pending, delivered, failed, cancelled
-  http_status       Int?
-  response_body     String?
-  error_message     String?
-  next_retry_at     DateTime? @db.Timestamptz(6)
-  completed_at      DateTime? @db.Timestamptz(6)
-  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  webhook_endpoint_id String    @db.Uuid
+  event               String
+  conversation_id     String?   @db.Uuid
+  inbound_message_id  String?   @db.Uuid
+  response_message_id String?   @db.Uuid
+  payload             Json      @db.JsonB
+  attempt             Int       @default(1)
+  max_attempts        Int       @default(3)
+  status              String    @default("pending") // pending, delivered, failed, cancelled
+  http_status         Int?
+  response_body       String?
+  error_message       String?
+  next_retry_at       DateTime? @db.Timestamptz(6)
+  completed_at        DateTime? @db.Timestamptz(6)
+  created_at          DateTime? @default(now()) @db.Timestamptz(6)
 
   webhook_endpoints webhook_endpoints @relation(fields: [webhook_endpoint_id], references: [id])
+  lease_until       DateTime?         @db.Timestamptz(6)
+  lease_token       String?
 
   @@index([webhook_endpoint_id])
   @@index([status])
   @@index([next_retry_at])
+  @@index([status, lease_until])
 }
 
 model end_users {
@@ -455,24 +421,24 @@ model end_users {
   created_at DateTime? @default(now()) @db.Timestamptz(6)
   updated_at DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies           companies           @relation(fields: [company_id], references: [id])
-  painel_clients      painel_clients      @relation(fields: [client_id], references: [id])
-  channel_identities  channel_identities[]
-  conversations       conversations[]
+  companies          companies            @relation(fields: [company_id], references: [id])
+  painel_clients     painel_clients       @relation(fields: [client_id], references: [id])
+  channel_identities channel_identities[]
+  conversations      conversations[]
 
   @@index([company_id])
   @@index([client_id])
 }
 
 model channel_identities {
-  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id       String   @db.Uuid
-  client_id        String   @db.Uuid
-  end_user_id      String   @db.Uuid
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id       String    @db.Uuid
+  client_id        String    @db.Uuid
+  end_user_id      String    @db.Uuid
   channel_type     String
   external_user_id String
   normalized_phone String?
-  metadata         Json?    @default("{}") @db.JsonB
+  metadata         Json?     @default("{}") @db.JsonB
   created_at       DateTime? @default(now()) @db.Timestamptz(6)
 
   companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
@@ -483,6 +449,7 @@ model channel_identities {
   @@index([company_id])
   @@index([client_id])
   @@index([channel_type, external_user_id])
+  @@index([end_user_id])
 }
 
 model inbound_events {
@@ -501,14 +468,15 @@ model inbound_events {
   created_at            DateTime? @default(now()) @db.Timestamptz(6)
   processed_at          DateTime? @db.Timestamptz(6)
 
-  companies            companies            @relation(fields: [company_id], references: [id])
-  painel_clients       painel_clients       @relation(fields: [client_id], references: [id])
-  channel_connections  channel_connections? @relation(fields: [channel_connection_id], references: [id])
+  companies           companies            @relation(fields: [company_id], references: [id])
+  painel_clients      painel_clients       @relation(fields: [client_id], references: [id])
+  channel_connections channel_connections? @relation(fields: [channel_connection_id], references: [id])
 
+  @@unique([client_id, channel_type, idempotency_key])
   @@index([company_id])
   @@index([client_id])
   @@index([status])
-  @@unique([client_id, channel_type, idempotency_key])
+  @@index([channel_connection_id])
 }
 
 model outbox_events {
@@ -523,14 +491,12 @@ model outbox_events {
   attempts        Int       @default(0)
   max_attempts    Int       @default(5)
   next_attempt_at DateTime? @db.Timestamptz(6)
-  locked_at       DateTime? @db.Timestamptz(6)
-  locked_by       String?
   error_message   String?
   processed_at    DateTime? @db.Timestamptz(6)
   created_at      DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients  painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  companies      companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
 
   @@index([company_id])
   @@index([client_id])
@@ -552,10 +518,10 @@ model message_events {
   error_message   String?
   created_at      DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients  painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  conversations   conversations?  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
-  messages        messages?       @relation(fields: [message_id], references: [id], onDelete: Cascade)
+  companies      companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  conversations  conversations?  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  messages       messages?       @relation(fields: [message_id], references: [id], onDelete: Cascade)
 
   @@index([company_id])
   @@index([client_id])
@@ -563,7 +529,6 @@ model message_events {
   @@index([message_id])
   @@index([event_type])
 }
-
 
 model agent_runs {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -587,19 +552,23 @@ model agent_runs {
   started_at          DateTime? @default(now()) @db.Timestamptz(6)
   completed_at        DateTime? @db.Timestamptz(6)
 
-  companies           companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients      painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  conversations       conversations?  @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
-  inbound_message     messages?       @relation("AgentRunInboundMessage", fields: [inbound_message_id], references: [id], onDelete: SetNull)
-  response_message    messages?       @relation("AgentRunResponseMessage", fields: [response_message_id], references: [id], onDelete: SetNull)
-  painel_agents       painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
-  tool_calls          tool_calls[]
+  companies        companies      @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  painel_clients   painel_clients @relation(fields: [client_id], references: [id], onDelete: Restrict)
+  conversations    conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  inbound_message  messages?      @relation("AgentRunInboundMessage", fields: [inbound_message_id], references: [id], onDelete: SetNull)
+  response_message messages?      @relation("AgentRunResponseMessage", fields: [response_message_id], references: [id], onDelete: SetNull)
+  painel_agents    painel_agents? @relation(fields: [agent_id], references: [id], onDelete: SetNull)
+  tool_calls       tool_calls[]
 
   @@index([company_id])
   @@index([client_id])
   @@index([conversation_id])
   @@index([status])
   @@index([started_at])
+  @@index([agent_id])
+  @@index([inbound_message_id])
+  @@index([response_message_id])
+  @@index([company_id, started_at])
 }
 
 model tool_calls {
@@ -621,12 +590,12 @@ model tool_calls {
   created_at      DateTime? @default(now()) @db.Timestamptz(6)
   completed_at    DateTime? @db.Timestamptz(6)
 
-  companies       companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients  painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  conversations   conversations?  @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
-  messages        messages?       @relation(fields: [message_id], references: [id], onDelete: SetNull)
-  agent_runs      agent_runs?     @relation(fields: [agent_run_id], references: [id], onDelete: SetNull)
-  message_parts   message_parts[]
+  companies      companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  conversations  conversations?  @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  messages       messages?       @relation(fields: [message_id], references: [id], onDelete: SetNull)
+  agent_runs     agent_runs?     @relation(fields: [agent_run_id], references: [id], onDelete: SetNull)
+  message_parts  message_parts[]
 
   @@index([company_id])
   @@index([client_id])
@@ -634,6 +603,7 @@ model tool_calls {
   @@index([agent_run_id])
   @@index([tool_name])
   @@index([status])
+  @@index([message_id])
 }
 
 model knowledge_bases {
@@ -647,8 +617,8 @@ model knowledge_bases {
   created_at  DateTime? @default(now()) @db.Timestamptz(6)
   updated_at  DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies            companies             @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients       painel_clients        @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  companies            companies              @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients       painel_clients         @relation(fields: [client_id], references: [id], onDelete: Cascade)
   knowledge_documents  knowledge_documents[]
   knowledge_chunks     knowledge_chunks[]
   knowledge_embeddings knowledge_embeddings[]
@@ -674,16 +644,17 @@ model knowledge_documents {
   created_at        DateTime? @default(now()) @db.Timestamptz(6)
   updated_at        DateTime? @default(now()) @db.Timestamptz(6)
 
-  companies         companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients    painel_clients   @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  knowledge_bases   knowledge_bases  @relation(fields: [knowledge_base_id], references: [id], onDelete: Cascade)
-  media_assets      media_assets?    @relation(fields: [media_asset_id], references: [id], onDelete: SetNull)
-  knowledge_chunks  knowledge_chunks[]
+  companies        companies          @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients   painel_clients     @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  knowledge_bases  knowledge_bases    @relation(fields: [knowledge_base_id], references: [id], onDelete: Cascade)
+  media_assets     media_assets?      @relation(fields: [media_asset_id], references: [id], onDelete: SetNull)
+  knowledge_chunks knowledge_chunks[]
 
   @@index([company_id])
   @@index([client_id])
   @@index([knowledge_base_id])
   @@index([status])
+  @@index([media_asset_id])
 }
 
 model knowledge_chunks {
@@ -724,10 +695,10 @@ model knowledge_embeddings {
   metadata          Json?                 @default("{}") @db.JsonB
   created_at        DateTime?             @default(now()) @db.Timestamptz(6)
 
-  companies         companies         @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients    painel_clients    @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  knowledge_bases   knowledge_bases   @relation(fields: [knowledge_base_id], references: [id], onDelete: Cascade)
-  knowledge_chunks  knowledge_chunks  @relation(fields: [chunk_id], references: [id], onDelete: Cascade)
+  companies        companies        @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients   painel_clients   @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  knowledge_bases  knowledge_bases  @relation(fields: [knowledge_base_id], references: [id], onDelete: Cascade)
+  knowledge_chunks knowledge_chunks @relation(fields: [chunk_id], references: [id], onDelete: Cascade)
 
   @@unique([chunk_id, provider, model])
   @@index([company_id])
@@ -740,8 +711,8 @@ model provider_credentials {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   company_id     String    @db.Uuid
   client_id      String    @db.Uuid
-  provider       String    // 'gemini', 'groq', 'openrouter', 'openai'
-  api_key_enc    String    // AES-256-GCM criptografado
+  provider       String // 'gemini', 'groq', 'openrouter', 'openai'
+  api_key_enc    String // AES-256-GCM criptografado
   label          String?   @default("default")
   status         String    @default("active") // active, revoked, expired
   enabled_models Json?     @default("[]") @db.JsonB
@@ -768,7 +739,7 @@ model credential_audit_logs {
   client_id  String    @db.Uuid
   user_id    String?   @db.Uuid
   provider   String
-  action     String    // 'created', 'updated', 'rotated', 'revoked', 'viewed', 'tested'
+  action     String // 'created', 'updated', 'rotated', 'revoked', 'viewed', 'tested'
   ip_address String?
   user_agent String?
   metadata   Json?     @default("{}") @db.JsonB
@@ -784,47 +755,47 @@ model credential_audit_logs {
   @@index([created_at])
 }
 
-
 model voice_session_telemetry {
-  id                          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id                  String        @db.Uuid
-  client_id                   String?       @db.Uuid
-  conversation_id             String?       @unique @db.Uuid
-  asterisk_unique_id          String?
-  caller_number               String?
-  did_number                  String?
-  hangup_cause                String?
-  duration_sec                Int           @default(0)
-  turns                       Int           @default(0)
-  audio_gate_forwarded_sec    Float         @default(0)
-  audio_gate_suppressed_sec   Float         @default(0)
-  audio_gate_closes           Int           @default(0)
-  interrupted_count           Int           @default(0)
-  hybrid_stt_utterances       Int           @default(0)
-  hybrid_stt_fallback_count   Int           @default(0)
-  total_tokens                Int           @default(0)
-  audio_input_tokens          Int           @default(0)
-  text_input_tokens           Int           @default(0)
-  audio_output_tokens         Int           @default(0)
-  text_output_tokens          Int           @default(0)
-  thoughts_tokens             Int           @default(0)
-  cost_usd                    Float         @default(0)
-  cost_brl                    Float         @default(0)
-  model                       String?
-  voice_name                  String?
-  audio_gate_enabled          Boolean       @default(true)
-  hybrid_stt_enabled          Boolean       @default(false)
-  metadata                    Json?         @default("{}") @db.JsonB
-  created_at                  DateTime      @default(now()) @db.Timestamptz(6)
+  id                        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id                String   @db.Uuid
+  client_id                 String?  @db.Uuid
+  conversation_id           String?  @unique @db.Uuid
+  asterisk_unique_id        String?
+  caller_number             String?
+  did_number                String?
+  hangup_cause              String?
+  duration_sec              Int      @default(0)
+  turns                     Int?
+  audio_gate_forwarded_sec  Float    @default(0)
+  audio_gate_suppressed_sec Float    @default(0)
+  audio_gate_closes         Int      @default(0)
+  interrupted_count         Int      @default(0)
+  hybrid_stt_utterances     Int      @default(0)
+  hybrid_stt_fallback_count Int      @default(0)
+  total_tokens              Int      @default(0)
+  input_tokens              Int      @default(0)
+  text_input_tokens         Int?
+  output_tokens             Int      @default(0)
+  text_output_tokens        Int?
+  thoughts_tokens           Int?
+  cost_usd                  Float    @default(0)
+  cost_brl                  Float    @default(0)
+  model                     String?
+  voice_name                String?
+  audio_gate_enabled        Boolean  @default(true)
+  hybrid_stt_enabled        Boolean  @default(false)
+  metadata                  Json?    @default("{}") @db.JsonB
+  created_at                DateTime @default(now()) @db.Timestamptz(6)
 
-  companies                   companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients              painel_clients? @relation(fields: [client_id], references: [id], onDelete: SetNull)
-  conversations               conversations? @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  companies      companies       @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: SetNull)
+  conversations  conversations?  @relation(fields: [conversation_id], references: [id], onDelete: SetNull)
+  exchange_rate  Decimal?        @db.Decimal(18, 8)
 
   @@index([company_id])
   @@index([client_id])
-  @@index([conversation_id])
   @@index([created_at])
+  @@index([company_id, created_at])
 }
 
 // â”€â”€ Telefonia Plug-and-Play â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -832,21 +803,21 @@ model voice_session_telemetry {
 // SIP, PABX prÃ³prio...) para empresa/cliente/agente. A IA fica plug-and-play:
 // novo discador SIP = nova linha aqui; protocolo proprietÃ¡rio = adapter novo.
 model telephony_endpoints {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id          String    @db.Uuid
-  client_id           String?   @db.Uuid
-  provider            String    // 'asterisk_fastagi' | 'audiosocket' | 'callflex_ws' | 'nexcore_sip' | 'twilio_sip' | ...
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id          String   @db.Uuid
+  client_id           String?  @db.Uuid
+  provider            String // 'asterisk_fastagi' | 'audiosocket' | 'callflex_ws' | 'nexcore_sip' | 'twilio_sip' | ...
   did_number          String
   label               String?
   agent_step          String?
-  audio_format        String    @default("g711_ulaw") // g711_ulaw | g711_alaw | pcm_16k | slin_8k
-  interaction_mode    String    @default("voice")     // voice | text | both
-  inbound_secret_hash String?   // SHA-256 hex do token de autenticaÃ§Ã£o do ingresso (WS do discador)
-  config              Json?     @default("{}") @db.JsonB
-  enabled             Boolean   @default(true)
-  created_by          String?   @db.Uuid
-  created_at          DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at          DateTime  @default(now()) @db.Timestamptz(6)
+  audio_format        String   @default("g711_ulaw") // g711_ulaw | g711_alaw | pcm_16k | slin_8k
+  interaction_mode    String   @default("voice") // voice | text | both
+  inbound_secret_hash String? // SHA-256 hex do token de autenticaÃ§Ã£o do ingresso (WS do discador)
+  config              Json?    @default("{}") @db.JsonB
+  enabled             Boolean  @default(true)
+  created_by          String?  @db.Uuid
+  created_at          DateTime @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime @default(now()) @db.Timestamptz(6)
 
   companies      companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
   painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade)
@@ -857,165 +828,64 @@ model telephony_endpoints {
   @@index([provider])
 }
 
-model painel_interactions {
-  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-
-  // â”€â”€ IdentificaÃ§Ã£o e Multi-tenancy â”€â”€
-  company_id                String    @db.Uuid
-  client_id                 String    @db.Uuid
-  agent_id                  String?   @db.Uuid
-  session_id                String    @unique
-
-  // â”€â”€ Canal e DireÃ§Ã£o â”€â”€
-  channel                   String    @default("webchat") // voice_webrtc | voice_sip | whatsapp | webchat | telegram
-  direction                 String    @default("inbound") // inbound | outbound
-  interaction_mode          String    @default("both")    // voice | text | both
-
-  // â”€â”€ Interlocutores â”€â”€
-  client_identifier         String?   // CPF, Telefone E.164, Remote JID
-  company_identifier        String?   // DID / Ramal / NÃºmero de Origem
-  client_name               String?
-  agent_name                String?
-
-  // â”€â”€ Funil de Atendimento e CobranÃ§a â”€â”€
-  /// 1. AlÃ´ / DetecÃ§Ã£o Humana
-  has_human_answer          Boolean   @default(false)
-  human_answered_at         DateTime? @db.Timestamptz(6)
-
-  /// 2. CPC: Contato com a Pessoa Certa (Right Party Contact)
-  is_right_party            Boolean   @default(false)
-  right_party_at            DateTime? @db.Timestamptz(6)
-
-  /// 3. CPCA: Contato com a Pessoa Certa com ApresentaÃ§Ã£o da DÃ­vida (Debt Presented)
-  is_debt_presented         Boolean   @default(false)
-  debt_presented_at         DateTime? @db.Timestamptz(6)
-  debt_amount               Decimal?  @db.Decimal(10, 2)
-
-  /// 4. Acordo Fechado / Formalizado (Agreement / Deal Closed)
-  is_agreement_reached      Boolean   @default(false)
-  agreement_at              DateTime? @db.Timestamptz(6)
-  agreement_id              String?
-  agreement_amount          Decimal?  @db.Decimal(10, 2)
-  payment_method            String?
-
-  /// 5. Promessa de Pagamento (Promise to Pay / PTP)
-  is_promise_to_pay         Boolean   @default(false)
-  promise_to_pay_at         DateTime? @db.Timestamptz(6)
-  promise_due_date          DateTime? @db.Date
-  promise_amount            Decimal?  @db.Decimal(10, 2)
-
-  disposition               String?   // NO_ANSWER | ANSWER_NOT_RPC | CPC_NO_DEAL | CPCA_DEBT_PRESENTED | AGREEMENT_CLOSED | PTP | REFUSAL
-  service_step              String?
-  tagcode                   String?
-  status                    String    @default("ongoing") // ongoing | completed | abandoned | transferred | failed
-
-  // â”€â”€ Telemetria de Voz e InterrupÃ§Ãµes (Barge-in) â”€â”€
-  barge_in_count            Int       @default(0)
-  avg_barge_in_latency_ms   Int?
-  avg_first_byte_latency_ms Int?
-  is_answering_machine      Boolean   @default(false)
-
-  // â”€â”€ Telefonia e GravaÃ§Ã£o â”€â”€
-  call_id                   String?
-  call_status               String?   // answered | busy | no_answer | failed
-  recording_url             String?
-  duration_seconds          Int       @default(0)
-  billable_seconds          Int       @default(0)
-  hangup_cause              String?
-
-  // â”€â”€ Consumo de LLM e MÃ©tricas â”€â”€
-  llm_provider              String?
-  llm_model                 String?
-  total_tokens              Int       @default(0)
-  prompt_tokens             Int       @default(0)
-  completion_tokens         Int       @default(0)
-  estimated_cost_usd        Decimal?  @db.Decimal(10, 6)
-  avg_latency_ms            Int?
-
-  // â”€â”€ AnÃ¡lise PÃ³s-Atendimento â”€â”€
-  sentiment                 String?   // positive | neutral | negative
-  summary                   String?   @db.Text
-
-  // â”€â”€ ConteÃºdo e Contexto â”€â”€
-  messages                  Json      @default("[]") @db.JsonB
-  context_variables         Json      @default("{}") @db.JsonB
-
-  // â”€â”€ Timestamps â”€â”€
-  created_at                DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at                DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
-  started_at                DateTime? @db.Timestamptz(6)
-  ended_at                  DateTime? @db.Timestamptz(6)
-
-  // â”€â”€ RelaÃ§Ãµes â”€â”€
-  companies                 companies       @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients            painel_clients  @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  painel_agents             painel_agents?  @relation(fields: [agent_id], references: [id], onDelete: SetNull)
-
-  // â”€â”€ Ãndices â”€â”€
-  @@index([company_id, client_id, created_at(sort: Desc)])
-  @@index([client_id, has_human_answer, is_right_party, is_debt_presented, is_agreement_reached, is_promise_to_pay])
-  @@index([company_id, created_at(sort: Desc)])
-  @@index([company_id, status])
-  @@index([client_identifier])
-  @@index([disposition])
-  @@index([call_id])
-  @@index([created_at(sort: Desc)])
-}
-
-
 // Temporary, encrypted handoff. No FK to conversations: receipts survive erasure.
 model call_exports {
-  companies companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  conversation_id String @unique @db.Uuid
-  company_id String @db.Uuid
-  client_id String @db.Uuid
-  endpoint_id String @db.Uuid
-  payload_enc String?
+  companies       companies      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  painel_clients  painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id String         @unique @db.Uuid
+  company_id      String         @db.Uuid
+  client_id       String         @db.Uuid
+  endpoint_id     String         @db.Uuid
+  payload_enc     String?
   destination_enc String?
-  status String @default("pending")
-  attempt Int @default(0)
-  http_status Int?
-  error_code String?
-  expires_at DateTime @db.Timestamptz(6)
-  next_attempt_at DateTime @default(now()) @db.Timestamptz(6)
-  lease_until DateTime? @db.Timestamptz(6)
-  lease_token String?
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  delivered_at DateTime? @db.Timestamptz(6)
-  purged_at DateTime? @db.Timestamptz(6)
+  status          String         @default("pending")
+  attempt         Int            @default(0)
+  http_status     Int?
+  error_code      String?
+  expires_at      DateTime       @db.Timestamptz(6)
+  next_attempt_at DateTime       @default(now()) @db.Timestamptz(6)
+  lease_until     DateTime?      @db.Timestamptz(6)
+  lease_token     String?
+  created_at      DateTime       @default(now()) @db.Timestamptz(6)
+  delivered_at    DateTime?      @db.Timestamptz(6)
+  purged_at       DateTime?      @db.Timestamptz(6)
+
   @@index([status, next_attempt_at])
   @@index([client_id, created_at])
   @@index([company_id])
 }
 
 model prompt_templates {
-  id          String
-  company_id  String @db.Uuid
-  client_id   String? @db.Uuid
-  scope       String @default("global")
-  title       String
-  category    String
-  description String @default("")
-  content     String
-  icon        String @default("")
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
-  updated_at  DateTime @updatedAt @db.Timestamptz(6)
+  id             String
+  company_id     String          @db.Uuid
+  client_id      String?         @db.Uuid
+  scope          String          @default("global")
+  title          String
+  category       String
+  description    String          @default("")
+  content        String
+  icon           String          @default("")
+  created_at     DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  companies      companies       @relation(fields: [company_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  painel_clients painel_clients? @relation(fields: [client_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
   @@id([company_id, scope, id])
   @@index([client_id])
 }
 
 model sip_accounts {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  company_id String @db.Uuid
-  client_id String @unique @db.Uuid
-  username String @unique
-  digest String
-  enabled Boolean @default(true)
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  updated_at DateTime @updatedAt @db.Timestamptz(6)
-  companies companies @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id     String         @db.Uuid
+  client_id      String         @unique @db.Uuid
+  username       String         @unique
+  digest         String
+  enabled        Boolean        @default(true)
+  created_at     DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
+  companies      companies      @relation(fields: [company_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  painel_clients painel_clients @relation(fields: [client_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
   @@index([company_id])
 }

@@ -202,6 +202,10 @@ export class CallFlexAdapter implements ITelephonyAdapter {
   public finishAudio(): void {
     this.pacer.finish();
   }
+
+  public getQueuedAudioMs(): number {
+    return this.pacer.getMetrics().queuedMs;
+  }
   public sendAudio(pcm: Buffer): void {
     if (this.isClosed) return;
     this.pacer.enqueue(pcm);

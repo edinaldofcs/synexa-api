@@ -264,7 +264,6 @@ export class CompatibilityService {
           origin_channel: 'whatsapp',
           external_conversation_key: phone,
           status: 'active',
-          mode: 'auto',
         },
       });
     }

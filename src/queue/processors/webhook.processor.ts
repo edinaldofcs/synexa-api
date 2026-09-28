@@ -19,6 +19,7 @@ export class WebhookProcessor {
   @Process({ name: 'call-export-sweep', concurrency: 1 })
   async sweepCalls() {
     await this.callExports.sweep();
+    await this.webhooksService.sweep();
   }
 
   @Process({

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
@@ -6,8 +7,18 @@ export class AgentsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(clientId: string, payload: Record<string, unknown>) {
-    return this.prisma.painel_agents.create({
-      data: { ...payload, client_id: clientId } as any,
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM painel_clients WHERE id = ${clientId}::uuid FOR UPDATE`,
+      );
+      if (payload.is_initial)
+        await tx.painel_agents.updateMany({
+          where: { client_id: clientId, is_initial: true },
+          data: { is_initial: false },
+        });
+      return tx.painel_agents.create({
+        data: { ...payload, client_id: clientId } as any,
+      });
     });
   }
 
@@ -27,9 +38,21 @@ export class AgentsRepository {
   }
 
   async update(id: string, payload: Record<string, unknown>) {
-    return this.prisma.painel_agents.update({
-      where: { id },
-      data: payload as any,
+    const agent = await this.findOne(id);
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM painel_clients WHERE id = ${agent.client_id}::uuid FOR UPDATE`,
+      );
+      if (payload.is_initial)
+        await tx.painel_agents.updateMany({
+          where: {
+            client_id: agent.client_id,
+            id: { not: id },
+            is_initial: true,
+          },
+          data: { is_initial: false },
+        });
+      return tx.painel_agents.update({ where: { id }, data: payload as any });
     });
   }
 

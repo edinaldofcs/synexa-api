@@ -4,7 +4,6 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { MediaService } from '../media/media.service';
-import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 import { ApiToolExecutorService } from './services/api-tool-executor.service';
 import { LlmToolLoopService } from './services/llm-tool-loop.service';
 import { ProviderKeyResolverService } from './services/provider-key-resolver.service';
@@ -14,7 +13,6 @@ import type { TestChatDto } from './dto/test-chat.dto';
 import { TestChatService } from './test-chat.service';
 
 const CONTEXT_KEY = 'test_chat_context_variables';
-const PAINEL_MESSAGES_LIMIT = 50;
 const CONVERSATION_LOCK_KEY = 'lock:test-chat:conv-1';
 
 const baseConversation = {
@@ -41,11 +39,17 @@ describe('TestChatService', () => {
   let service: TestChatService;
 
   const mockPrisma = {
+    $queryRaw: jest
+      .fn()
+      .mockImplementation(async (sql: any) => [
+        { state: JSON.parse(sql.values[0]) },
+      ]),
     painel_clients: {
       findUnique: jest.fn().mockResolvedValue({
         id: 'client-1',
         company_id: 'company-1',
         agent_name: 'Bot Teste',
+        company_name: 'Empresa',
         metadata: {},
       }),
     },
@@ -102,10 +106,6 @@ describe('TestChatService', () => {
         .mockResolvedValue({ conversation_id: 'conv-1', state: {} }),
       upsert: jest.fn().mockResolvedValue({}),
     },
-    painel_interactions: {
-      findUnique: jest.fn().mockResolvedValue(null),
-      upsert: jest.fn().mockResolvedValue({}),
-    },
   };
 
   const mockRedis = {
@@ -160,10 +160,6 @@ describe('TestChatService', () => {
           provide: ModelPricingService,
           useValue: { calculateTokenCost: jest.fn().mockReturnValue(0.0001) },
         },
-        {
-          provide: SessionDataTransformerService,
-          useValue: { transform: jest.fn().mockReturnValue({ cliente: 'x' }) },
-        },
         { provide: ApiToolExecutorService, useValue: mockApiToolExecutor },
         { provide: LlmToolLoopService, useValue: mockLlmToolLoop },
       ],
@@ -173,7 +169,6 @@ describe('TestChatService', () => {
     jest.clearAllMocks();
     // Defaults re-aplicados (clearAllMocks preserva implementações, mas os
     // testes abaixo sobrescrevem estes retornos).
-    mockPrisma.painel_interactions.findUnique.mockResolvedValue(null);
     mockPrisma.conversations.findUnique.mockResolvedValue(baseConversation);
     mockRedis.acquireLock.mockResolvedValue(true);
   });
@@ -197,18 +192,10 @@ describe('TestChatService', () => {
       // O estado do turno vem do cache em memória, não de nova leitura
       expect(mockConversationsService.getState).not.toHaveBeenCalled();
       // state persistido sem re-leitura (apenas upsert, merge do turno)
-      expect(mockPrisma.conversation_state.upsert).toHaveBeenCalledTimes(1);
-      expect(mockPrisma.conversation_state.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { conversation_id: 'conv-1' },
-          update: expect.objectContaining({
-            state: expect.objectContaining({ current_agent_id: 'agent-1' }),
-          }),
-        }),
-      );
+      expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(2);
     });
 
-    it('deve reutilizar a conversa lida no inicio do turno ao gravar session_record, preservando o contexto persistido', async () => {
+    it('preserva o contexto sem gravar session_record', async () => {
       await service.send(buildDto());
 
       const updateCalls = mockPrisma.conversations.update.mock.calls;
@@ -217,70 +204,29 @@ describe('TestChatService', () => {
       expect(sessionUpdate.data.metadata[CONTEXT_KEY]).toMatchObject({
         pedido: '123',
       });
-      expect(sessionUpdate.data.metadata.session_record).toEqual({
-        cliente: 'x',
-      });
+      expect(sessionUpdate.data.metadata).not.toHaveProperty('session_record');
     });
   });
 
-  describe('F2.5/P31 - teto de 50 mensagens no syncPainelInteraction', () => {
-    it('deve persistir apenas as ultimas 50 mensagens quando a interacao ja existe', async () => {
-      const existingMessages = Array.from({ length: 60 }, (_, i) => ({
-        id: `m${i}`,
-        role: i % 2 === 0 ? 'user' : 'assistant',
-        content: `mensagem ${i}`,
-        timestamp: new Date(2026, 0, 1, 0, 0, i).toISOString(),
-      }));
-      mockPrisma.painel_interactions.findUnique.mockResolvedValue({
-        session_id: 'conv-1',
-        messages: existingMessages,
-        total_tokens: 100,
-        prompt_tokens: 60,
-        completion_tokens: 40,
-      });
-
-      await service.send(buildDto());
-
-      expect(mockPrisma.painel_interactions.upsert).toHaveBeenCalledTimes(1);
-      const upsertCall = mockPrisma.painel_interactions.upsert.mock.calls[0][0];
-      const persisted = upsertCall.update.messages;
-
-      expect(persisted).toHaveLength(PAINEL_MESSAGES_LIMIT);
-      // 60 antigas + 2 novas = 62 -> as 12 mais antigas sao descartadas
-      expect(persisted[0].id).toBe('m12');
-      // as novas mensagens do turno permanecem no fim do array
-      expect(persisted[persisted.length - 1].role).toBe('assistant');
-      expect(persisted[persisted.length - 1].content).toBe('Resposta da IA');
-      // tokens continuam acumulando apesar do teto de mensagens
-      expect(upsertCall.update.total_tokens).toBe(115);
+  it('persists arbitrary variables in conversation state without BI metadata', async () => {
+    const context: Record<string, unknown> = {
+      Pessoa: 'Contato',
+      Detalhes: { codigo: '001' },
+      'Nome.Completo': 'Contato',
+    };
+    await (service as any).saveCollectedVariables({
+      clientId: 'client-1',
+      companyId: 'company-1',
+      conversationId: 'conv-1',
+      contextVariables: context,
+      state: {},
+      client: { metadata: {} },
+      conversationRecord: { id: 'conv-1', metadata: {} },
     });
-
-    it('nao deve reescrever a interacao quando nenhuma mensagem nova existe', async () => {
-      const existingMessages = [
-        { id: 'm1', role: 'user', content: 'oi', timestamp: 't1' },
-        {
-          id: 'm2',
-          role: 'assistant',
-          content: 'ola',
-          tool_calls: [],
-          timestamp: 't2',
-        },
-      ];
-      mockPrisma.painel_interactions.findUnique.mockResolvedValue({
-        session_id: 'conv-1',
-        messages: existingMessages,
-        total_tokens: 10,
-      });
-
-      await (service as any).syncPainelInteraction({
-        companyId: 'company-1',
-        clientId: 'client-1',
-        sessionId: 'conv-1',
-        channel: 'webchat_test',
-      });
-
-      expect(mockPrisma.painel_interactions.upsert).not.toHaveBeenCalled();
-    });
+    expect(mockPrisma.$queryRaw.mock.calls.at(-1)?.[0].values).toContain(
+      JSON.stringify(context),
+    );
+    expect(mockPrisma.conversations.update).not.toHaveBeenCalled();
   });
 
   describe('lock de conversa', () => {

@@ -1,11 +1,9 @@
+import { createHash } from 'crypto';
+import { assertBusinessVariable } from '../../common/utils/session-variables.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { RedisService } from '../../common/redis/redis.service';
 import { TtsSynthesizerFactory } from './synthesizers/tts-synthesizer.factory';
-import {
-  sanitizeCustomerName,
-  createGreetingTemplateHash,
-  selectVoiceGreetingVariation,
-} from './voice-runtime.util';
+import { selectVoiceGreetingVariation } from './voice-runtime.util';
 import { resolvePromptTemplateString } from '../../common/utils/prompt-variables.util';
 import { resolveConditionalString } from '../../common/utils/conditional-prompt.util';
 
@@ -57,28 +55,25 @@ export class VoiceGreetingCacheService {
 
   /**
    * Constrói a chave de cache determinística no Redis:
-   * voice:greeting:{companyId}:{agentId}:{provider}:{voiceId}:{hash}:{sanitizedName}
+   * voice:greeting:v2:{companyId}:{agentId}:{provider}:{voiceId}:{hash}
    */
   public buildCacheKey(options: GreetingCacheKeyOptions): string {
     const company = options.companyId || 'global';
     const agent = options.agentId || 'default';
     const provider = (options.provider || 'cartesia').toLowerCase().trim();
     const voiceId = (options.voiceId || 'default').toLowerCase().trim();
-    const templateHash = createGreetingTemplateHash(
-      JSON.stringify([
-        options.template || '',
-        options.modelId || '',
-        options.language || '',
-        options.sampleRate || 24000,
-        options.endpoint || '',
-      ]),
-    );
-    const sanitizedName = sanitizeCustomerName(options.customerName);
-    const nameKey = sanitizedName
-      ? sanitizedName.toLowerCase().replace(/\s+/g, '_')
-      : 'anon';
-
-    return `voice:greeting:${company}:${agent}:${provider}:${voiceId}:${templateHash}:${nameKey}`;
+    const templateHash = createHash('sha256')
+      .update(
+        JSON.stringify([
+          options.template || '',
+          options.modelId || '',
+          options.language || '',
+          options.sampleRate || 24000,
+          options.endpoint || '',
+        ]),
+      )
+      .digest('hex');
+    return `voice:greeting:v2:${company}:${agent}:${provider}:${voiceId}:${templateHash}`;
   }
 
   /**
@@ -134,18 +129,8 @@ export class VoiceGreetingCacheService {
   public async resolveOrSynthesizeGreeting(
     options: ResolveGreetingAudioOptions,
   ): Promise<ResolveGreetingResult> {
-    const sanitizedName = sanitizeCustomerName(
-      options.variables?.nome_cliente ||
-        options.customerName ||
-        options.variables?.nome,
-    );
-
-    const mergedVariables: Record<string, unknown> = {
-      ...(options.variables || {}),
-      nome: sanitizedName || options.variables?.nome || '',
-      nome_cliente: sanitizedName || options.variables?.nome_cliente || '',
-      primeiro_nome: sanitizedName || '',
-    };
+    const sanitizedName = '';
+    const mergedVariables = options.variables || {};
 
     let text = options.template;
     try {
@@ -161,7 +146,7 @@ export class VoiceGreetingCacheService {
       companyId: options.companyId,
       agentId: options.agentId,
       provider: options.provider,
-      voiceId: options.voiceId,
+      voiceId: options.customTts?.voice || options.voiceId,
       template: text,
       customerName: sanitizedName,
       modelId:
@@ -172,7 +157,7 @@ export class VoiceGreetingCacheService {
             ? 'sonic-3.6'
             : undefined),
       language: options.language || 'pt',
-      sampleRate: options.sampleRate || 24000,
+      sampleRate: options.customTts?.sampleRate || options.sampleRate || 24000,
       endpoint: options.customTts?.baseUrl,
     };
 
@@ -180,7 +165,7 @@ export class VoiceGreetingCacheService {
     const cachedBuffer = await this.getGreetingAudio(keyOptions);
     if (cachedBuffer && cachedBuffer.length > 0) {
       this.logger.log(
-        `⚡ [VoiceGreetingCache] HIT! Áudio de abertura servido do cache (0ms) | Provedor: ${options.provider} | Nome: "${sanitizedName || 'anon'}"`,
+        `⚡ [VoiceGreetingCache] HIT! Áudio de abertura servido do cache (0ms) | Provedor: ${options.provider}`,
       );
       return {
         audioBuffer: cachedBuffer,
@@ -228,6 +213,8 @@ export class VoiceGreetingCacheService {
     voiceId: string;
     template: string;
     names: string[];
+    variableName: string;
+    variables?: Record<string, unknown>;
     apiKey: string;
     sampleRate?: number;
     concurrency?: number;
@@ -244,9 +231,9 @@ export class VoiceGreetingCacheService {
     synthesized: number;
     failed: number;
   }> {
-    const rawNames = Array.from(new Set(options.names || []));
+    assertBusinessVariable(options.variableName);
     const distinctNames = Array.from(
-      new Set(rawNames.map((n) => sanitizeCustomerName(n)).filter(Boolean)),
+      new Set((options.names || []).map((name) => name.trim()).filter(Boolean)),
     );
 
     let cached = 0;
@@ -270,7 +257,7 @@ export class VoiceGreetingCacheService {
               provider: options.provider,
               voiceId: options.voiceId,
               template: options.template,
-              customerName: name,
+              variables: { ...options.variables, [options.variableName]: name },
               apiKey: options.apiKey,
               sampleRate: options.sampleRate,
               customTts: options.customTts,
@@ -282,7 +269,7 @@ export class VoiceGreetingCacheService {
             }
           } catch (err: any) {
             this.logger.error(
-              `❌ Falha ao pré-aquecer saudação para nome "${name}": ${err.message}`,
+              `❌ Falha ao pré-aquecer saudação para o agente: ${err.message}`,
             );
             failed++;
           }

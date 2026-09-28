@@ -2,17 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { VoiceTelemetryService } from './voice-telemetry.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
-import { InteractionSyncService } from './interaction-sync.service';
 import { VoiceClientSession } from '../sessions/voice-client-session';
 
 describe('VoiceTelemetryService', () => {
   let service: VoiceTelemetryService;
   let prismaMock: any;
   let pricingMock: any;
-  let interactionsMock: any;
 
   beforeEach(async () => {
     prismaMock = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       conversations: {
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -27,14 +26,9 @@ describe('VoiceTelemetryService', () => {
     };
 
     pricingMock = {
+      getExchangeRate: jest.fn().mockReturnValue(5.8),
       calculateVoiceLiveCost: jest.fn().mockReturnValue(0.015),
       calculateHybridVoiceCost: jest.fn().mockReturnValue(0.02),
-    };
-
-    interactionsMock = {
-      syncSessionInteraction: jest
-        .fn()
-        .mockResolvedValue({ id: 'interaction-1' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -42,14 +36,13 @@ describe('VoiceTelemetryService', () => {
         VoiceTelemetryService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: ModelPricingService, useValue: pricingMock },
-        { provide: InteractionSyncService, useValue: interactionsMock },
       ],
     }).compile();
 
     service = module.get<VoiceTelemetryService>(VoiceTelemetryService);
   });
 
-  it('deve sincronizar painel_interactions ao persistir a telemetria da sessão', async () => {
+  it('persiste telemetria mesmo sem filtro de áudio e sem inferir dados de negócio', async () => {
     const wsMock: any = {};
     const session = new VoiceClientSession(wsMock);
     session.companyId = 'comp-123';
@@ -79,20 +72,16 @@ describe('VoiceTelemetryService', () => {
       }),
     );
 
-    expect(interactionsMock.syncSessionInteraction).toHaveBeenCalledTimes(1);
-    expect(interactionsMock.syncSessionInteraction).toHaveBeenCalledWith(
+    expect(prismaMock.voice_session_telemetry.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: 'conv-abc',
-        companyId: 'comp-123',
-        clientId: 'client-456',
-        agentId: 'agent-789',
-        agentName: 'Assistente Principal',
-        channel: 'voice_webrtc',
-        state: session.state,
-        bargeInCount: 2,
-        totalTokens: 150,
+        data: expect.objectContaining({
+          conversation_id: 'conv-abc',
+          total_tokens: 150,
+          audio_gate_enabled: false,
+        }),
       }),
     );
+    expect(session.state).not.toHaveProperty('cpc');
   });
 
   it('não deve persistir telemetria duas vezes na mesma sessão', async () => {
@@ -105,6 +94,6 @@ describe('VoiceTelemetryService', () => {
     await service.persistSessionTelemetry(session);
     await service.persistSessionTelemetry(session);
 
-    expect(interactionsMock.syncSessionInteraction).toHaveBeenCalledTimes(1);
+    expect(prismaMock.voice_session_telemetry.create).toHaveBeenCalledTimes(1);
   });
 });

@@ -2,9 +2,7 @@ import { Module, Global } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
-import { ClientMetadataService } from './metadata/client-metadata.service';
 import { CredentialAuditService } from './services/credential-audit.service';
-import { SessionDataTransformerService } from './services/session-data-transformer.service';
 import { InboundDataMapperService } from './services/inbound-data-mapper.service';
 import { NativeToolsService } from './services/native-tools.service';
 import { TenantInterceptor } from './interceptors/tenant.interceptor';
@@ -18,9 +16,8 @@ import { ToolsController } from './controllers/tools.controller';
   imports: [PrismaModule, RedisModule],
   controllers: [HealthController, ToolsController],
   providers: [
-    ClientMetadataService,
     CredentialAuditService,
-    SessionDataTransformerService,
+
     InboundDataMapperService,
     NativeToolsService,
     HealthService,
@@ -36,9 +33,8 @@ import { ToolsController } from './controllers/tools.controller';
   exports: [
     PrismaModule,
     RedisModule,
-    ClientMetadataService,
     CredentialAuditService,
-    SessionDataTransformerService,
+
     InboundDataMapperService,
     NativeToolsService,
     HealthService,

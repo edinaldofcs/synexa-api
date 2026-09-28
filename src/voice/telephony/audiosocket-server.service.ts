@@ -1,4 +1,8 @@
 import {
+  businessVariables,
+  isSafePath,
+} from '../../common/utils/session-variables.util';
+import {
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -191,50 +195,39 @@ export class AudioSocketServerService implements OnModuleInit, OnModuleDestroy {
           parts.forEach((p, idx) => {
             if (p.includes('=')) {
               const [k, ...v] = p.split('=');
-              if (k.trim()) customVars[k.trim()] = v.join('=').trim();
+              if (isSafePath(k.trim()))
+                customVars[k.trim()] = v.join('=').trim();
             } else if (idx === 0) {
               customVars.caller_name = p.trim();
-              customVars.nome_contato = p.trim();
-              customVars.cliente_nome = p.trim();
             }
           });
         } else {
           customVars.caller_name = callerName;
-          customVars.nome_contato = callerName;
-          customVars.cliente_nome = callerName;
         }
       }
       if (channelVars['CALLERID(num)']) {
         customVars.caller_number = channelVars['CALLERID(num)'];
-        customVars.origem_chamada = channelVars['CALLERID(num)'];
       }
       if (dialTokens.length > 0) {
         dialTokens.forEach((token, idx) => {
           if (token.includes('=')) {
             const [k, ...v] = token.split('=');
-            if (k.trim()) customVars[k.trim()] = v.join('=').trim();
+            if (isSafePath(k.trim())) customVars[k.trim()] = v.join('=').trim();
           } else {
             customVars[`param_${idx + 1}`] = token;
-            if (idx === 0) {
-              customVars.param = token;
-              customVars.cpf = token;
-              customVars.documento = token;
-              customVars.codigo = token;
-            }
           }
         });
       }
       if (channelVars['SYNEXA_CLIENTE_NOME']) {
-        customVars.nome_contato = channelVars['SYNEXA_CLIENTE_NOME'];
-        customVars.cliente_nome = channelVars['SYNEXA_CLIENTE_NOME'];
+        customVars.SYNEXA_CLIENTE_NOME = channelVars['SYNEXA_CLIENTE_NOME'];
       }
       if (channelVars['SYNEXA_CPF']) {
-        customVars.cpf = channelVars['SYNEXA_CPF'];
+        customVars.SYNEXA_CPF = channelVars['SYNEXA_CPF'];
       }
       if (trusted && channelVars['SYNEXA_VARS_JSON']) {
         try {
           const parsed = JSON.parse(channelVars['SYNEXA_VARS_JSON']);
-          Object.assign(customVars, parsed);
+          Object.assign(customVars, businessVariables(parsed));
         } catch {
           // ignora formato inválido
         }

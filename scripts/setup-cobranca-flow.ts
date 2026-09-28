@@ -63,7 +63,7 @@ async function main() {
       } as any,
       visible_to_agent: false,
       active: true,
-      next_tool: null,
+      config: { next_api_id: null },
       execution_order: 2,
     },
     create: {
@@ -93,7 +93,7 @@ async function main() {
       } as any,
       visible_to_agent: false,
       active: true,
-      next_tool: null,
+      config: { next_api_id: null },
       execution_order: 2,
     },
   });
@@ -140,7 +140,7 @@ async function main() {
       } as any,
       visible_to_agent: true,
       active: true,
-      next_tool: 'offers',
+      config: { next_api_id: API_OFFERS_ID },
       execution_order: 1,
     },
     create: {
@@ -183,7 +183,7 @@ async function main() {
       } as any,
       visible_to_agent: true,
       active: true,
-      next_tool: 'offers',
+      config: { next_api_id: API_OFFERS_ID },
       execution_order: 1,
     },
   });
@@ -242,7 +242,7 @@ async function main() {
       } as any,
       visible_to_agent: true,
       active: true,
-      next_tool: null,
+      config: { next_api_id: null },
       execution_order: 3,
     },
     create: {
@@ -297,7 +297,7 @@ async function main() {
       } as any,
       visible_to_agent: true,
       active: true,
-      next_tool: null,
+      config: { next_api_id: null },
       execution_order: 3,
     },
   });

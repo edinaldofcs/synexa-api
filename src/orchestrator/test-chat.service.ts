@@ -1,3 +1,8 @@
+import { patchConversationState } from '../common/prisma/conversation-state';
+import {
+  clientIdentity,
+  businessVariables,
+} from '../common/utils/session-variables.util';
 import { InworldVoiceService } from '../voice/services/inworld-voice.service';
 import {
   ConflictException,
@@ -25,7 +30,6 @@ import { ProviderKeyResolverService } from './services/provider-key-resolver.ser
 import { ModelPricingService } from './services/model-pricing.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { MediaService } from '../media/media.service';
-import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 import {
   ApiToolExecutorService,
   type ApiTool,
@@ -36,43 +40,11 @@ import {
   LlmToolLoopService,
   type MemoryMessage,
 } from './services/llm-tool-loop.service';
-import { extractFunnelFromState } from '../common/utils/funnel-mapping.util';
 
 const TEST_CHAT_CONTEXT_KEY = 'test_chat_context_variables';
 const PAINEL_MESSAGES_LIMIT = 50;
 const LOCK_RETRY_ATTEMPTS = 2;
 const LOCK_RETRY_DELAY_MS = 300;
-
-const SYSTEM_INFRA_KEYS = new Set([
-  'activation_rules',
-  'inbound_variable_mapping',
-  'llm_providers',
-  'llm_providers_updated_at',
-  'variable_schema',
-  'tools',
-  'allowed_tools',
-  'allowed_tool_names',
-  'agents',
-  'agent_runs',
-  'test_chat_context',
-  'test_chat_context_variables',
-  'rules',
-  'enabled',
-  'preserve_unmapped',
-  'session_id',
-  'channel',
-  'source',
-  'direction',
-  'headers',
-  'auth',
-  'mensagem_usuario',
-  'user_message',
-  'last_message',
-  'message',
-  'text',
-  'texto',
-  'user_transcript',
-]);
 
 /**
  * S02: contexto do usuario autenticado extraido do token (@CurrentUser).
@@ -106,7 +78,6 @@ export interface TestChatDebug {
   contextVariables: Record<string, unknown>;
   availableTools: string[];
   toolCalls: ToolCallDebug[];
-  sessionRecord?: Record<string, unknown>;
 }
 
 /**
@@ -127,7 +98,6 @@ export class TestChatService {
     private readonly modelPricingService: ModelPricingService,
     private readonly conversationsService: ConversationsService,
     private readonly mediaService: MediaService,
-    private readonly sessionDataTransformer: SessionDataTransformerService,
     private readonly apiToolExecutor: ApiToolExecutorService,
     private readonly llmToolLoop: LlmToolLoopService,
   ) {}
@@ -242,41 +212,15 @@ export class TestChatService {
 
       const metadata = (client.metadata as any) || {};
 
-      contextVariables = {
-        nome_agente: client.agent_name || '',
-        agent_name: client.agent_name || '',
-        nome_empresa: (client as any).company_name || 'Synexa',
-        empresa: (client as any).company_name || 'Synexa',
-      };
-
-      const defaultSessionVars: Record<string, any> = {};
+      const identity = clientIdentity(client);
       const inboundMeta =
         metadata.inbound_variable_mapping || metadata.inbound_mapping;
-      if (inboundMeta?.default_variables) {
-        if (Array.isArray(inboundMeta.default_variables)) {
-          for (const item of inboundMeta.default_variables) {
-            if (item?.key) {
-              const cleanK = String(item.key)
-                .replace(/[[\]{}]/g, '')
-                .trim();
-              defaultSessionVars[cleanK] = item.value;
-              defaultSessionVars[item.key] = item.value;
-              contextVariables[cleanK] = item.value;
-              contextVariables[item.key] = item.value;
-            }
-          }
-        } else if (typeof inboundMeta.default_variables === 'object') {
-          for (const [k, v] of Object.entries(inboundMeta.default_variables)) {
-            const cleanK = String(k)
-              .replace(/[[\]{}]/g, '')
-              .trim();
-            defaultSessionVars[cleanK] = v;
-            defaultSessionVars[k] = v;
-            contextVariables[cleanK] = v;
-            contextVariables[k] = v;
-          }
-        }
-      }
+      const defaultSessionVars = new InboundDataMapperService().mapInboundData(
+        {},
+        inboundMeta,
+        originChannel,
+      );
+      contextVariables = { ...defaultSessionVars, ...identity };
 
       Object.assign(contextVariables, this.withMessageAliases(message));
       if (metadata.variable_schema) {
@@ -328,6 +272,7 @@ export class TestChatService {
           ...contextVariables,
           ...this.filterCleanBusinessVariables(persistedContext),
         };
+        Object.assign(contextVariables, identity);
         // Garante que variáveis padrão do cliente (ex: nome_cliente) nunca
         // sejam perdidas se o contexto persistido anterior tiver valor vazio
         for (const [k, v] of Object.entries(defaultSessionVars)) {
@@ -494,6 +439,7 @@ export class TestChatService {
       );
       const startMs = Date.now();
       const result = await this.llmToolLoop.run({
+        sessionState: contextVariables,
         provider,
         model,
         apiKey,
@@ -596,6 +542,7 @@ export class TestChatService {
       const startMs = Date.now();
       try {
         result = await this.llmToolLoop.run({
+          sessionState: contextVariables,
           provider,
           model,
           apiKey,
@@ -769,35 +716,19 @@ export class TestChatService {
               },
               state,
             );
-            await this.syncPainelInteraction({
-              companyId,
-              clientId,
-              agentId: activation.agent.id,
-              agentName: activation.agent.service_step || activation.agent.id,
-              sessionId: conversationId,
-              channel: originChannel || 'webchat',
-              userMessage: inboundContent,
-              assistantMessage: immediateResult.result.text,
-              contextVariables: immediateResult.contextVariables,
-              toolCalls: immediateResult.result.toolCalls || [],
-              usage: immediateResult.result.usage,
-              provider: immediateResult.provider,
-              model: immediateResult.model,
-            });
 
             // Handoff imediato retorna antes do bloco normal de finalização:
             // grava Session Data aqui para não perder o registro do turno.
-            const immediateSessionRecord =
-              await this.recordAnalyticsAndSessionData({
-                clientId,
-                companyId,
-                conversationId,
-                originChannel,
-                contextVariables: immediateResult.contextVariables,
-                state,
-                client,
-                conversationRecord,
-              });
+            await this.saveCollectedVariables({
+              clientId,
+              companyId,
+              conversationId,
+              originChannel,
+              contextVariables: immediateResult.contextVariables,
+              state,
+              client,
+              conversationRecord,
+            });
 
             return {
               ...immediateResult.result,
@@ -816,7 +747,6 @@ export class TestChatService {
                   messagesUsed: history.length,
                 },
                 contextVariables: immediateResult.contextVariables,
-                sessionRecord: immediateSessionRecord,
                 availableTools: immediateResult.availableTools,
                 toolCalls: immediateResult.result.toolCalls || [],
                 usage: immediateResult.result.usage,
@@ -837,12 +767,11 @@ export class TestChatService {
         }
       }
 
-      let sessionRecord: Record<string, unknown> | undefined;
       if (conversationId) {
         // P31: reaproveita client/conversation/state lidos no início do turno
         // (nenhuma re-leitura de painel_clients, conversations ou
         // conversation_state aqui).
-        sessionRecord = await this.recordAnalyticsAndSessionData({
+        await this.saveCollectedVariables({
           clientId,
           companyId,
           conversationId,
@@ -875,26 +804,8 @@ export class TestChatService {
           toolCalls: result.toolCalls || [],
           usage: result.usage,
           latencyMs,
-          sessionRecord,
         },
       };
-
-      // Sincroniza interação unificada (painel_interactions)
-      await this.syncPainelInteraction({
-        companyId,
-        clientId,
-        agentId: resolvedAgentId || agentId,
-        agentName: resolvedAgentName,
-        sessionId: conversationId,
-        channel: originChannel || 'webchat',
-        userMessage: inboundContent,
-        assistantMessage: result.text,
-        contextVariables,
-        toolCalls: result.toolCalls || [],
-        usage: result.usage,
-        provider,
-        model,
-      });
 
       return finalResponse;
     } finally {
@@ -986,7 +897,6 @@ export class TestChatService {
           origin_channel: params.originChannel,
           external_conversation_key: `${params.originChannel}:${params.externalUserId}`,
           status: 'active',
-          mode: 'auto',
           metadata: { source: 'enterprise_chat_test' },
         },
         select: { id: true },
@@ -1011,35 +921,7 @@ export class TestChatService {
   private filterCleanBusinessVariables(
     vars: Record<string, unknown>,
   ): Record<string, unknown> {
-    if (!vars || typeof vars !== 'object') return {};
-
-    const clean: Record<string, unknown> = {};
-
-    for (const [rawKey, val] of Object.entries(vars)) {
-      if (!rawKey || typeof rawKey !== 'string') continue;
-      const key = rawKey.trim();
-
-      // Ignora chaves internas com _
-      if (key.startsWith('_')) continue;
-
-      // Ignora chaves de infraestrutura e transitórias
-      if (SYSTEM_INFRA_KEYS.has(key.toLowerCase())) continue;
-
-      // A chave DEVE ser um identificador alfanumérico válido (sem json, colchetes, etc.)
-      if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(key)) continue;
-
-      // O valor DEVE ser escalar primitivo válido (não aceita objeto, array, null, undefined)
-      if (val === null || val === undefined) continue;
-      if (typeof val === 'object') continue;
-
-      const strVal = String(val).trim();
-      if (strVal === '' || strVal === 'null' || strVal === 'undefined')
-        continue;
-
-      clean[key] = val;
-    }
-
-    return clean;
+    return businessVariables(vars);
   }
 
   /**
@@ -1119,14 +1001,7 @@ export class TestChatService {
       ...((existingState as Record<string, unknown>) || {}),
       ...partialState,
     };
-    await this.prisma.conversation_state.upsert({
-      where: { conversation_id: conversationId },
-      update: { state: merged as any, version: { increment: 1 } },
-      create: {
-        conversation_id: conversationId,
-        state: merged as any,
-      },
-    });
+    await patchConversationState(this.prisma, conversationId, partialState);
     return merged;
   }
 
@@ -1278,6 +1153,7 @@ export class TestChatService {
 
     try {
       const result = await this.llmToolLoop.run({
+        sessionState: contextVariables,
         provider,
         model,
         apiKey,
@@ -1568,264 +1444,20 @@ export class TestChatService {
 
     return message;
   }
-
-  // ── Sincronização com painel_interactions ───────────────────────
-
-  private async syncPainelInteraction(params: {
-    companyId: string;
-    clientId: string;
-    agentId?: string;
-    agentName?: string;
-    sessionId: string;
-    channel: string;
-    userMessage?: string;
-    assistantMessage?: string;
-    contextVariables?: Record<string, any>;
-    toolCalls?: any[];
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      total_tokens?: number;
-    };
-    provider?: string;
-    model?: string;
-  }) {
-    try {
-      const vars = params.contextVariables || {};
-      const now = new Date();
-      const funnel = extractFunnelFromState(vars, now);
-      if (params.userMessage && funnel.disposition === 'IN_PROGRESS') {
-        funnel.disposition = 'HUMAN_ANSWERED';
-      }
-
-      const isRightParty = funnel.is_right_party;
-      const debtAmount = funnel.debt_amount;
-      const isDebtPresented = funnel.is_debt_presented;
-      const isAgreementReached = funnel.is_agreement_reached;
-      const isPromiseToPay = funnel.is_promise_to_pay;
-      const disposition = funnel.disposition;
-
-      const existing = await this.prisma.painel_interactions.findUnique({
-        where: { session_id: params.sessionId },
-      });
-
-      const currentMessages = Array.isArray(existing?.messages)
-        ? (existing.messages as any[])
-        : [];
-
-      const newMsgs = [...currentMessages];
-
-      if (params.userMessage) {
-        newMsgs.push({
-          id: `msg_u_${Date.now()}`,
-          role: 'user',
-          content: params.userMessage,
-          timestamp: now.toISOString(),
-        });
-      }
-
-      if (params.assistantMessage) {
-        newMsgs.push({
-          id: `msg_a_${Date.now()}`,
-          role: 'assistant',
-          content: params.assistantMessage,
-          tool_calls: params.toolCalls || [],
-          timestamp: new Date(now.getTime() + 100).toISOString(),
-        });
-      }
-
-      // F2.5/P31: teto no array persistido (últimas N mensagens) e escrita
-      // ignorada quando nada mudou (mesmo tamanho e mesmo último item).
-      const cappedMessages = newMsgs.slice(-PAINEL_MESSAGES_LIMIT);
-      const messagesUnchanged =
-        cappedMessages.length === currentMessages.length &&
-        JSON.stringify(cappedMessages[cappedMessages.length - 1]) ===
-          JSON.stringify(currentMessages[currentMessages.length - 1]);
-      if (messagesUnchanged) return;
-
-      const totalTokens =
-        (existing?.total_tokens || 0) + (params.usage?.total_tokens || 0);
-      const promptTokens =
-        (existing?.prompt_tokens || 0) + (params.usage?.input_tokens || 0);
-      const completionTokens =
-        (existing?.completion_tokens || 0) + (params.usage?.output_tokens || 0);
-
-      const clientIdentifier =
-        (vars.cliente_cpf as string) ||
-        (vars.cpf as string) ||
-        existing?.client_identifier ||
-        null;
-      const clientName =
-        (vars.cliente_nome as string) || existing?.client_name || null;
-
-      await this.prisma.painel_interactions.upsert({
-        where: { session_id: params.sessionId },
-        create: {
-          company_id: params.companyId,
-          client_id: params.clientId,
-          agent_id: params.agentId,
-          agent_name: params.agentName,
-          session_id: params.sessionId,
-          channel: params.channel || 'webchat',
-          direction: 'inbound',
-          interaction_mode: 'both',
-          client_identifier: clientIdentifier,
-          client_name: clientName,
-          has_human_answer: true,
-          human_answered_at: existing?.human_answered_at || now,
-          is_right_party: isRightParty,
-          right_party_at: isRightParty ? existing?.right_party_at || now : null,
-          is_debt_presented: isDebtPresented,
-          debt_presented_at: isDebtPresented
-            ? existing?.debt_presented_at || now
-            : null,
-          debt_amount: debtAmount !== null ? (debtAmount as any) : null,
-          is_agreement_reached: isAgreementReached,
-          agreement_at: isAgreementReached
-            ? existing?.agreement_at || now
-            : null,
-          agreement_id: (vars.acordo_id as string) || null,
-          agreement_amount: vars.valor_total
-            ? Number(vars.valor_total)
-            : debtAmount !== null
-              ? (debtAmount as any)
-              : null,
-          is_promise_to_pay: isPromiseToPay,
-          promise_to_pay_at: isPromiseToPay
-            ? existing?.promise_to_pay_at || now
-            : null,
-          disposition,
-          service_step: vars.service_step || null,
-          llm_provider: params.provider,
-          llm_model: params.model,
-          total_tokens: totalTokens,
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          context_variables: vars as any,
-          messages: cappedMessages as any,
-          started_at: existing?.started_at || now,
-          status: isAgreementReached ? 'completed' : 'ongoing',
-        },
-        update: {
-          agent_id: params.agentId || existing?.agent_id,
-          agent_name: params.agentName || existing?.agent_name,
-          client_identifier: clientIdentifier || existing?.client_identifier,
-          client_name: clientName || existing?.client_name,
-          has_human_answer: true,
-          is_right_party: isRightParty || existing?.is_right_party || false,
-          right_party_at: isRightParty
-            ? existing?.right_party_at || now
-            : existing?.right_party_at,
-          is_debt_presented:
-            isDebtPresented || existing?.is_debt_presented || false,
-          debt_presented_at: isDebtPresented
-            ? existing?.debt_presented_at || now
-            : existing?.debt_presented_at,
-          debt_amount:
-            debtAmount !== null ? (debtAmount as any) : existing?.debt_amount,
-          is_agreement_reached:
-            isAgreementReached || existing?.is_agreement_reached || false,
-          agreement_at: isAgreementReached
-            ? existing?.agreement_at || now
-            : existing?.agreement_at,
-          agreement_id:
-            (vars.acordo_id as string) || existing?.agreement_id || null,
-          is_promise_to_pay:
-            isPromiseToPay || existing?.is_promise_to_pay || false,
-          promise_to_pay_at: isPromiseToPay
-            ? existing?.promise_to_pay_at || now
-            : existing?.promise_to_pay_at,
-          disposition,
-          llm_provider: params.provider || existing?.llm_provider,
-          llm_model: params.model || existing?.llm_model,
-          total_tokens: totalTokens,
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          context_variables: vars as any,
-          messages: cappedMessages as any,
-          status: isAgreementReached
-            ? 'completed'
-            : existing?.status || 'ongoing',
-          ended_at: isAgreementReached ? now : existing?.ended_at,
-        },
-      });
-    } catch (err) {
-      this.logger.warn(
-        `Falha ao sincronizar painel_interactions no test-chat: ${err}`,
-      );
-    }
-  }
-
-  /**
-   * Grava o sessionRecord transformado e o contexto no metadata da conversa.
-   * Extraída do fluxo principal para também ser invocada no handoff imediato,
-   * que retorna antes do bloco normal de finalização. Retorna o sessionRecord
-   * (quando produzido).
-   */
-  private async recordAnalyticsAndSessionData(params: {
-    clientId?: string;
-    companyId?: string;
+  private async saveCollectedVariables(params: {
     conversationId?: string;
-    originChannel?: string;
     contextVariables: Record<string, unknown>;
     state: Record<string, unknown>;
-    client?: Awaited<ReturnType<TestChatService['loadPainelClient']>>;
-    conversationRecord?: Awaited<
-      ReturnType<TestChatService['loadConversationRecord']>
-    >;
-  }): Promise<Record<string, unknown> | undefined> {
-    const {
-      clientId,
-      companyId,
-      conversationId,
-      originChannel,
-      contextVariables,
-      state,
-      client,
-      conversationRecord,
-    } = params;
-    let sessionRecord: Record<string, unknown> | undefined;
-    if (!conversationId) return sessionRecord;
-    try {
-      const freshConv = conversationRecord;
-
-      const clientMeta = (client?.metadata as Record<string, unknown>) || {};
-      const outputConfig = (clientMeta.session_output_config as any) || null;
-
-      const combinedState = {
-        ...contextVariables,
-        ...state,
-      };
-
-      sessionRecord = this.sessionDataTransformer.transform({
-        sessionState: combinedState,
-        endUser: freshConv?.end_users,
-        conversation: freshConv,
-        config: outputConfig,
-      });
-
-      if (freshConv) {
-        const existingMeta =
-          (freshConv.metadata as Record<string, unknown>) || {};
-        await this.prisma.conversations.update({
-          where: { id: conversationId },
-          data: {
-            metadata: {
-              ...existingMeta,
-              // Reconstitui o contexto persistido neste turno
-              // (saveConversationContext) sem reler o documento.
-              [TEST_CHAT_CONTEXT_KEY]: contextVariables,
-              session_record: sessionRecord,
-            } as any,
-          },
-        });
-      }
-    } catch (outputErr) {
-      this.logger.warn(
-        { error: (outputErr as Error).message },
-        'Falha ao transformar session_record no test-chat',
-      );
-    }
-    return sessionRecord;
+    [key: string]: unknown;
+  }): Promise<void> {
+    if (!params.conversationId) return;
+    await this.saveState(
+      params.conversationId,
+      {
+        ...params.state,
+        ...businessVariables(params.contextVariables),
+      },
+      params.state,
+    );
   }
 }

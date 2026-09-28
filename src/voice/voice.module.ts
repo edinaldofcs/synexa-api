@@ -19,7 +19,6 @@ import { TelephonyAdapterFactory } from './adapters/telephony-adapter.factory';
 import { TelephonyEndpointResolverService } from './services/telephony-endpoint-resolver.service';
 import { VoiceSessionFactory } from './services/voice-session.factory';
 import { VoiceTelemetryService } from './services/voice-telemetry.service';
-import { InteractionSyncService } from './services/interaction-sync.service';
 import { ModelPricingService } from '../orchestrator/services/model-pricing.service';
 import { VoiceToolsService } from './voice-tools.service';
 import { ProviderKeyResolverService } from '../orchestrator/services/provider-key-resolver.service';
@@ -67,7 +66,7 @@ const voiceStandalone = process.env.SERVICE_ROLE === 'voice';
     VoiceSessionFactory,
     CompanyVoiceQuotaService,
     VoiceTelemetryService,
-    InteractionSyncService,
+
     ModelPricingService,
     ProviderKeyResolverService,
     VoiceToolsService,

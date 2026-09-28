@@ -9,7 +9,6 @@ import { ProviderKeyResolverService } from './services/provider-key-resolver.ser
 import { ModelPricingService } from './services/model-pricing.service';
 import { ProviderCircuitBreakerService } from './services/circuit-breaker.service';
 import { FallbackProviderService } from './services/fallback-provider.service';
-import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 
 jest.mock('./providers/llm-provider.factory', () => ({
   getLLMProvider: jest.fn(),
@@ -72,7 +71,9 @@ describe('OrchestrationService', () => {
       findFirst: jest.fn().mockResolvedValue(null),
     },
     painel_clients: {
-      findUnique: jest.fn().mockResolvedValue({ agent_name: 'Bot' }),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ agent_name: 'Bot', company_name: 'Empresa' }),
     },
     message_events: { create: jest.fn().mockResolvedValue({}) },
     knowledge_bases: { findMany: jest.fn().mockResolvedValue([]) },
@@ -206,12 +207,6 @@ describe('OrchestrationService', () => {
             resolveFallback: jest
               .fn()
               .mockResolvedValue({ hasFallback: false }),
-          },
-        },
-        {
-          provide: SessionDataTransformerService,
-          useValue: {
-            transform: jest.fn().mockReturnValue({}),
           },
         },
       ],

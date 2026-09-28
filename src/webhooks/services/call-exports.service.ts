@@ -1,3 +1,4 @@
+import { anonymizeConversationConsumption } from '../../common/prisma/consumption-erasure';
 import { buildCallExportPayload } from './call-export-payload';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -10,7 +11,7 @@ import { QueueService } from '../../queue/queue.service';
 import { MediaService } from '../../media/media.service';
 
 type Destination = {
-  payload_version?: 1 | 2;
+  payload_version?: 3;
   url: string;
   secret: string;
   include_transcript: boolean;
@@ -33,6 +34,13 @@ export class CallExportsService implements OnModuleInit {
 
   /** PostgreSQL is the source of truth; the repeatable job contains no call data. */
   async sweep() {
+    await this.prisma.$executeRaw(Prisma.sql`
+      UPDATE conversations SET status='closed', closed_at=voice_heartbeat_at,
+        voice_finalized_at=now(), metadata=coalesce(metadata,'{}') || '{"hangup_cause":"connection_lost"}'::jsonb
+      WHERE origin_channel='voice' AND status='active' AND voice_finalized_at IS NULL
+        AND metadata->>'voice_liveness_version'='1'
+        AND voice_heartbeat_at < now()-interval '2 minutes'
+    `);
     const rows = await this.prisma.call_exports.findMany({
       where: {
         purged_at: null,
@@ -172,12 +180,16 @@ export class CallExportsService implements OnModuleInit {
     const destination: Destination = JSON.parse(
       decrypt(row.destination_enc!, this.key()),
     );
-    const [state, interaction, messages, tools] = await Promise.all([
+    const [state, telemetry, messages, tools] = await Promise.all([
       this.prisma.conversation_state.findUnique({
         where: { conversation_id: conversation.id },
       }),
-      this.prisma.painel_interactions.findUnique({
-        where: { session_id: conversation.id },
+      this.prisma.voice_session_telemetry.findFirst({
+        where: {
+          conversation_id: conversation.id,
+          company_id: row.company_id,
+          client_id: row.client_id,
+        },
       }),
       destination.include_transcript
         ? this.prisma.messages.findMany({
@@ -216,14 +228,14 @@ export class CallExportsService implements OnModuleInit {
     ]);
     const endedAt = conversation.closed_at || conversation.voice_finalized_at!;
     const payload = buildCallExportPayload({
-      payloadVersion: destination.payload_version === 2 ? 2 : 1,
+      payloadVersion: 3,
       eventId: row.id,
       companyId: row.company_id,
       clientId: row.client_id,
       conversation,
       endedAt,
       recoveredCall,
-      interaction,
+      telemetry,
       variables: state?.state,
       messages,
       tools: tools.map(({ audit_enc, ...tool }) => ({
@@ -306,11 +318,9 @@ export class CallExportsService implements OnModuleInit {
           company_id: row.company_id,
         };
         await tx.tool_calls.deleteMany({ where: scope });
-        // Preserve numeric consumption used by billing; remove trace and links to content.
-        await tx.agent_runs.updateMany({
-          where: scope,
-          data: { trace: Prisma.DbNull, error_message: null, request_id: null },
-        });
+        await anonymizeConversationConsumption(tx, row.company_id, [
+          row.conversation_id,
+        ]);
         await tx.webhook_deliveries.deleteMany({
           where: { conversation_id: row.conversation_id },
         });
@@ -318,55 +328,6 @@ export class CallExportsService implements OnModuleInit {
           where: {
             company_id: row.company_id,
             aggregate_id: row.conversation_id,
-          },
-        });
-        await tx.painel_interactions.updateMany({
-          where: {
-            session_id: row.conversation_id,
-            company_id: row.company_id,
-          },
-          data: {
-            client_identifier: null,
-            company_identifier: null,
-            client_name: null,
-            agent_name: null,
-            debt_amount: null,
-            agreement_id: null,
-            agreement_amount: null,
-            payment_method: null,
-            promise_due_date: null,
-            promise_amount: null,
-            recording_url: null,
-            call_id: null,
-            summary: null,
-            sentiment: null,
-            messages: [],
-            context_variables: {},
-            disposition: null,
-            service_step: null,
-            tagcode: null,
-            hangup_cause: null,
-            has_human_answer: false,
-            human_answered_at: null,
-            is_right_party: false,
-            right_party_at: null,
-            is_debt_presented: false,
-            debt_presented_at: null,
-            is_agreement_reached: false,
-            agreement_at: null,
-            is_promise_to_pay: false,
-            promise_to_pay_at: null,
-          },
-        });
-        await tx.voice_session_telemetry.updateMany({
-          where: scope,
-          data: {
-            conversation_id: null,
-            asterisk_unique_id: null,
-            caller_number: null,
-            did_number: null,
-            hangup_cause: null,
-            metadata: Prisma.DbNull,
           },
         });
         await tx.conversations.deleteMany({

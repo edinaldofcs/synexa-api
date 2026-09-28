@@ -147,6 +147,10 @@ export class AudioSocketAdapter implements ITelephonyAdapter {
     this.pacer.clear();
   }
 
+  public getQueuedAudioMs(): number {
+    return this.pacer.getMetrics().queuedMs;
+  }
+
   public finishAudio(): void {
     this.pacer.finish();
   }

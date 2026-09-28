@@ -1,7 +1,8 @@
+import { openWebhookSecret } from './webhook-secret';
 import { publicFetch } from '../../common/utils/public-http';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
+import { createHmac, randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { QueueService } from '../../queue/queue.service';
 import { WebhookCallbackPayload } from '../dto/webhook-payload.dto';
@@ -52,8 +53,6 @@ export class WebhooksService {
       endpoints.map((endpoint) =>
         this.deliverToEndpoint(
           endpoint.id,
-          endpoint.url,
-          endpoint.secret_hash,
           endpoint.retry_policy as any,
           payload,
         ),
@@ -77,8 +76,6 @@ export class WebhooksService {
 
   private async deliverToEndpoint(
     endpointId: string,
-    url: string,
-    secret: string | null,
     retryPolicy: Record<string, unknown> | null,
     payload: WebhookCallbackPayload,
   ): Promise<void> {
@@ -98,142 +95,120 @@ export class WebhooksService {
       },
     });
 
-    const result = await this.trySend(url, payload, secret);
-
-    if (result.success) {
-      await this.prisma.webhook_deliveries.update({
-        where: { id: delivery.id },
-        data: {
-          status: 'delivered',
-          http_status: result.httpStatus,
-          response_body: result.responseBody,
-          completed_at: new Date(),
-        },
-      });
-      return;
-    }
-
-    const initialStatus = maxAttempts <= 1 ? 'dead' : 'failed';
-
-    await this.prisma.webhook_deliveries.update({
-      where: { id: delivery.id },
-      data: {
-        status: initialStatus,
-        http_status: result.httpStatus,
-        error_message: result.error,
-      },
-    });
-
-    if (maxAttempts > 1) {
-      await this.scheduleRetry(endpointId, url, payload, 2, maxAttempts);
-    }
+    await this.processRetry(delivery.id);
   }
 
-  private async scheduleRetry(
-    originalEndpointId: string,
-    url: string,
-    payload: WebhookCallbackPayload,
-    attempt: number,
-    maxAttempts: number,
-  ): Promise<void> {
-    const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
-    const nextRetryAt = new Date(Date.now() + delayMs);
-
-    const retry = await this.prisma.webhook_deliveries.create({
-      data: {
-        webhook_endpoint_id: originalEndpointId,
-        event: payload.event,
-        conversation_id: payload.conversation_id,
-        inbound_message_id: payload.inbound_message_id,
-        response_message_id: payload.response_message_id,
-        payload: payload as any,
-        attempt,
-        max_attempts: maxAttempts,
-        status: 'pending',
-        next_retry_at: nextRetryAt,
+  async sweep(): Promise<void> {
+    const now = new Date();
+    const rows = await this.prisma.webhook_deliveries.findMany({
+      where: {
+        OR: [
+          {
+            status: 'pending',
+            OR: [{ next_retry_at: null }, { next_retry_at: { lte: now } }],
+          },
+          {
+            status: 'processing',
+            OR: [{ lease_until: null }, { lease_until: { lt: now } }],
+          },
+        ],
       },
+      orderBy: { created_at: 'asc' },
+      take: 50,
+      select: { id: true },
     });
-
-    this.logger.log(
-      { delivery_id: retry.id, attempt, next_retry_at: nextRetryAt },
-      'Webhook delivery scheduled for retry',
+    for (const row of rows)
+      await this.queueService.addWebhookJob({ delivery_id: row.id });
+    // Terminal payloads expire only when the operator explicitly configures retention.
+    const days = Number(
+      this.configService.get('WEBHOOK_HISTORY_RETENTION_DAYS'),
     );
-
-    // Persistent retry: the Bull queue (Redis) survives process restarts,
-    // unlike the previous in-memory setTimeout.
-    await this.queueService.addWebhookJob({ delivery_id: retry.id }, delayMs);
+    if (Number.isFinite(days) && days >= 1) {
+      await this.prisma.webhook_deliveries.updateMany({
+        where: {
+          status: { in: ['delivered', 'cancelled'] },
+          completed_at: { lt: new Date(Date.now() - days * 86400000) },
+        },
+        data: { payload: {}, response_body: null, error_message: null },
+      });
+    }
   }
 
   async processRetry(deliveryId: string): Promise<void> {
+    const now = new Date();
     const delivery = await this.prisma.webhook_deliveries.findUnique({
       where: { id: deliveryId },
       include: { webhook_endpoints: true },
     });
-
-    if (!delivery || delivery.status !== 'pending') return;
-
-    if (delivery.next_retry_at && delivery.next_retry_at > new Date()) return;
-
-    // Claim atômico: BullMQ é at-least-once e dois workers podem processar
-    // o mesmo delivery. Só envia quem conseguir a transição pending→processing.
+    if (!delivery || !['pending', 'processing'].includes(delivery.status))
+      return;
+    if (
+      delivery.status === 'processing' &&
+      delivery.lease_until &&
+      delivery.lease_until > now
+    )
+      return;
+    if (delivery.next_retry_at && delivery.next_retry_at > now) return;
+    const token = randomUUID();
     const claimed = await this.prisma.webhook_deliveries.updateMany({
-      where: { id: deliveryId, status: 'pending' },
-      data: { status: 'processing' },
-    });
-    if (claimed.count === 0) {
-      this.logger.log(
-        { delivery_id: deliveryId },
-        'Delivery já reivindicado por outro worker; envio ignorado.',
-      );
-      return;
-    }
-
-    const result = await this.trySend(
-      delivery.webhook_endpoints.url,
-      delivery.payload as unknown as WebhookCallbackPayload,
-      delivery.webhook_endpoints.secret_hash,
-    );
-
-    if (result.success) {
-      await this.prisma.webhook_deliveries.update({
-        where: { id: delivery.id },
-        data: {
-          status: 'delivered',
-          http_status: result.httpStatus,
-          response_body: result.responseBody,
-          completed_at: new Date(),
-        },
-      });
-      return;
-    }
-
-    const nextAttempt = delivery.attempt + 1;
-    if (nextAttempt <= delivery.max_attempts) {
-      await this.scheduleRetry(
-        delivery.webhook_endpoint_id,
-        delivery.webhook_endpoints.url,
-        delivery.payload as unknown as WebhookCallbackPayload,
-        nextAttempt,
-        delivery.max_attempts,
-      );
-    }
-
-    const status = nextAttempt > delivery.max_attempts ? 'dead' : 'failed';
-
-    await this.prisma.webhook_deliveries.update({
-      where: { id: delivery.id },
+      where: {
+        id: deliveryId,
+        attempt: delivery.attempt,
+        next_retry_at: delivery.next_retry_at,
+        OR: [
+          { status: 'pending' },
+          {
+            status: 'processing',
+            OR: [{ lease_until: null }, { lease_until: { lt: now } }],
+          },
+        ],
+      },
       data: {
-        status,
-        http_status: result.httpStatus,
-        error_message: result.error,
+        status: 'processing',
+        lease_token: token,
+        lease_until: new Date(Date.now() + 60000),
       },
     });
+    if (!claimed.count) return;
+    let result: DeliveryResult;
+    try {
+      result = await this.trySend(
+        delivery.webhook_endpoints.url,
+        delivery.payload as unknown as WebhookCallbackPayload,
+        openWebhookSecret(delivery.webhook_endpoints.signing_secret_enc),
+        delivery.id,
+      );
+    } catch {
+      result = { success: false, error: 'signing_secret_unavailable' };
+    }
+    const retry = !result.success && delivery.attempt < delivery.max_attempts;
+    const delay = Math.min(1000 * 2 ** delivery.attempt, 30000);
+    const updated = await this.prisma.webhook_deliveries.updateMany({
+      where: { id: delivery.id, lease_token: token },
+      data: {
+        status: result.success ? 'delivered' : retry ? 'pending' : 'dead',
+        attempt: retry ? delivery.attempt + 1 : delivery.attempt,
+        http_status: result.httpStatus,
+        response_body: null,
+        error_message: result.error || null,
+        next_retry_at: retry ? new Date(Date.now() + delay) : null,
+        completed_at: retry ? null : new Date(),
+        lease_until: null,
+        lease_token: null,
+      },
+    });
+    if (updated.count && retry)
+      await this.queueService.addWebhookJob(
+        { delivery_id: delivery.id },
+        delay,
+      );
   }
 
   private async trySend(
     url: string,
     payload: WebhookCallbackPayload,
     secret?: string | null,
+    eventId?: string,
   ): Promise<DeliveryResult> {
     try {
       await validateWebhookUrl(url, this.allowLocalInDev);
@@ -252,6 +227,7 @@ export class WebhooksService {
           'Content-Type': 'application/json',
           'User-Agent': 'Synexa-Webhook/1.0',
           'X-Synexa-Event': payload.event,
+          ...(eventId ? { 'X-Synexa-Event-Id': eventId } : {}),
           'X-Synexa-Timestamp': timestamp,
           ...(signature ? { 'X-Synexa-Signature': `sha256=${signature}` } : {}),
         },
@@ -259,20 +235,17 @@ export class WebhooksService {
         signal: AbortSignal.timeout(10000),
       });
 
-      const responseBody = await response.text();
+      await response.body?.cancel();
 
       return {
         success: response.ok,
         httpStatus: response.status,
-        responseBody,
-        error: response.ok
-          ? undefined
-          : `HTTP ${response.status}: ${responseBody.slice(0, 500)}`,
+        error: response.ok ? undefined : `http_${response.status}`,
       };
     } catch (error) {
       return {
         success: false,
-        error: (error as Error).message,
+        error: 'delivery_failed',
       };
     }
   }

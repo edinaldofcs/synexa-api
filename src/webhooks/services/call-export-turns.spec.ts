@@ -1,9 +1,10 @@
+import { sealWebhookSecret } from './webhook-secret';
 import { buildCallTurns } from './call-export-turns';
 import { buildCallExportPayload } from './call-export-payload';
 import { createVoiceConversation } from '../../voice/services/voice-heartbeat';
 import { decrypt } from '../../common/utils/crypto.util';
 
-it('v2 exports each conversation item once and leaves original model results and raw responses untouched', () => {
+it('v3 exports each conversation item once and leaves original model results and raw responses untouched', () => {
   const modelResult = {
     balance: 10,
     _chainTrail: [{ response: { balance: 10 } }],
@@ -41,7 +42,7 @@ it('v2 exports each conversation item once and leaves original model results and
     ],
   };
   const payload = JSON.parse(
-    JSON.stringify(buildCallExportPayload({ ...input, payloadVersion: 2 })),
+    JSON.stringify(buildCallExportPayload({ ...input, payloadVersion: 3 })),
   );
   expect(payload.call).not.toHaveProperty('transcript');
   expect(payload.call).not.toHaveProperty('tools');
@@ -52,13 +53,10 @@ it('v2 exports each conversation item once and leaves original model results and
     payload.call.turns[0].tools[0].http_exchanges[0].response.body,
   ).toEqual(rawBody);
   expect(modelResult._chainTrail).toHaveLength(1);
-  const legacy = buildCallExportPayload(input);
-  expect(legacy.schema_version).toBe(1);
-  expect(legacy.call.tools?.[0]).toMatchObject({ result: modelResult });
-  expect(legacy.call.transcript).toHaveLength(1);
+  expect(buildCallExportPayload(input).schema_version).toBe(3);
 });
 
-it.each([undefined, 1, 2])(
+it.each([undefined, 3])(
   'freezes the selected payload version at enrollment (%s)',
   async (version) => {
     const oldKey = process.env.ENCRYPTION_KEY;
@@ -77,7 +75,7 @@ it.each([undefined, 1, 2])(
           findFirst: jest.fn().mockResolvedValue({
             id: 'endpoint',
             url: 'https://example.com',
-            secret_hash: 'test',
+            signing_secret_enc: sealWebhookSecret('test'),
             retry_policy: {
               payload_version: version,
               include_transcript: true,
@@ -97,7 +95,7 @@ it.each([undefined, 1, 2])(
         ),
       );
       expect(destination).toMatchObject({
-        payload_version: version === 2 ? 2 : 1,
+        payload_version: 3,
         include_transcript: true,
       });
     } finally {

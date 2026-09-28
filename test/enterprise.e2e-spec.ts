@@ -382,7 +382,7 @@ describe('Enterprise Synexa (e2e)', () => {
           client_id: 'c1',
           url: 'https://fail.example.com',
           events: ['message.completed'] as any,
-          secret_hash: null,
+          signing_secret_enc: null,
           retry_policy: { max_retries: 3 } as any,
           enabled: true,
           channel_connection_id: null,
@@ -405,6 +405,8 @@ describe('Enterprise Synexa (e2e)', () => {
         response_body: null,
         error_message: null,
         next_retry_at: null,
+        lease_token: null,
+        lease_until: null,
         completed_at: null,
         created_at: new Date(),
       });

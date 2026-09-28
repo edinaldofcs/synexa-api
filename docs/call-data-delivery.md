@@ -6,13 +6,14 @@ A adesão ocorre na mesma transação que cria a conversa, antes do atendimento.
 
 ## Contrato do receptor
 
-POST JSON com `schema_version: 1`, `event: "call.completed"`, `event_id`, `occurred_at`, `company_id`, `client_id` e `call`:
+POST JSON com `schema_version: 3`, `event: "call.completed"`, `event_id`, `occurred_at`, `company_id`, `client_id` e `call`:
 
-- `id`, `external_id`, `started_at`, `ended_at`, `duration_seconds`, `end_reason`, `agent_id`, `caller_number`, `dialed_number`, `customer_identifier`, `customer_name` (quando disponíveis);
-- `variables`: estado final; `summary`: resumo existente ou `null` (não gera outra chamada de LLM);
-- `tools`: nome, resultado, estado e horário das ferramentas registradas;
-- `usage`: tokens e custo da interação, quando disponíveis;
-- `transcript`: lista ordenada de `sender_type`, `content`, `created_at`, somente quando habilitada.
+- `id`, `external_id`, `started_at`, `ended_at`, `duration_seconds`, `end_reason`, `agent_id`, `caller_number` e `dialed_number`;
+- `variables`: variáveis coletadas de `conversation_state`, preservando nomes, capitalização e tipos JSON. Não há identificação ou classificação automática. Contexto interno e credenciais são excluídos pela mesma projeção usada na prévia;
+- `turns`: mensagens e ferramentas agrupadas por identificadores de turno explícitos. `transcript_included` informa se mensagens foram incluídas. Resultados das ferramentas e auditoria HTTP protegida continuam disponíveis;
+- `usage`: tokens e custo da telemetria operacional, quando disponíveis.
+
+`customer_identifier`, `customer_name`, `summary` e as listas de topo `transcript`/`tools` foram removidos. Dados de negócio ficam exclusivamente em `call.variables`. O contrato aceita apenas v3: requisições com `payload_version: 1` ou `2` recebem HTTP 400. A prévia não altera a configuração do destino.
 
 Arquivos de áudio não são enviados por este webhook. As gravações locais padronizadas do dialplan também são removidas na limpeza. Para arquivar áudio, use gravação/armazenamento no ambiente do cliente antes de ativar esta política. URLs de gravação de terceiros não são apagadas remotamente pelo Synexa.
 
@@ -28,7 +29,7 @@ A assinatura é HMAC SHA-256 com o segredo do endpoint sobre **timestamp + ponto
 
 O job repetível `call-export-sweep`, na fila `webhook-delivery`, roda no `worker-webhook` ou worker completo. Busca lotes de 50 com até 5 entregas simultâneas, usa leases renováveis e não coloca conteúdo de chamadas no Redis. Uma queda do worker pode repetir o envio, mas não altera o identificador do evento. Chamadas inscritas têm heartbeat; após 2 minutos sem atualização, uma sessão não finalizada pode ser recuperada como `connection_lost`, com os dados disponíveis até a interrupção.
 
-Após 2xx, ou após expiração sem confirmação, são removidos conversa, mensagens, partes, estado, eventos, resultados de ferramentas e cópias de entrega associadas. Conteúdo e identificadores pessoais da interação, traces do agente e telemetria são limpos. Métricas numéricas de uso/cobrança e comprovantes técnicos permanecem. O cache persistente de saudações fica desativado nas chamadas inscritas; caches antigos não são apagados retroativamente.
+Após 2xx, ou após expiração sem confirmação, são removidos conversa, mensagens, partes, estado, eventos, resultados de ferramentas e cópias de entrega associadas. Traces do agente e identificadores pessoais da telemetria são limpos. Métricas numéricas de uso/cobrança e comprovantes técnicos permanecem. O cache persistente de saudações fica desativado nas chamadas inscritas; caches antigos não são apagados retroativamente.
 
 Mídias vinculadas exclusivamente à chamada são removidas do storage; referências compartilhadas geram falha visível para evitar apagar dados de outra finalidade. Gravações locais são removidas apenas pelos nomes exatos `<UUID>.wav` e `synexa-<UUID>.wav`, nos diretórios configurados. O worker de produção monta o volume de gravações. Instalações fora do Compose devem dar ao worker acesso ao mesmo storage (`RECORDINGS_DIR`, padrão `/app/uploads/recordings`).
 
@@ -38,6 +39,6 @@ Backups, logs históricos, CDR/logs do PABX e retenção dos provedores externos
 
 ## Publicação e validação
 
-Aplicar a migration `20260924160000_call_exports`, publicar API/voz/frontend/worker e manter `worker-webhook` ativo. A migration torna opcional a referência da telemetria à conversa para preservar minutos e custos após a exclusão. Não há migração destrutiva do histórico existente.
+A transição para v3 exige a migration `20260928150000_remove_bi_legacy`, com remoção de estruturas antigas de BI. Seguir [o roteiro de transição](bi-removal.md), com backup verificado e esvaziamento de entregas antigas. Publicar API/voz/frontend/worker coordenadamente e manter `worker-webhook` ativo.
 
 Testes unitários cobrem assinatura, retry, lease, expiração, transcrição opcional e falha de limpeza. `call-exports.integration.spec.ts` usa apenas banco de teste loopback informado explicitamente em `CALL_EXPORT_TEST_DATABASE_URL`; comprova adesão, unicidade do destino, cascatas e preservação de cobrança. Não definir essa variável com um banco de uso real.

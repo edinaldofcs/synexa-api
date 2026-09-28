@@ -51,6 +51,128 @@ describe('ApiToolExecutorService - chaining tenant scope & cycle guard', () => {
     prisma.conversation_state.findUnique.mockResolvedValue(null);
   });
 
+  it('saves the resolved sent value before chaining and does not overwrite it during the final merge', async () => {
+    mockedResolveChainedApiId.mockReset().mockReturnValueOnce('api-2');
+    fetchMock({ accepted: true });
+    const first = {
+      id: 'api-1',
+      name: 'Primeira',
+      functionName: 'primeira',
+      method: 'POST',
+      url: 'https://example.com/first',
+      client_id: 'client',
+      body: {
+        'pessoa.documento': {
+          source: 'ai',
+          formatter: 'clean_digits',
+          save_to_session: true,
+          session_variable: '{{CPFConsulta}}',
+        },
+      },
+    };
+    prisma.painel_apis.findFirst.mockResolvedValue({
+      id: 'api-2',
+      name: 'Segunda',
+      method: 'POST',
+      url: 'https://example.com/second',
+      body: { cpf: { source: 'system', value: 'CPFConsulta', required: true } },
+    });
+    const state = {};
+    const args = { 'pessoa.documento': '001.234.567-89' };
+    const result = await (service as any).executeApiTool(first, args, state);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body),
+    ).toEqual({ cpf: '00123456789' });
+    expect(state).toMatchObject({ CPFConsulta: '00123456789' });
+    expect(state).not.toHaveProperty('cpf');
+    const merged = service.mergeToolResults(
+      state,
+      [{ name: 'primeira', arguments: args, result } as any],
+      [first],
+      [],
+    );
+    expect(merged.CPFConsulta).toBe('00123456789');
+  });
+
+  it('shares free extracted values across sequential tools', async () => {
+    mockedResolveChainedApiId.mockReturnValue(null);
+    fetchMock({ person: { name: 'Pessoa', doc: '00123456789' } });
+    const state = { cpf: '99999999999' };
+    const tool = {
+      id: 'api-1',
+      name: 'Lookup',
+      functionName: 'lookup',
+      method: 'POST',
+      url: 'https://api.example.com/lookup',
+      client_id: 'tenant',
+      extract_data: {
+        PessoaAtendida: { path: 'person.name' },
+        Documento: { path: 'person.doc' },
+        Confirmacao: { value: false },
+      },
+    };
+    await service.executeToolCall({
+      tool,
+      functionName: 'lookup',
+      args: {},
+      context: { message: '', sessionState: state, callLlm: jest.fn() },
+    });
+    expect(prisma.conversation_state.findUnique).not.toHaveBeenCalled();
+    expect(state).toMatchObject({
+      PessoaAtendida: 'Pessoa',
+      Documento: '00123456789',
+      Confirmacao: false,
+    });
+    expect(state).not.toHaveProperty('report_bindings');
+    expect(state).not.toHaveProperty('nome_cliente');
+    const next = {
+      ...tool,
+      body: {
+        protocolo: { source: 'system', value: 'Ausente', required: true },
+      },
+    };
+    (global.fetch as jest.Mock).mockClear();
+    await expect(
+      service.executeToolCall({
+        tool: next,
+        functionName: 'lookup',
+        args: { cpf: '99999999999' },
+        context: { message: '', sessionState: state, callLlm: jest.fn() },
+      }),
+    ).rejects.toThrow('SESSION_VARIABLE_REQUIRED');
+    expect(global.fetch).not.toHaveBeenCalled();
+    fetchMock({}, 500, false);
+    await expect(
+      service.executeToolCall({
+        tool,
+        functionName: 'lookup',
+        args: {},
+        context: { message: '', sessionState: state, callLlm: jest.fn() },
+      }),
+    ).rejects.toThrow();
+    expect(state).toHaveProperty('PessoaAtendida', 'Pessoa');
+  });
+
+  it('does not search nested equivalents or classify conventional names', () => {
+    const extracted = (service as any).applyExtractData(
+      { data: { cpf: '001' }, CPF: '002' },
+      {
+        cpf: 'cpf',
+        Livre: 'CPF',
+        fixo: { value: 0 },
+      },
+    );
+    expect(extracted).toEqual({ cpf: undefined, Livre: '002', fixo: 0 });
+    expect(() =>
+      (service as any).buildRequestBody(
+        { body: { '__proto__.polluted': { value: true } } },
+        {},
+      ),
+    ).toThrow('INVALID_PATH');
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
   it('filters chained API lookup by client_id (no cross-tenant execution)', async () => {
     mockedResolveChainedApiId.mockReturnValue('api-next');
     prisma.painel_apis.findFirst.mockResolvedValue(null);

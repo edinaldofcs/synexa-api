@@ -25,11 +25,7 @@ describe('ApisService - testProxy (SSRF)', () => {
     const prisma = {
       painel_clients: { findUnique: jest.fn() },
     };
-    const service = new ApisService(
-      apisRepository as never,
-      metadataService as never,
-      prisma as never,
-    );
+    const service = new ApisService(apisRepository as never, prisma as never);
     return service;
   };
 

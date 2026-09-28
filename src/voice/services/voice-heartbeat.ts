@@ -1,3 +1,4 @@
+import { openWebhookSecret } from '../../webhooks/services/webhook-secret';
 import { Prisma } from '@prisma/client';
 import { encrypt } from '../../common/utils/crypto.util';
 import { Logger } from '@nestjs/common';
@@ -40,7 +41,14 @@ export async function createVoiceConversation(
   return prisma.$transaction(async (tx) => {
     const conversation = await tx.conversations.create({
       ...args,
-      data: { ...args.data, voice_heartbeat_at: new Date() },
+      data: {
+        ...args.data,
+        voice_heartbeat_at: new Date(),
+        metadata: {
+          ...((args.data.metadata as Prisma.InputJsonObject) || {}),
+          voice_liveness_version: 1,
+        },
+      },
     });
     const endpoint = conversation.client_id
       ? await tx.webhook_endpoints.findFirst({
@@ -68,9 +76,9 @@ export async function createVoiceConversation(
           destination_enc: encrypt(
             JSON.stringify({
               url: endpoint.url,
-              secret: endpoint.secret_hash,
+              secret: openWebhookSecret(endpoint.signing_secret_enc),
               include_transcript: policy.include_transcript === true,
-              payload_version: policy.payload_version === 2 ? 2 : 1,
+              payload_version: 3,
               retention_hours: retentionHours,
             }),
             process.env.ENCRYPTION_KEY || '',

@@ -13,14 +13,16 @@ import {
   IsUUID,
   Max,
   MaxLength,
+  Matches,
   Min,
   ValidateNested,
 } from 'class-validator';
+import { UUID_SHAPE_REGEX } from '../../common/validators/uuid-shape';
 
 class PreviewCorrelationDto {
   @IsOptional() @IsString() @MaxLength(200) id?: string;
   @IsOptional() @IsUUID() turn_id?: string;
-  @IsOptional() @IsUUID() agent_id?: string;
+  @IsOptional() @Matches(UUID_SHAPE_REGEX) agent_id?: string;
   @IsOptional() @IsISO8601() created_at?: string;
 }
 
@@ -39,8 +41,8 @@ class PreviewToolDto extends PreviewCorrelationDto {
 
 export class CallPreviewDto {
   @IsOptional() @IsBoolean() include_transcript?: boolean;
-  @IsOptional() @IsIn([1, 2]) payload_version?: 1 | 2;
-  @IsOptional() @IsUUID() agent_id?: string;
+  @IsOptional() @IsIn([3]) payload_version?: 3;
+  @IsOptional() @Matches(UUID_SHAPE_REGEX) agent_id?: string;
   @IsOptional() @IsString() @MaxLength(200) caller_number?: string;
   @IsOptional() @IsString() @MaxLength(200) dialed_number?: string;
   @IsOptional() @IsString() @MaxLength(200) end_reason?: string;

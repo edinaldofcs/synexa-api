@@ -1,3 +1,9 @@
+import { clientIdentity } from '../common/utils/session-variables.util';
+import {
+  rejectLegacyMetadata,
+  validateConfiguredPaths,
+  validateVariableDefinitions,
+} from '../common/utils/extraction-validation.util';
 import { WaitingMusicService } from '../media/waiting-music.service';
 import { Inject } from '@nestjs/common';
 import { testCustomVoiceEndpoint } from './voice-provider-test';
@@ -17,7 +23,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { CreateClientDto } from './dto/create-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { LlmConfigDto } from './dto/llm-config.dto';
@@ -37,7 +42,6 @@ export class ClientsService {
   constructor(
     private readonly clientsRepository: ClientsRepository,
     private readonly duplication: ClientDuplicationService,
-    private readonly metadataService: ClientMetadataService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly credentialAuditService: CredentialAuditService,
@@ -131,10 +135,35 @@ export class ClientsService {
     }
   }
 
+  private validateVariableConfiguration(metadata: any) {
+    rejectLegacyMetadata(metadata);
+    for (const config of [
+      metadata?.inbound_variable_mapping,
+      metadata?.inbound_mapping,
+    ]) {
+      if (!config) continue;
+      validateConfiguredPaths(config);
+      validateVariableDefinitions(
+        (config.rules || []).map((rule: any) => ({
+          key: rule.target_variable,
+          report_target: rule.report_target,
+        })),
+      );
+      const defaults = config.default_variables || [];
+      validateVariableDefinitions(
+        Array.isArray(defaults)
+          ? defaults.map((item: any) => ({ key: item.key }))
+          : Object.keys(defaults).map((key) => ({ key })),
+      );
+    }
+  }
+
   async create(createClientDto: CreateClientDto, companyId: string) {
     if (!companyId) {
       throw new ForbiddenException('Usuário sem empresa vinculada');
     }
+    clientIdentity(createClientDto);
+    this.validateVariableConfiguration(createClientDto.metadata);
 
     const {
       user_id,
@@ -145,9 +174,7 @@ export class ClientsService {
       ...rest
     } = createClientDto;
 
-    // Legacy per-operation limits are accepted for compatibility but never applied.
-    delete rest.max_concurrent_calls;
-
+    delete (rest as Record<string, unknown>).max_concurrent_calls;
     // Se informado ramal de teste, guarda no metadata do cliente
     const meta = (rest.metadata as Record<string, any>) || {};
     if (test_sip_extension?.trim()) {
@@ -162,7 +189,6 @@ export class ClientsService {
 
     const client = await this.clientsRepository.create({
       ...rest,
-      max_concurrent_calls: null,
       company_id: companyId,
     });
 
@@ -256,7 +282,6 @@ export class ClientsService {
       }
     }
 
-    if (client) void this.metadataService.refresh(client.id);
     return {
       ...client,
       sip_extension: sip_extension?.trim() || null,
@@ -421,6 +446,16 @@ export class ClientsService {
     role?: string,
   ) {
     await this.validateClientAccess(id, companyId, role);
+    for (const key of ['agent_name', 'company_name'] as const) {
+      if (
+        key in updateClientDto &&
+        (typeof updateClientDto[key] !== 'string' ||
+          !updateClientDto[key]?.trim())
+      )
+        throw new BadRequestException(
+          'Nome da empresa e nome do agente IA não podem ficar vazios.',
+        );
+    }
 
     const {
       sip_extension,
@@ -429,9 +464,9 @@ export class ClientsService {
       audio_format,
       ...restDto
     } = updateClientDto;
+    delete (restDto as Record<string, unknown>).max_concurrent_calls;
 
     // Only the owner-only company limits endpoint changes call capacity.
-    delete restDto.max_concurrent_calls;
 
     // Provider credentials are edited through llm-config. A Flow tab opened
     // before a credential change must not restore stale provider metadata.
@@ -450,6 +485,7 @@ export class ClientsService {
         );
       restDto.metadata = next;
     }
+    this.validateVariableConfiguration(restDto.metadata);
 
     // Se test_sip_extension fornecido, sincroniza no metadata
     if (test_sip_extension !== undefined) {
@@ -610,7 +646,6 @@ export class ClientsService {
       }
     }
 
-    if (client) void this.metadataService.refresh(client.id);
     return this.findOne(id, companyId, role);
   }
 
@@ -664,7 +699,7 @@ export class ClientsService {
 
     const client = await this.clientsRepository.findOne(clientId);
     const legacyProviders = (client.metadata as any)?.llm_providers || {};
-    const decryptedLegacy = this.decryptLlmProviders(legacyProviders);
+    const decryptedLegacy: Record<string, any> = legacyProviders;
 
     const masked: Record<string, any> = {};
 
@@ -742,69 +777,15 @@ export class ClientsService {
     return `${clean.slice(0, 4)}...${clean.slice(-4)}`;
   }
 
-  private decryptLlmProviders(
-    providers: Record<string, any>,
-  ): Record<string, any> {
-    const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
-    if (!encryptionKey) return providers;
-
-    try {
-      const decrypted: Record<string, any> = {};
-      for (const [key, config] of Object.entries(providers)) {
-        decrypted[key] = { ...config };
-        if (
-          config?.apiKey &&
-          typeof config.apiKey === 'string' &&
-          config.apiKey.startsWith('enc:')
-        ) {
-          try {
-            decrypted[key].apiKey = decrypt(
-              config.apiKey.slice(4),
-              encryptionKey,
-            );
-          } catch {
-            decrypted[key].apiKey = config.apiKey;
-          }
-        }
-      }
-      return decrypted;
-    } catch {
-      return providers;
-    }
-  }
-
   private encryptLlmProviders(
     providers: Record<string, any>,
-    existingProviders: Record<string, any> = {},
   ): Record<string, any> {
-    const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
-
-    try {
-      const encrypted: Record<string, any> = {};
-      for (const [key, config] of Object.entries(providers)) {
-        encrypted[key] = { ...config };
-        const newKey = config?.apiKey ? String(config.apiKey).trim() : '';
-
-        // Se a chave enviada for uma máscara (ex: 'AIza...1234' ou '********') ou vazia, mantém a existente
-        if (!newKey || newKey.includes('...') || newKey === '********') {
-          if (existingProviders[key]?.apiKey) {
-            encrypted[key].apiKey = existingProviders[key].apiKey;
-          } else {
-            encrypted[key].apiKey = '';
-          }
-          continue;
-        }
-
-        if (encryptionKey && !newKey.startsWith('enc:')) {
-          encrypted[key].apiKey = `enc:${encrypt(newKey, encryptionKey)}`;
-        } else {
-          encrypted[key].apiKey = newKey;
-        }
-      }
-      return encrypted;
-    } catch {
-      return providers;
-    }
+    return Object.fromEntries(
+      Object.entries(providers).map(([name, config]) => {
+        const { apiKey, api_key, ...settings } = config;
+        return [name, settings];
+      }),
+    );
   }
 
   private normalizeLlmProviders(providers: unknown) {
@@ -862,8 +843,6 @@ export class ClientsService {
         : {};
 
     const effectiveCompanyId = client.company_id || companyId;
-    const existingProviders =
-      (metadata.llm_providers as Record<string, any>) || {};
     const normalized = this.normalizeLlmProviders(body?.providers);
 
     const encryptionKey = this.configService.get<string>('ENCRYPTION_KEY');
@@ -919,10 +898,9 @@ export class ClientsService {
         }
       } else if (inputApiKey && inputApiKey !== '') {
         // Nova chave enviada -> criptografa
-        const finalEncKey =
-          encryptionKey && !inputApiKey.startsWith('enc:')
-            ? `enc:${encrypt(inputApiKey, encryptionKey)}`
-            : inputApiKey;
+        if (!encryptionKey)
+          throw new BadRequestException('ENCRYPTION_KEY não configurada');
+        const finalEncKey = `enc:${encrypt(inputApiKey, encryptionKey)}`;
 
         const action = existingCred ? 'rotated' : 'created';
 
@@ -987,11 +965,8 @@ export class ClientsService {
       }
     }
 
-    // 2. Mantém compatibilidade com metadata.llm_providers
-    metadata.llm_providers = this.encryptLlmProviders(
-      normalized,
-      existingProviders,
-    );
+    // Provider settings are public configuration; credentials have one encrypted store.
+    metadata.llm_providers = this.encryptLlmProviders(normalized);
     metadata.llm_providers_updated_at = new Date().toISOString();
     return this.clientsRepository.update(clientId, { metadata });
   }
@@ -1017,7 +992,7 @@ export class ClientsService {
         ? credential.status === 'active'
           ? credential.api_key_enc
           : ''
-        : saved?.apiKey || '';
+        : '';
       if (encrypted) {
         // A draft URL must not redirect an existing secret to another endpoint.
         const savedUrl = saved?.baseUrl || saved?.base_url;

@@ -1,3 +1,4 @@
+import { sealWebhookSecret } from '../src/webhooks/services/webhook-secret';
 import { PrismaClient } from '@prisma/client';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
@@ -180,7 +181,7 @@ async function main() {
       channel_connection_id: apiConn.id,
       url: 'https://httpbin.org/post',
       events: ['message.completed', 'message.failed'] as any,
-      secret_hash: 'webhook-secret',
+      signing_secret_enc: sealWebhookSecret('webhook-secret'),
       enabled: true,
     },
   });
@@ -501,78 +502,6 @@ condições de ativação configuradas no painel forem atendidas.`,
     console.log(
       `[painel_apis]    3 APIs criadas (Buscar CEP, Cotações, Feriados)`,
     );
-  }
-
-  // ── 9. Trilhas de Atendimento ────────────────────────────────
-  const existingTracks = await prisma.painel_tracks.findMany({
-    where: { client_id: CLIENT_ID },
-  });
-
-  if (existingTracks.length === 0) {
-    await prisma.painel_tracks.createMany({
-      data: [
-        {
-          client_id: CLIENT_ID,
-          code: 'saudacao',
-          label: 'Saudação',
-          description: 'Cliente cumprimenta ou inicia conversa',
-          category: 'Atendimento',
-          icon: 'Hand',
-          color: '#22c55e',
-          examples: ['Olá!', 'Bom dia', 'Preciso de ajuda'],
-          display_order: 1,
-          is_active: true,
-        },
-        {
-          client_id: CLIENT_ID,
-          code: 'suporte_tecnico',
-          label: 'Suporte Técnico',
-          description: 'Cliente solicita suporte técnico',
-          category: 'Suporte',
-          icon: 'Wrench',
-          color: '#3b82f6',
-          examples: [
-            'Meu sistema não abre',
-            'Está dando erro no login',
-            'Preciso de suporte',
-          ],
-          display_order: 2,
-          is_active: true,
-        },
-        {
-          client_id: CLIENT_ID,
-          code: 'financeiro',
-          label: 'Financeiro',
-          description: 'Dúvidas sobre pagamentos, boletos e fatura',
-          category: 'Financeiro',
-          icon: 'Wallet',
-          color: '#f59e0b',
-          examples: [
-            'Quero a segunda via do boleto',
-            'Como faço o pagamento?',
-            'Qual o valor da fatura?',
-          ],
-          display_order: 3,
-          is_active: true,
-        },
-        {
-          client_id: CLIENT_ID,
-          code: 'cancelamento',
-          label: 'Cancelamento',
-          description: 'Cliente deseja cancelar serviço',
-          category: 'Retenção',
-          icon: 'CircleSlash',
-          color: '#ef4444',
-          examples: [
-            'Quero cancelar meu plano',
-            'Como cancelo a assinatura?',
-          ],
-          display_order: 4,
-          is_active: true,
-        },
-      ],
-    });
-    console.log(`[painel_tracks] 4 trilhas de atendimento criadas`);
   }
 
   // ── 10. End User + Identity ───────────────────────────────────

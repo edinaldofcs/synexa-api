@@ -1,8 +1,8 @@
+import { patchConversationState } from '../../common/prisma/conversation-state';
 import { finalizeVoiceConversation } from './voice-heartbeat';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ModelPricingService } from '../../orchestrator/services/model-pricing.service';
-import { InteractionSyncService } from './interaction-sync.service';
 import type { VoiceClientSession } from '../sessions/voice-client-session';
 
 export interface VoiceTelemetryPayload {
@@ -22,7 +22,7 @@ export interface VoiceTelemetryPayload {
 /**
  * Persistência da sessão de voz do navegador: mensagens (buffer do turno da
  * IA com throttle), transcripts do usuário, estado da conversa e telemetria
- * consolidada (agent_runs + voice_session_telemetry + painel_interactions).
+ * consolidada (agent_runs + voice_session_telemetry).
  */
 @Injectable()
 export class VoiceTelemetryService {
@@ -35,7 +35,6 @@ export class VoiceTelemetryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricingService: ModelPricingService,
-    private readonly interactionsService: InteractionSyncService,
   ) {}
 
   // ── Buffer do turno da IA ───────────────────────────────────────
@@ -139,17 +138,11 @@ export class VoiceTelemetryService {
 
   async persistConversationState(session: VoiceClientSession): Promise<void> {
     if (!session.conversationId) return;
-    await this.prisma.conversation_state.upsert({
-      where: { conversation_id: session.conversationId },
-      update: {
-        state: session.state as any,
-        version: { increment: 1 },
-      },
-      create: {
-        conversation_id: session.conversationId,
-        state: session.state as any,
-      },
-    });
+    await patchConversationState(
+      this.prisma,
+      session.conversationId,
+      session.state,
+    );
   }
 
   // ── Telemetria consolidada ──────────────────────────────────────
@@ -185,9 +178,11 @@ export class VoiceTelemetryService {
       audioInputTokens: session.inputTokens,
       audioOutputTokens: session.outputTokens,
       costUsd,
-      costBrl: Number((costUsd * 5.5).toFixed(4)),
+      costBrl: Number(
+        (costUsd * this.pricingService.getExchangeRate()).toFixed(4),
+      ),
       voiceName: session.voiceName,
-      audioGateEnabled: session.gateSession?.enabled ?? true,
+      audioGateEnabled: session.gateSession?.enabled ?? false,
     };
   }
 
@@ -264,67 +259,40 @@ export class VoiceTelemetryService {
       }
 
       // 3. Registra voice_session_telemetry
-      if (session.conversationId && session.gateSession) {
-        const stats = session.gateSession.getStats();
+      if (session.conversationId) {
+        const stats = session.gateSession?.getStats();
         await this.prisma.voice_session_telemetry.create({
           data: {
             company_id: session.companyId,
             client_id: session.clientId,
             conversation_id: session.conversationId,
             duration_sec: durationSeconds,
-            audio_gate_forwarded_sec: stats.forwardedSec,
-            audio_gate_suppressed_sec: stats.suppressedSec,
-            audio_gate_closes: stats.closes,
+            hangup_cause:
+              reason || (session.pendingAiHangup ? 'ai_completed' : null),
+            audio_gate_forwarded_sec: stats?.forwardedSec ?? 0,
+            audio_gate_suppressed_sec: stats?.suppressedSec ?? 0,
+            audio_gate_closes: stats?.closes ?? 0,
             interrupted_count: session.interruptedCount,
             hybrid_stt_utterances: session.hybridSttUtterances,
             hybrid_stt_fallback_count: session.hybridSttFallbacks,
             total_tokens: session.totalTokens,
-            audio_input_tokens: session.inputTokens,
-            audio_output_tokens: session.outputTokens,
+            input_tokens: session.inputTokens,
+            output_tokens: session.outputTokens,
+            turns: session.auditTurn.count,
+            exchange_rate: this.pricingService.getExchangeRate(),
             cost_usd: rawCost,
-            cost_brl: Number((rawCost * 5.5).toFixed(4)),
+            cost_brl: Number(
+              (rawCost * this.pricingService.getExchangeRate()).toFixed(4),
+            ),
             model: session.model,
             voice_name: session.voiceName,
-            audio_gate_enabled: session.gateSession.enabled,
+            audio_gate_enabled: session.gateSession?.enabled ?? false,
           },
         });
 
         this.logger.log(
-          `📊 [VoiceTelemetry] Sessão registrada: ${durationSeconds}s | Gate: +${stats.forwardedSec}s / -${stats.suppressedSec}s silêncio | Custo: $${rawCost}`,
+          `📊 [VoiceTelemetry] Sessão registrada: ${durationSeconds}s | Gate: +${stats?.forwardedSec ?? 0}s / -${stats?.suppressedSec ?? 0}s silêncio | Custo: $${rawCost}`,
         );
-      }
-
-      // 4. Sincroniza interação canônica em painel_interactions
-      if (session.conversationId && session.companyId && session.clientId) {
-        await this.interactionsService.syncSessionInteraction({
-          sessionId: session.conversationId,
-          companyId: session.companyId,
-          clientId: session.clientId,
-          agentId: session.agentId || null,
-          agentName: (session.state?.nome_agente as string) || null,
-          channel: 'voice_webrtc',
-          direction: 'inbound',
-          state: session.state as Record<string, unknown>,
-          durationSeconds,
-          billableSeconds: durationSeconds,
-          bargeInCount: session.interruptedCount,
-          totalTokens: session.totalTokens,
-          promptTokens: session.inputTokens,
-          completionTokens: session.outputTokens,
-          estimatedCostUsd: rawCost,
-          llmModel: session.model,
-          llmProvider:
-            session.voiceEngine === 'hybrid'
-              ? session.ttsProvider === 'custom'
-                ? 'custom-cascade'
-                : 'cartesia-cascade'
-              : 'gemini-live',
-          hangupCause:
-            reason || (session.pendingAiHangup ? 'ai_completed' : undefined),
-          startedAt: new Date(session.startTime),
-          endedAt: new Date(),
-          status: 'completed',
-        });
       }
     } catch (err: any) {
       this.logger.error(`Erro ao persistir telemetria de voz`);

@@ -1,3 +1,6 @@
+import { IsObject } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty } from 'class-validator';
 import {
   IsString,
   IsOptional,
@@ -16,17 +19,19 @@ export class UpdateClientDto {
   @IsOptional()
   company_id?: string;
 
-  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
-  @IsOptional()
+  @IsNotEmpty()
   @MaxLength(255)
-  company_name?: string | null;
+  company_name?: string;
 
-  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
-  @IsOptional()
+  @IsNotEmpty()
   @MaxLength(255)
-  agent_name?: string | null;
+  agent_name?: string;
 
   @ValidateIf((_, v) => v !== null && v !== undefined)
   @IsString()
@@ -78,13 +83,9 @@ export class UpdateClientDto {
   @IsOptional()
   context_compression_enabled?: boolean | null;
 
-  @Allow()
+  @IsObject()
   @IsOptional()
   metadata?: Record<string, unknown> | null;
-
-  @Allow()
-  @IsOptional()
-  max_concurrent_calls?: number | null;
 
   // FALSE = IA de texto roda inline no processo da API (sem fila BullMQ)
   @IsOptional()

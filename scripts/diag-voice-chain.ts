@@ -59,10 +59,7 @@ async function main() {
     where.agent_id = AGENT;
   }
   const tools = await prisma.painel_apis.findMany({ where: where as any });
-  console.log(
-    '\n[2] Tools do agente:',
-    tools.map((t) => t.name).join(', '),
-  );
+  console.log('\n[2] Tools do agente:', tools.map((t) => t.name).join(', '));
 
   const parent = tools.find((t) => t.name === 'buscar_cpf');
   if (!parent) {
@@ -75,8 +72,8 @@ async function main() {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const resolveNextApiId = (api: Record<string, any>): string | null => {
     const meta =
-      typeof api.headers === 'object' && api.headers !== null
-        ? (api.headers as Record<string, any>)
+      typeof api.config === 'object' && api.config !== null
+        ? (api.config as Record<string, any>)
         : {};
     const candidates = [api.next_api_id, meta.next_api_id, api.next_tool];
     for (const candidate of candidates) {
@@ -88,8 +85,11 @@ async function main() {
   };
   console.log('\n[3] Tool pai: buscar_cpf');
   console.log('    next_api_id (pós-fix):', resolveNextApiId(parent as any));
-  console.log('    next_tool:', parent.next_tool);
-  console.log('    extract_data._chaining:', JSON.stringify((parent.extract_data as any)?._chaining));
+  console.log('    next_tool:', (parent.config as any)?.next_api_id);
+  console.log(
+    '    extract_data._chaining:',
+    JSON.stringify((parent.extract_data as any)?._chaining),
+  );
 
   // 4. Resolução da cadeia
   const legacyNextApiId = resolveNextApiId(parent as any);
@@ -119,7 +119,10 @@ async function main() {
       client_id: CLIENT,
     } as any,
   });
-  console.log('\n[5] API filha encontrada:', nextApi ? nextApi.name : '❌ NULL');
+  console.log(
+    '\n[5] API filha encontrada:',
+    nextApi ? nextApi.name : '❌ NULL',
+  );
   if (!nextApi) {
     console.log('    ❌ findFirst não achou — encadeamento abortado aqui!');
     return;
@@ -130,7 +133,9 @@ async function main() {
   // 6. Simula a execução da filha (busca por function name como no execute())
   const functionName = toFunctionName(nextApi.name, nextApi.id);
   console.log('\n[6] functionName da filha:', functionName);
-  const inAgentTools = tools.find((t) => toFunctionName(t.name, t.id) === functionName);
+  const inAgentTools = tools.find(
+    (t) => toFunctionName(t.name, t.id) === functionName,
+  );
   console.log(
     '    está nas tools do agente (visible)?',
     inAgentTools ? 'SIM' : 'NÃO (cai no fallback do catálogo)',
@@ -148,7 +153,9 @@ async function main() {
     console.log('    status:', resp.status);
     console.log('    body (primeiros 500 chars):', text.slice(0, 500));
     console.log(
-      resp.ok ? '    ✅ filha executou OK' : '    ❌ filha FALHOU (ok=false) — chainTrail não seria gravada!',
+      resp.ok
+        ? '    ✅ filha executou OK'
+        : '    ❌ filha FALHOU (ok=false) — chainTrail não seria gravada!',
     );
   } catch (err: any) {
     console.log('    ❌ EXCEÇÃO no HTTP da filha:', err.message);

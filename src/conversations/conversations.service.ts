@@ -1,3 +1,6 @@
+import { patchConversationState } from '../common/prisma/conversation-state';
+import { projectCollectedVariables } from '../common/utils/session-variables.util';
+import { businessVariables } from '../common/utils/session-variables.util';
 import { BrandId, getBrandName } from '../common/config/branding';
 import { SearchConversationsDto } from './dto/search-conversations.dto';
 import {
@@ -69,7 +72,7 @@ export class ConversationsService {
         end_user_id: dto.end_user_id,
         origin_channel: dto.origin_channel,
         external_conversation_key: dto.conversation_key,
-        metadata: dto.metadata,
+        metadata: businessVariables(dto.metadata) as any,
       });
     } catch (err: any) {
       // Corrida no find-or-create: a constraint única (client_id,
@@ -135,23 +138,7 @@ export class ConversationsService {
       );
 
       if (Object.keys(mappedState).length > 0) {
-        const currentRecord = await this.prisma.conversation_state.findUnique({
-          where: { conversation_id: conversationId },
-        });
-        const currentState =
-          (currentRecord?.state as Record<string, unknown>) || {};
-        const mergedState = { ...currentState, ...mappedState };
-
-        await this.prisma.conversation_state.upsert({
-          where: { conversation_id: conversationId },
-          create: {
-            conversation_id: conversationId,
-            state: mergedState as any,
-          },
-          update: {
-            state: mergedState as any,
-          },
-        });
+        await patchConversationState(this.prisma, conversationId, mappedState);
       }
     } catch (err: any) {
       this.logger.warn(
@@ -232,7 +219,17 @@ export class ConversationsService {
     if (!conversation) {
       throw new NotFoundException(`Conversation ${id} not found`);
     }
-    return conversation;
+    return {
+      ...conversation,
+      conversation_state: conversation.conversation_state
+        ? {
+            ...conversation.conversation_state,
+            state: projectCollectedVariables(
+              conversation.conversation_state.state,
+            ),
+          }
+        : null,
+    };
   }
 
   async getMessages(
@@ -350,7 +347,7 @@ export class ConversationsService {
 
   async updateConversation(
     conversationId: string,
-    dto: { status?: string; mode?: string },
+    dto: { status?: string },
     companyId?: string,
   ) {
     const conversation = await this.prisma.conversations.findUnique({
@@ -362,7 +359,6 @@ export class ConversationsService {
 
     const data: any = {};
     if (dto.status) data.status = dto.status;
-    if (dto.mode) data.mode = dto.mode;
     if (dto.status === 'closed') {
       data.closed_at = new Date();
     }
@@ -374,17 +370,7 @@ export class ConversationsService {
   }
 
   async updateState(conversationId: string, state: Record<string, unknown>) {
-    await this.prisma.conversation_state.upsert({
-      where: { conversation_id: conversationId },
-      update: {
-        state: state as any,
-        version: { increment: 1 },
-      },
-      create: {
-        conversation_id: conversationId,
-        state: state as any,
-      },
-    });
+    await patchConversationState(this.prisma, conversationId, state);
   }
 
   async searchConversations(companyId: string, query: SearchConversationsDto) {
@@ -401,10 +387,6 @@ export class ConversationsService {
     const conditions: Prisma.Sql[] = [Prisma.sql`TRUE`];
     if (query.filter === 'active' || query.filter === 'closed')
       conditions.push(Prisma.sql`status = ${query.filter}`);
-    if (query.filter === 'deals' || query.outcome === 'deals')
-      conditions.push(Prisma.sql`deal`);
-    if (query.filter === 'cpc' || query.outcome === 'cpc')
-      conditions.push(Prisma.sql`cpc`);
     if (query.channel && query.channel !== 'all')
       conditions.push(Prisma.sql`lower(origin_channel) = ${query.channel}`);
     if (query.start)
@@ -425,19 +407,14 @@ export class ConversationsService {
         total: number;
         active: number;
         closed: number;
-        deals: number;
-        cpc: number;
       }>
     >(Prisma.sql`
       WITH source AS (
         SELECT c.id, c.status, c.origin_channel, c.last_message_at, c.created_at,
-          COALESCE(c.metadata->'session_record', '{}'::jsonb) AS record,
-          COALESCE(c.metadata->'session_data', '{}'::jsonb) AS session_data,
-          CASE WHEN jsonb_typeof(cs.state->'state') = 'object' THEN cs.state->'state'
-               ELSE COALESCE(cs.state, '{}'::jsonb) END AS state,
+          COALESCE(cs.state, '{}'::jsonb) AS state,
           ${
             query.search?.trim()
-              ? Prisma.sql`concat_ws(' ', c.id::text, eu.name, eu.metadata->>'document_number', eu.metadata->>'cpf',
+              ? Prisma.sql`concat_ws(' ', c.id::text, eu.name, cs.state::text,
             pc.company_name, (SELECT m.content FROM messages m WHERE m.conversation_id = c.id AND m.company_id = c.company_id
                              ORDER BY m.created_at DESC, m.id DESC LIMIT 1))`
               : Prisma.sql`''::text`
@@ -448,27 +425,12 @@ export class ConversationsService {
         LEFT JOIN painel_clients pc ON pc.id = c.client_id AND pc.company_id = c.company_id
         WHERE c.company_id = ${companyId}::uuid
           ${query.client_id ? Prisma.sql`AND c.client_id = ${query.client_id}::uuid` : Prisma.empty}
-      ), flags AS (
-        SELECT *, COALESCE(
-          record->'promessa' = 'true'::jsonb OR record->'acordo' = 'true'::jsonb OR
-          state->'promessa' = 'true'::jsonb OR state->'acordo' = 'true'::jsonb OR state->'promessa_pagamento' = 'true'::jsonb OR
-          strpos(lower(state->>'status_cobranca'), 'acordo') > 0 OR
-          strpos(lower(session_data->>'status'), 'acordo') > 0 OR strpos(lower(session_data->>'status'), 'promessa') > 0 OR
-          COALESCE(record->>'id_acordo', '') NOT IN ('', '0', 'false') OR
-          COALESCE(state->>'id_acordo', '') NOT IN ('', '0', 'false') OR
-          COALESCE(state->>'valor_acordo', '') NOT IN ('', '0', 'false') OR
-          COALESCE(state->>'data_promessa', '') NOT IN ('', '0', 'false'), FALSE) AS deal,
-          COALESCE(record->'cpc' = 'true'::jsonb OR state->'cpc' = 'true'::jsonb OR
-          state->'contato_pessoa_certa' = 'true'::jsonb OR lower(record->>'cpc') = 'sim' OR lower(state->>'cpc') = 'sim', FALSE) AS cpc
-        FROM source
-      ), matched AS (SELECT * FROM flags WHERE ${Prisma.join(conditions, ' AND ')})
+      ), matched AS (SELECT * FROM source WHERE ${Prisma.join(conditions, ' AND ')})
       SELECT ARRAY(SELECT id FROM matched ORDER BY last_message_at DESC, id DESC
                    LIMIT ${limit} OFFSET ${(page - 1) * limit}) AS ids,
         (SELECT count(*)::int FROM matched) AS total,
         count(*) FILTER (WHERE status = 'active')::int AS active,
-        count(*) FILTER (WHERE status = 'closed')::int AS closed,
-        count(*) FILTER (WHERE deal)::int AS deals,
-        count(*) FILTER (WHERE cpc)::int AS cpc FROM flags
+        count(*) FILTER (WHERE status = 'closed')::int AS closed FROM source
     `);
     const data = result.ids.length
       ? await this.listByClient({ companyId, ids: result.ids, limit })
@@ -481,8 +443,6 @@ export class ConversationsService {
       counts: {
         active: result.active,
         closed: result.closed,
-        deals: result.deals,
-        cpc: result.cpc,
       },
     };
   }
@@ -490,23 +450,19 @@ export class ConversationsService {
   async listByClient(options?: {
     clientId?: string;
     companyId?: string | null;
-    mode?: string;
     status?: string;
-    track_id?: string;
     ids?: string[];
     limit?: number;
   }) {
-    const { clientId, companyId, mode, status, track_id } = options || {};
+    const { clientId, companyId, status } = options || {};
 
     const where: any = {};
     if (clientId) where.client_id = clientId;
     if (companyId) where.company_id = companyId;
     if (status) where.status = status;
-    if (mode) where.mode = mode;
-    if (track_id) where.track_id = track_id;
     if (options?.ids) where.id = { in: options.ids };
 
-    return this.prisma.conversations.findMany({
+    const rows = await this.prisma.conversations.findMany({
       where,
       orderBy: [{ last_message_at: 'desc' }, { id: 'desc' }],
       take: options?.limit ?? 150,
@@ -518,7 +474,6 @@ export class ConversationsService {
             metadata: true,
           },
         },
-        users: { select: { id: true, name: true, email: true } },
         painel_clients: { select: { id: true, company_name: true } },
         conversation_state: { select: { state: true, updated_at: true } },
         messages: {
@@ -526,44 +481,17 @@ export class ConversationsService {
           orderBy: { created_at: 'desc' },
           select: { content: true, created_at: true, sender_type: true },
         },
-        painel_tracks: {
-          select: {
-            id: true,
-            code: true,
-            label: true,
-            category: true,
-            icon: true,
-            color: true,
-          },
-        },
       },
     });
-  }
-
-  async updateTabulationConfig(
-    clientId: string,
-    inactivityMinutes: number,
-    companyId: string,
-  ) {
-    const client = await this.prisma.painel_clients.findUnique({
-      where: { id: clientId },
-    });
-    if (!client || client.company_id !== companyId) {
-      throw new NotFoundException('Cliente não encontrado');
-    }
-    return this.prisma.painel_clients.update({
-      where: { id: clientId },
-      data: {
-        tabulation_inactivity_minutes: Math.max(
-          5,
-          Math.min(1440, inactivityMinutes),
-        ),
-      },
-      select: {
-        id: true,
-        tabulation_inactivity_minutes: true,
-      },
-    });
+    return rows.map((row) => ({
+      ...row,
+      conversation_state: row.conversation_state
+        ? {
+            ...row.conversation_state,
+            state: projectCollectedVariables(row.conversation_state.state),
+          }
+        : null,
+    }));
   }
 
   async getState(conversationId: string): Promise<Record<string, unknown>> {
@@ -580,7 +508,7 @@ export class ConversationsService {
     const currentState = await this.getState(conversationId);
     await this.updateState(conversationId, {
       ...currentState,
-      ...variables,
+      ...businessVariables(variables),
     });
   }
 
@@ -590,7 +518,6 @@ export class ConversationsService {
       company_id: c.company_id,
       client_id: c.client_id,
       status: c.status,
-      mode: c.mode,
       end_user_id: c.end_user_id,
       origin_channel: c.origin_channel,
       external_conversation_key: c.external_conversation_key,
@@ -659,190 +586,6 @@ export class ConversationsService {
     if (rows.length > 0) {
       await tx.message_parts.createMany({ data: rows });
     }
-  }
-
-  async generateSummary(
-    conversationId: string,
-    companyId: string,
-  ): Promise<{
-    summary: string;
-    sentiment: 'positive' | 'neutral' | 'negative';
-    key_points: string[];
-    suggested_action: string;
-  }> {
-    const conv = await this.prisma.conversations.findFirst({
-      where: { id: conversationId, company_id: companyId },
-      include: {
-        messages: {
-          orderBy: { created_at: 'asc' },
-          take: 50,
-        },
-        end_users: true,
-      },
-    });
-
-    if (!conv) {
-      throw new NotFoundException('Conversa não encontrada');
-    }
-
-    const messages = conv.messages || [];
-    if (messages.length === 0) {
-      return {
-        summary: 'Conversa iniciada sem mensagens registradas.',
-        sentiment: 'neutral',
-        key_points: ['Conversa aberta'],
-        suggested_action: 'Aguardar mensagem do cliente ou iniciar contato',
-      };
-    }
-
-    const clientMsgs = messages.filter((m) => m.sender_type === 'user');
-    const aiMsgs = messages.filter(
-      (m) => m.sender_type === 'ai' || m.sender_type === 'agent',
-    );
-    const totalMsgs = messages.length;
-
-    // Análise semântica de sentimento
-    const fullText = messages
-      .map((m) => m.content || '')
-      .join(' ')
-      .toLowerCase();
-    let sentiment: 'positive' | 'neutral' | 'negative' = 'neutral';
-    if (
-      fullText.includes('obrigado') ||
-      fullText.includes('excelente') ||
-      fullText.includes('perfeito') ||
-      fullText.includes('fechado') ||
-      fullText.includes('acordo') ||
-      fullText.includes('ótimo')
-    ) {
-      sentiment = 'positive';
-    } else if (
-      fullText.includes('ruim') ||
-      fullText.includes('péssimo') ||
-      fullText.includes('processo') ||
-      fullText.includes('reclamação') ||
-      fullText.includes('erro') ||
-      fullText.includes('cancelar')
-    ) {
-      sentiment = 'negative';
-    }
-
-    const keyPoints: string[] = [];
-    keyPoints.push(
-      `Total de ${totalMsgs} mensagens (${clientMsgs.length} do cliente, ${aiMsgs.length} do assistente)`,
-    );
-    if (conv.origin_channel) {
-      keyPoints.push(`Canal de origem: ${conv.origin_channel.toUpperCase()}`);
-    }
-
-    const lastClientMsg = clientMsgs[clientMsgs.length - 1]?.content || '';
-    const summary = `Atendimento via canal ${conv.origin_channel || 'omnichannel'}. ${
-      clientMsgs.length > 0
-        ? `Cliente solicitou: "${lastClientMsg.slice(0, 100)}..."`
-        : 'Sessão aberta sem interação direta do cliente.'
-    } Status da conversa: ${conv.status}.`;
-
-    const suggestedAction =
-      conv.status === 'closed'
-        ? 'Nenhuma ação necessária (conversa já encerrada)'
-        : 'Manter IA monitorando o fluxo automático';
-
-    const result = {
-      summary,
-      sentiment,
-      key_points: keyPoints,
-      suggested_action: suggestedAction,
-    };
-
-    // Persiste no metadata da conversa
-    const currentMeta = (conv.metadata as Record<string, any>) || {};
-    await this.prisma.conversations.update({
-      where: { id: conversationId },
-      data: {
-        metadata: {
-          ...currentMeta,
-          ai_summary: result,
-          sentiment,
-        },
-      },
-    });
-
-    return result;
-  }
-
-  async generateSmartReply(
-    conversationId: string,
-    companyId: string,
-  ): Promise<{ suggestions: string[] }> {
-    const conv = await this.prisma.conversations.findFirst({
-      where: { id: conversationId, company_id: companyId },
-      include: {
-        messages: {
-          orderBy: { created_at: 'desc' },
-          take: 5,
-        },
-        end_users: true,
-      },
-    });
-
-    if (!conv) {
-      throw new NotFoundException('Conversa não encontrada');
-    }
-
-    const userName = conv.end_users?.name || 'cliente';
-    const lastMsg = conv.messages?.[0]?.content?.toLowerCase() || '';
-
-    const suggestions: string[] = [];
-
-    if (
-      lastMsg.includes('preço') ||
-      lastMsg.includes('valor') ||
-      lastMsg.includes('quanto')
-    ) {
-      suggestions.push(
-        `Olá ${userName}, nossos valores variam de acordo com o plano ideal para você. Gostaria que eu te apresentasse as opções?`,
-      );
-      suggestions.push(
-        `Com certeza! Posso gerar uma proposta personalizada para você agora mesmo.`,
-      );
-      suggestions.push(
-        `Vou consultar as condições especiais disponíveis para o seu cadastro, um instante.`,
-      );
-    } else if (
-      lastMsg.includes('pix') ||
-      lastMsg.includes('pagamento') ||
-      lastMsg.includes('boleto')
-    ) {
-      suggestions.push(
-        `Segue a chave PIX para pagamento: [chave-pix-da-empresa]. Assim que realizar, por favor envie o comprovante por aqui.`,
-      );
-      suggestions.push(
-        `Gerei o seu link de pagamento seguro. Você pode efetuar via cartão ou PIX.`,
-      );
-    } else if (
-      lastMsg.includes('humano') ||
-      lastMsg.includes('atendente') ||
-      lastMsg.includes('falar com')
-    ) {
-      suggestions.push(
-        `Olá ${userName}, já estou com o seu histórico aberto. Como posso te ajudar agora?`,
-      );
-      suggestions.push(
-        `Perfeito, sou o atendente responsável pelo seu caso. Em que posso ser útil hoje?`,
-      );
-    } else {
-      suggestions.push(
-        `Olá ${userName}, verifiquei a sua mensagem e já estou providenciando as informações.`,
-      );
-      suggestions.push(
-        `Entendido! Precisa de mais algum detalhe sobre esse assunto?`,
-      );
-      suggestions.push(
-        `Obrigado pelo contato! Se precisar de qualquer outra assistência, estou à disposição.`,
-      );
-    }
-
-    return { suggestions };
   }
 
   async exportConversation(

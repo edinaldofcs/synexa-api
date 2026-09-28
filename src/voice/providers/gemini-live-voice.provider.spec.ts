@@ -41,6 +41,23 @@ const buildConnectedProvider = () => {
   return { provider, ws };
 };
 
+it('blocks input during protected speech and resumes without buffering it', () => {
+  const { provider, ws } = buildConnectedProvider();
+  ws.send.mockClear();
+  provider.setInterruptionBlocked(true);
+  provider.sendAudio('AAAA');
+  provider.sendAudioStreamEnd();
+  expect(ws.send).not.toHaveBeenCalled();
+  provider.setInterruptionBlocked(false);
+  expect(ws.send).not.toHaveBeenCalled();
+  provider.sendAudio('BBBB');
+  expect(ws.send).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(ws.send.mock.calls[0][0]).realtimeInput.audio.data).toBe(
+    'BBBB',
+  );
+  provider.close();
+});
+
 describe('resolveLiveModel', () => {
   it('mantém o modelo configurado quando ele suporta Live (bidiGenerateContent)', () => {
     expect(resolveLiveModel('gemini-2.0-flash-live-001')).toBe(

@@ -1,3 +1,7 @@
+import {
+  validateExtraction,
+  validateConfiguredPaths,
+} from '../common/utils/extraction-validation.util';
 import { publicFetch } from '../common/utils/public-http';
 import {
   Injectable,
@@ -5,7 +9,6 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { ApisRepository } from './repositories/apis.repository';
 import { CreateApiDto } from './dto/create-api.dto';
 import { UpdateApiDto } from './dto/update-api.dto';
@@ -15,7 +18,6 @@ import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 export class ApisService {
   constructor(
     private readonly apisRepository: ApisRepository,
-    private readonly metadataService: ClientMetadataService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -31,8 +33,11 @@ export class ApisService {
 
   async create(clientId: string, payload: CreateApiDto, companyId: string) {
     await this.validateClientAccess(clientId, companyId);
+    await this.validateControls(clientId, payload);
+    validateExtraction(payload.extract_data);
+    validateConfiguredPaths(payload.body);
+    validateConfiguredPaths(payload.request_schema);
     const api = await this.apisRepository.create(clientId, payload as any);
-    void this.metadataService.refresh(clientId);
     return api;
   }
 
@@ -62,9 +67,12 @@ export class ApisService {
     if (!client || client.company_id !== companyId) {
       throw new NotFoundException(`API with ID ${id} not found`);
     }
+    await this.validateControls(existing.client_id, payload);
+    validateExtraction(payload.extract_data);
+    validateConfiguredPaths(payload.body);
+    validateConfiguredPaths(payload.request_schema);
     const api = await this.apisRepository.update(id, payload as any);
     const clientId = api?.client_id;
-    if (clientId) void this.metadataService.refresh(clientId);
     return api;
   }
 
@@ -79,8 +87,30 @@ export class ApisService {
     }
     const { api, result } = await this.apisRepository.remove(id);
     const clientId = api?.client_id;
-    if (clientId) void this.metadataService.refresh(clientId);
     return result;
+  }
+
+  private async validateControls(clientId: string, payload: UpdateApiDto) {
+    if (payload.headers) {
+      for (const [name, value] of Object.entries(payload.headers)) {
+        if (
+          typeof value !== 'string' ||
+          !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) ||
+          /[\r\n]/.test(value)
+        )
+          throw new BadRequestException('Cabeçalho HTTP inválido');
+      }
+    }
+    if (payload.next_api_id) {
+      const target = await this.prisma.painel_apis.findFirst({
+        where: { id: payload.next_api_id, client_id: clientId },
+        select: { id: true },
+      });
+      if (!target)
+        throw new BadRequestException(
+          'A API encadeada deve pertencer ao mesmo cliente',
+        );
+    }
   }
 
   async testProxy(payload: {

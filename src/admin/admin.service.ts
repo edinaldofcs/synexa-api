@@ -1,3 +1,5 @@
+import { anonymizeConversationConsumption } from '../common/prisma/consumption-erasure';
+import { MediaService } from '../media/media.service';
 import {
   BadRequestException,
   ConflictException,
@@ -34,6 +36,7 @@ export class AdminService {
     private prisma: PrismaService,
     private localAdminService: LocalAdminService,
     @Optional() private sessionService?: SessionService,
+    private readonly media?: MediaService,
   ) {}
 
   private get adminClient(): SupabaseClient<any, 'public', any> {
@@ -91,6 +94,16 @@ export class AdminService {
   async deleteCompany(id: string) {
     await this.ensureCompanyExists(id);
 
+    const usage =
+      (await this.prisma.agent_runs.count({ where: { company_id: id } })) +
+      (await this.prisma.voice_session_telemetry.count({
+        where: { company_id: id },
+      }));
+    if (usage)
+      throw new ConflictException(
+        'Empresa possui histórico de consumo. Desative o cadastro para preservar o Billing.',
+      );
+
     // Transação única + ordem que respeita as FKs Restrict: qualquer falha
     // no meio da exclusão não pode deixar o tenant parcialmente removido.
     return this.prisma.$transaction(async (tx) => {
@@ -104,7 +117,6 @@ export class AdminService {
 
       // 2. Execuções e eventos (FKs Restrict para end_users/users/conversations)
       await tx.tool_calls.deleteMany({ where: { company_id: id } });
-      await tx.agent_runs.deleteMany({ where: { company_id: id } });
       await tx.message_events.deleteMany({ where: { company_id: id } });
       await tx.inbound_events.deleteMany({ where: { company_id: id } });
       await tx.outbox_events.deleteMany({ where: { company_id: id } });
@@ -120,10 +132,6 @@ export class AdminService {
       await tx.provider_credentials.deleteMany({ where: { company_id: id } });
 
       // 5. Voz, telefonia, interações, workflow e mídia
-      await tx.painel_interactions.deleteMany({ where: { company_id: id } });
-      await tx.voice_session_telemetry.deleteMany({
-        where: { company_id: id },
-      });
       await tx.telephony_endpoints.deleteMany({ where: { company_id: id } });
       await tx.media_assets.deleteMany({ where: { company_id: id } });
 
@@ -131,7 +139,7 @@ export class AdminService {
       await tx.messages.deleteMany({ where: { company_id: id } });
       await tx.conversations.deleteMany({ where: { company_id: id } });
 
-      // 7. Identidades e canais (Restrict com painel_clients/conversations)
+      // 5. Identidades e canais (Restrict com painel_clients/conversations)
       await tx.channel_identities.deleteMany({ where: { company_id: id } });
       await tx.end_users.deleteMany({ where: { company_id: id } });
       await tx.channel_connections.deleteMany({ where: { company_id: id } });
@@ -150,9 +158,8 @@ export class AdminService {
 
   /**
    * Remove/anonimiza dados pessoais de um end_user mantendo integridade
-   * financeira (valores de acordo permanecem p/ defesa legal - art. 16, II).
-   * Arquivos fisicos de midia NAO sao removidos do bucket (limitacao
-   * documentada; as linhas com transcript/ocr_text sao removidas).
+   * financeira (consumo numérico permanece disponível ao Billing).
+   * Remove os arquivos antes das referências para permitir repetição após falha.
    */
   async eraseEndUserData(actor: ActorContext, endUserId: string) {
     const endUser = await this.prisma.end_users.findUnique({
@@ -174,26 +181,47 @@ export class AdminService {
     });
     const convIds = conversations.map((c) => c.id);
 
-    const identities = await this.prisma.channel_identities.findMany({
-      where: { end_user_id: endUserId },
-      select: { external_user_id: true, normalized_phone: true },
-    });
-    const identifiers = [
-      ...new Set(
-        identities
-          .flatMap((i) => [i.external_user_id, i.normalized_phone])
-          .filter((v): v is string => !!v),
-      ),
-    ];
-
+    if (!this.media) throw new Error('Media cleanup unavailable');
+    for (const id of convIds)
+      await this.media.purgeConversationAssets(id, endUser.company_id);
     const erasedAt = new Date().toISOString();
     const counts = await this.prisma.$transaction(async (tx) => {
       // 1. Conteudo de execucao com PII (arguments/result/trace)
       const toolCalls = await tx.tool_calls.deleteMany({
         where: { conversation_id: { in: convIds } },
       });
-      const agentRuns = await tx.agent_runs.deleteMany({
-        where: { conversation_id: { in: convIds } },
+      const consumption = await anonymizeConversationConsumption(
+        tx,
+        endUser.company_id,
+        convIds,
+      );
+      await tx.webhook_deliveries.deleteMany({
+        where: {
+          conversation_id: { in: convIds },
+          webhook_endpoints: {
+            painel_clients: { company_id: endUser.company_id },
+          },
+        },
+      });
+      await tx.call_exports.updateMany({
+        where: {
+          company_id: endUser.company_id,
+          conversation_id: { in: convIds },
+        },
+        data: {
+          payload_enc: null,
+          destination_enc: null,
+          purged_at: new Date(),
+          status: 'cancelled',
+          lease_token: null,
+          lease_until: null,
+        },
+      });
+      await tx.outbox_events.deleteMany({
+        where: {
+          company_id: endUser.company_id,
+          aggregate_id: { in: convIds },
+        },
       });
 
       // 2. Midia com transcript/ocr do titular (linhas; arquivos em bucket
@@ -203,10 +231,6 @@ export class AdminService {
       });
 
       // 3. Telemetria de voz: mantem metricas, remove numero do chamador
-      const telemetry = await tx.voice_session_telemetry.updateMany({
-        where: { conversation_id: { in: convIds } },
-        data: { caller_number: null, metadata: {} },
-      });
 
       // 4. Conversas, mensagens (parts/state cascateiam) e eventos
       const messages = await tx.messages.deleteMany({
@@ -216,29 +240,7 @@ export class AdminService {
         where: { end_user_id: endUserId },
       });
 
-      // 5. Interacoes de cobranca: remove conteudo pessoal, preserva valores
-      //    financeiros (obrigacao legal/defesa de direitos - art. 16, II)
-      const interactions = await tx.painel_interactions.updateMany({
-        where: {
-          company_id: endUser.company_id,
-          OR: [
-            ...(identifiers.length
-              ? [{ client_identifier: { in: identifiers } }]
-              : []),
-            ...(endUser.name ? [{ client_name: endUser.name }] : []),
-          ],
-        },
-        data: {
-          client_identifier: null,
-          client_name: null,
-          summary: null,
-          messages: [],
-          context_variables: {},
-          recording_url: null,
-        },
-      });
-
-      // 7. Identidades de canal e o registro do titular
+      // 5. Identidades de canal e o registro do titular
       await tx.channel_identities.deleteMany({
         where: { end_user_id: endUserId },
       });
@@ -249,9 +251,8 @@ export class AdminService {
         messages_removed: messages.count,
         media_removed: media.count,
         tool_calls_removed: toolCalls.count,
-        agent_runs_removed: agentRuns.count,
-        telemetry_anonymized: telemetry.count,
-        interactions_anonymized: interactions.count,
+        agent_runs_anonymized: consumption.runs,
+        telemetry_anonymized: consumption.telemetry,
       };
     });
 

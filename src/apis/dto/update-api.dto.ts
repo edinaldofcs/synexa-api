@@ -7,6 +7,10 @@ import {
 } from 'class-validator';
 
 export class UpdateApiDto {
+  @IsObject()
+  @IsOptional()
+  headers?: Record<string, string>;
+
   @IsString()
   @IsOptional()
   agent_id?: string;

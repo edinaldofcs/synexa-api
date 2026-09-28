@@ -1,3 +1,13 @@
+import { applyExtractModifier } from '../common/utils/api-extraction.util';
+import { validateExtraction } from '../common/utils/extraction-validation.util';
+import {
+  readExtractionPath,
+  isSafePath,
+  readVariable,
+  variableKey,
+  businessVariables,
+  savedRequestVariables,
+} from '../common/utils/session-variables.util';
 import { publicFetch } from '../common/utils/public-http';
 import {
   startHttpAudit,
@@ -13,7 +23,7 @@ import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 
 const TOOLS_CACHE_TTL_SECONDS = 30;
 
-/** Forma de UUID v4 usada para distinguir id de nome legado (next_tool). */
+/** UUID shape used to validate configured API targets. */
 const UUID_SHAPE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -100,7 +110,8 @@ export class VoiceToolsService {
     return apis.map((api) => ({
       id: api.id,
       apiName: api.name,
-      name: this.toFunctionName(api.name, api.id, takenNames),
+      name:
+        api.function_name || this.toFunctionName(api.name, api.id, takenNames),
       description:
         api.description ||
         `Executa a API "${api.name}" e retorna os dados encontrados.`,
@@ -111,30 +122,13 @@ export class VoiceToolsService {
       body: api.body,
       extract_data: api.extract_data,
       next_api_id: this.resolveNextApiId(api as any),
-      next_tool: api.next_tool,
     }));
   }
 
-  /**
-   * Resolve o alvo de encadeamento de uma API na ordem correta:
-   * 1. `next_api_id` da linha crua (se existir como coluna);
-   * 2. `next_api_id` salvo na metadata (jsonb headers) pelo painel — UUID;
-   * 3. `next_tool` legado (nome da API filha).
-   *
-   * O repositório de APIs (ApisRepository.splitPayload) guarda campos
-   * desconhecidos — inclusive `next_api_id` — dentro do jsonb `headers`,
-   * e o frontend os recebe de volta via `flat()`. A linha crua do Prisma
-   * NÃO possui essas chaves, então sem esta leitura o encadeamento de voz
-   * resolve pelo NOME (`next_tool`) e a busca por id falha (P2023) ou
-   * perde o UUID salvo pelo painel.
-   */
+  /** Read the explicit chain target from the API configuration. */
   private resolveNextApiId(api: Record<string, any>): string | null {
-    const meta = this.asRecord(api.headers);
-    const candidates = [
-      (api as any).next_api_id,
-      meta.next_api_id,
-      api.next_tool,
-    ];
+    const meta = this.asRecord(api.config);
+    const candidates = [(api as any).next_api_id, meta.next_api_id];
     for (const candidate of candidates) {
       if (typeof candidate === 'string' && candidate.trim() !== '') {
         return candidate.trim();
@@ -196,7 +190,7 @@ export class VoiceToolsService {
         .replace(/_[0-9a-f]{8}(_[0-9a-f]{4}){3}_[0-9a-f]{12}$/i, '')
         .replace(/_+$/, '');
       const dbApi = allApis.find((a) => {
-        const fn = this.toFunctionName(a.name, a.id);
+        const fn = a.function_name || this.toFunctionName(a.name, a.id);
         return (
           fn === functionName ||
           a.id === functionName ||
@@ -217,7 +211,8 @@ export class VoiceToolsService {
         tool = {
           id: dbApi.id,
           apiName: dbApi.name,
-          name: this.toFunctionName(dbApi.name, dbApi.id),
+          name:
+            dbApi.function_name || this.toFunctionName(dbApi.name, dbApi.id),
           description: dbApi.description || '',
           parameters: this.buildParameters(dbApi),
           method: dbApi.method,
@@ -226,7 +221,6 @@ export class VoiceToolsService {
           body: dbApi.body,
           extract_data: dbApi.extract_data,
           next_api_id: this.resolveNextApiId(dbApi as any),
-          next_tool: dbApi.next_tool,
         } as any;
       }
     }
@@ -284,6 +278,13 @@ export class VoiceToolsService {
         headers['Content-Type'] = 'application/json';
       }
     }
+
+    const sentVariables = savedRequestVariables(
+      tool.body,
+      init.body ? body : undefined,
+    );
+    sessionState ??= {};
+    Object.assign(sessionState, sentVariables);
 
     const controller = new AbortController();
     const capture = audit
@@ -356,13 +357,14 @@ export class VoiceToolsService {
           message: fallbackMessage,
         };
       }
-
-      let consolidatedData: Record<string, unknown> = {};
+      let consolidatedData: Record<string, unknown> = { ...sentVariables };
       if (hasExtractConfig && extracted && typeof extracted === 'object') {
-        consolidatedData = { ...extracted };
+        Object.assign(consolidatedData, businessVariables(extracted));
       } else if (raw && typeof raw === 'object') {
-        consolidatedData = { ...(raw as Record<string, unknown>) };
+        Object.assign(consolidatedData, businessVariables(raw));
       }
+
+      if (sessionState) Object.assign(sessionState, consolidatedData);
 
       const chainTrail: Array<{
         from: string;
@@ -374,11 +376,8 @@ export class VoiceToolsService {
         timestamp: string;
       }> = [];
 
-      // Encadeamento: regras condicionais (_chaining) ou direto (next_api_id/next_tool)
-      const legacyNextApiId =
-        (tool as any).next_api_id ||
-        (headers.next_api_id as string) ||
-        (tool as any).next_tool;
+      // Encadeamento: regras condicionais (_chaining) ou direto (next_api_id)
+      const legacyNextApiId = (tool as any).next_api_id;
       const nextApiId = resolveChainedApiId(
         tool.extract_data,
         consolidatedData,
@@ -397,7 +396,7 @@ export class VoiceToolsService {
           );
           try {
             // O filtro `id` do Prisma é UUID: passar um nome legado
-            // (next_tool, ex: "offers") lança P2023 e aborta a cadeia em
+            // (por exemplo, "offers") lança P2023 e aborta a cadeia em
             // silêncio. O filtro por id só entra quando o valor tem forma
             // de UUID; nomes resolvem apenas por `name`.
             const isUuidValue = UUID_SHAPE.test(nextApiId.trim());
@@ -425,7 +424,8 @@ export class VoiceToolsService {
               const nextResult = await this.execute(
                 clientId,
                 agentId,
-                this.toFunctionName(nextApi.name, nextApi.id),
+                nextApi.function_name ||
+                  this.toFunctionName(nextApi.name, nextApi.id),
                 nextArgs,
                 sessionState,
                 nextVisited,
@@ -460,7 +460,6 @@ export class VoiceToolsService {
                 consolidatedData = {
                   ...consolidatedData,
                   ...childResponse,
-                  tem_ofertas: true,
                 };
               }
             }
@@ -725,26 +724,14 @@ export class VoiceToolsService {
           resolved = this.lookupSessionValue(sessionState, key);
         }
       } else if (config.source === 'system') {
-        // "Dado de Outra API / Sessão": resolve na ordem estado da sessão ->
-        // argumentos da IA. Se nada for encontrado, o campo é OMITIDO
-        // (nunca enviar o nome da variável literal como valor).
-        const varName =
-          typeof config.value === 'string'
-            ? config.value.replace(/[{}]/g, '').trim()
-            : '';
-        const keyLower = key.toLowerCase();
-        const isCpfField =
-          varName.toLowerCase().includes('cpf') || keyLower.includes('cpf');
-        resolved =
-          this.lookupSessionValue(sessionState, varName) ??
-          this.lookupSessionValue(sessionState, key) ??
-          (isCpfField
-            ? this.lookupSessionValue(sessionState, 'cliente_cpf')
-            : undefined) ??
-          (args as any)[varName] ??
-          (args as any)[key] ??
-          (args as any)['cliente_cpf'] ??
-          (args as any)['cpf'];
+        const source = typeof config.value === 'string' ? config.value : '';
+        resolved = readVariable(sessionState, source);
+        if (
+          (resolved === undefined || resolved === null || resolved === '') &&
+          config.required === true
+        ) {
+          throw new Error('SESSION_VARIABLE_REQUIRED: ' + source);
+        }
       } else if ('value' in config) {
         const rawVal = config.value;
         if (
@@ -786,6 +773,7 @@ export class VoiceToolsService {
   }
 
   private applyExtractData(raw: unknown, extractData: unknown) {
+    validateExtraction(extractData);
     const mapping = this.asRecord(extractData);
     const keys = Object.keys(mapping).filter(
       (k) =>
@@ -798,15 +786,25 @@ export class VoiceToolsService {
     );
     if (!keys.length) return raw;
     const result: Record<string, unknown> = {};
-    for (const key of keys) {
-      const config = mapping[key];
+    for (const rawKey of keys) {
+      const key = variableKey(rawKey);
+      const config = mapping[rawKey];
       if (typeof config === 'boolean' || typeof config === 'number') {
         result[key] = config;
       } else if (typeof config === 'string') {
         result[key] = this.getByPath(raw, config);
+      } else if (
+        config &&
+        typeof config === 'object' &&
+        'value' in config &&
+        !('path' in config)
+      ) {
+        result[key] = (config as any).value;
       } else if (config && typeof config === 'object' && 'path' in config) {
         const cfg = config as any;
         let value = this.getByPath(raw, String(cfg.path || ''));
+        if (Array.isArray(value) && cfg.max_items > 0)
+          value = value.slice(0, cfg.max_items);
         let matchedRule = false;
         if (cfg.rules?.length) {
           const res = this.evaluateComparisonRules(value, cfg.rules, raw);
@@ -814,6 +812,8 @@ export class VoiceToolsService {
           matchedRule = res.matched;
         }
 
+        if (cfg.modifier && (!cfg.rules?.length || matchedRule))
+          value = applyExtractModifier(value, cfg.modifier);
         const isMissing = value === null || value === undefined || value === '';
         const ruleFailedWithFallback =
           Boolean(cfg.rules?.length) &&
@@ -899,6 +899,14 @@ export class VoiceToolsService {
     }
 
     if (val === null || val === undefined) return false;
+    if (
+      typeof val === 'boolean' &&
+      (compareVal === 'true' || compareVal === 'false') &&
+      (op === '==' || op === '!=')
+    ) {
+      const equal = val === (compareVal === 'true');
+      return op === '==' ? equal : !equal;
+    }
 
     if (
       op === '==' &&
@@ -1018,40 +1026,14 @@ export class VoiceToolsService {
   }
 
   private getByPath(value: unknown, path: string): unknown {
-    const direct = path.split('.').reduce<unknown>((current, key) => {
-      if (!current || typeof current !== 'object') return undefined;
-      return (current as Record<string, unknown>)[key];
-    }, value);
-
-    if (direct !== undefined && direct !== null) return direct;
-
-    if (
-      typeof value === 'object' &&
-      value !== null &&
-      'data' in value &&
-      !path.startsWith('data.')
-    ) {
-      return path.split('.').reduce<unknown>(
-        (current, key) => {
-          if (!current || typeof current !== 'object') return undefined;
-          return (current as Record<string, unknown>)[key];
-        },
-        (value as any).data,
-      );
-    }
-
-    return undefined;
+    return readExtractionPath(value, path);
   }
 
   private lookupSessionValue(
     state: Record<string, unknown> | undefined,
     path: string,
   ): unknown {
-    if (!state || !path) return undefined;
-    return path.split('.').reduce<unknown>((current, part) => {
-      if (!current || typeof current !== 'object') return undefined;
-      return (current as Record<string, unknown>)[part];
-    }, state);
+    return readVariable(state, path);
   }
 
   private setDeepValue(
@@ -1059,6 +1041,7 @@ export class VoiceToolsService {
     path: string,
     value: unknown,
   ) {
+    if (!isSafePath(path)) throw new Error('INVALID_PATH');
     const parts = path.split('.');
     let current = target;
     parts.forEach((part, index) => {

@@ -1,4 +1,11 @@
+import {
+  clientIdentity,
+  businessVariables,
+  variableKey,
+} from '../common/utils/session-variables.util';
+import { InboundDataMapperService } from '../common/services/inbound-data-mapper.service';
 import { ApiWaitController } from './services/api-wait-controller';
+import { InitialSpeechGuard } from './services/initial-speech-guard';
 import { WaitingMusicService } from '../media/waiting-music.service';
 import { readWaitingMusic } from '../media/waiting-music.util';
 import { randomUUID } from 'crypto';
@@ -425,6 +432,7 @@ export class VoiceGateway
         }),
     );
     let stopHeartbeat: (() => void) | undefined;
+    let initialSpeechGuard: InitialSpeechGuard | undefined;
     let exportEnabled = false;
     const pendingWork = new VoiceWorkTracker();
     let pendingHangupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -433,6 +441,7 @@ export class VoiceGateway
     const closeVoiceSession = async (reason = 'connection_closed') => {
       if (voiceSessionClosed) return closingPromise;
       voiceSessionClosed = true;
+      initialSpeechGuard?.cancel();
       apiWait.dispose();
       if (pendingHangupTimer) {
         clearTimeout(pendingHangupTimer);
@@ -801,60 +810,28 @@ export class VoiceGateway
                 );
             }
 
-            // Extrai variáveis padrão da sessão configuradas no cliente (inbound_variable_mapping)
-            // Paridade com a telefonia Asterisk/SIP (VoiceCallSession)
-            const defaultSessionVars: Record<string, any> = {};
+            const identity = clientIdentity(clientDb);
             const inboundMeta = (clientMeta.inbound_variable_mapping ||
               clientMeta.inbound_mapping) as any;
-            if (inboundMeta?.default_variables) {
-              if (Array.isArray(inboundMeta.default_variables)) {
-                for (const item of inboundMeta.default_variables) {
-                  if (item?.key) {
-                    const cleanK = String(item.key)
-                      .replace(/[[\]{}]/g, '')
-                      .trim();
-                    defaultSessionVars[cleanK] = item.value;
-                    defaultSessionVars[item.key] = item.value;
-                  }
-                }
-              } else if (typeof inboundMeta.default_variables === 'object') {
-                for (const [k, v] of Object.entries(
-                  inboundMeta.default_variables,
-                )) {
-                  const cleanK = String(k)
-                    .replace(/[[\]{}]/g, '')
-                    .trim();
-                  defaultSessionVars[cleanK] = v;
-                  defaultSessionVars[k] = v;
-                }
-              }
-            }
-
+            const mappedVariables =
+              new InboundDataMapperService().mapInboundData(
+                {
+                  ...businessVariables(msg.variables),
+                  ...businessVariables(msg.contextVariables),
+                },
+                inboundMeta,
+                'voice',
+              );
             session.beginSession({
               companyId: authenticatedUser.company_id,
               agentId: selectedAgent?.id,
               state: {
-                ...(selectedAgent?.id
-                  ? { current_agent_id: selectedAgent.id }
-                  : {}),
-                nome_agente:
-                  clientDb?.agent_name ||
-                  selectedAgent?.service_step ||
-                  'Assistente',
-                agent_name:
-                  clientDb?.agent_name ||
-                  selectedAgent?.service_step ||
-                  'Assistente',
-                nome_empresa: clientDb?.company_name || 'Synexa',
-                company_name: clientDb?.company_name || 'Synexa',
-                ...defaultSessionVars,
-                ...(msg.variables && typeof msg.variables === 'object'
-                  ? msg.variables
-                  : {}),
-                ...(msg.contextVariables &&
-                typeof msg.contextVariables === 'object'
-                  ? msg.contextVariables
-                  : {}),
+                ...mappedVariables,
+                ...identity,
+                current_agent_id: selectedAgent?.id,
+                canal: 'voice',
+                origin_channel: 'voice',
+                channel: 'voice',
               },
             });
             const voiceEngine =
@@ -904,6 +881,7 @@ export class VoiceGateway
                 company_id: session.companyId!,
                 client_id: session.clientId,
                 origin_channel: 'voice',
+                current_agent_id: session.agentId,
                 status: 'active',
                 metadata: {
                   voice_name: session.voiceName,
@@ -914,9 +892,7 @@ export class VoiceGateway
             });
             session.conversationId = conversation.id;
             exportEnabled = conversation.exportEnabled;
-            stopHeartbeat = exportEnabled
-              ? startVoiceHeartbeat(this.prisma, conversation.id)
-              : undefined;
+            stopHeartbeat = startVoiceHeartbeat(this.prisma, conversation.id);
 
             // Canal Web sob o mesmo contrato ITelephonyAdapter da telefonia:
             // o pipeline de áudio (gate → provider → retorno) é único.
@@ -1106,24 +1082,6 @@ export class VoiceGateway
               }> = [];
               let requestedAgent: any = null;
               let switchReason = '';
-              // Configs das APIs do agente (para aplicar save_to_session)
-              let apiToolRecords: Awaited<
-                ReturnType<typeof this.voiceToolsService.getAgentTools>
-              > = [];
-              if (
-                functionCalls.some(
-                  (call: any) => !call?.name?.startsWith('subagent_'),
-                )
-              ) {
-                try {
-                  apiToolRecords = await this.voiceToolsService.getAgentTools(
-                    session.clientId,
-                    session.agentId,
-                  );
-                } catch {
-                  apiToolRecords = [];
-                }
-              }
               for (const call of functionCalls) {
                 const startedAt = Date.now();
                 const executionId = randomUUID();
@@ -1227,10 +1185,7 @@ export class VoiceGateway
                     sendToClient({
                       type: 'context_variables',
                       variables: {
-                        nome_agente: clientDb?.agent_name || 'Assistente',
-                        agent_name: clientDb?.agent_name || 'Assistente',
-                        nome_empresa: clientDb?.company_name || 'Synexa',
-                        company_name: clientDb?.company_name || 'Synexa',
+                        ...identity,
                         ...session.state,
                       },
                     });
@@ -1337,20 +1292,12 @@ export class VoiceGateway
                               ),
                           ),
                         );
-                  // Campos marcados como "Salvar valor enviado na sessão"
-                  const sessionSaves = collectSessionSavesBound(
-                    apiToolRecords,
-                    call.name,
-                    args,
-                  );
                   const hasReturnedState =
                     Object.keys(returnedState).length > 0;
-                  const hasSessionSaves = Object.keys(sessionSaves).length > 0;
-                  if (hasReturnedState || hasSessionSaves) {
+                  if (hasReturnedState) {
                     session.state = pruneSessionState(
                       mergeApiReturnIntoState(session.state, {
                         returnedState,
-                        sessionSaves,
                       }),
                     );
                     await flushConversationState().catch(() => undefined);
@@ -1363,10 +1310,7 @@ export class VoiceGateway
                     sendToClient({
                       type: 'context_variables',
                       variables: {
-                        nome_agente: clientDb?.agent_name || 'Assistente',
-                        agent_name: clientDb?.agent_name || 'Assistente',
-                        nome_empresa: clientDb?.company_name || 'Synexa',
-                        company_name: clientDb?.company_name || 'Synexa',
+                        ...identity,
                         ...session.state,
                       },
                     });
@@ -1461,56 +1405,13 @@ export class VoiceGateway
               }
             };
 
-            const collectSessionSavesBound = (
-              tools: Awaited<
-                ReturnType<typeof this.voiceToolsService.getAgentTools>
-              >,
-              functionName: string,
-              args: Record<string, unknown>,
-            ): Record<string, unknown> => {
-              const tool = tools.find((t) => t.name === functionName);
-              if (!tool) return {};
-              const saves: Record<string, unknown> = {};
-              const configs: Record<string, any> = {
-                ...(typeof tool.body === 'object' && tool.body !== null
-                  ? (tool.body as Record<string, any>)
-                  : {}),
-                ...(typeof tool.parameters === 'object' &&
-                tool.parameters !== null
-                  ? (tool.parameters as Record<string, any>)
-                  : {}),
-              };
-              for (const [key, cfg] of Object.entries(configs)) {
-                const fieldCfg =
-                  cfg && typeof cfg === 'object'
-                    ? (cfg as Record<string, any>)
-                    : {};
-                const shouldSave =
-                  fieldCfg.save_to_session === true ||
-                  fieldCfg.save_to_session === 'true';
-                if (!shouldSave) continue;
-                const sessionVarName =
-                  typeof fieldCfg.session_variable === 'string' &&
-                  fieldCfg.session_variable.trim()
-                    ? fieldCfg.session_variable.trim()
-                    : key.replace(/\./g, '_');
-                let val = args[key];
-                if (val === undefined && key.includes('.')) {
-                  val = args[key.split('.').pop()!];
-                }
-                if (val !== undefined) {
-                  saves[sessionVarName] = val;
-                }
-              }
-              return saves;
-            };
-
             connectAgent = async (
               agent: any,
               handoffText?: string,
               isSwitch = false,
             ) => {
               if (voiceSessionClosed) return;
+              initialSpeechGuard?.cancel();
               const generation = session.nextGeneration();
               const [voiceTools, voiceSubagents] =
                 agent && session.clientId
@@ -1616,13 +1517,8 @@ export class VoiceGateway
               const rawPrompt = buildRawAgentPrompt(agent);
 
               const currentVariables: Record<string, any> = {
-                nome_agente:
-                  clientDb?.agent_name || agent?.service_step || 'Assistente',
-                agent_name:
-                  clientDb?.agent_name || agent?.service_step || 'Assistente',
-                nome_empresa: clientDb?.company_name || 'Synexa',
-                company_name: clientDb?.company_name || 'Synexa',
                 ...session.state,
+                ...identity,
               };
 
               // Resolve variáveis {{chave}} do prompt com o estado da sessão
@@ -2010,6 +1906,14 @@ export class VoiceGateway
                         ?.allowInterruption === 'boolean'
                     ? (clientMeta.gemini_live as any).allowInterruption
                     : true;
+              const speechGuard = new InitialSpeechGuard(
+                !isSwitch && agent?.is_initial === true,
+                (blocked) => {
+                  session.isGreetingPlaying = blocked;
+                  provider.setInterruptionBlocked?.(blocked);
+                },
+              );
+              initialSpeechGuard = speechGuard;
               provider.connect({
                 allowInterruption,
                 apiKey,
@@ -2206,12 +2110,6 @@ export class VoiceGateway
                                   ? 'cb2694c3-715f-4da9-99f3-1c974fff2928'
                                   : 'Aoede');
 
-                          const customerName =
-                            (session.state.nome as string) ||
-                            (session.state.nome_cliente as string) ||
-                            (session.state.primeiro_nome as string) ||
-                            undefined;
-
                           if (resolvedApiKey) {
                             const res =
                               await this.greetingCacheService.resolveOrSynthesizeGreeting(
@@ -2228,7 +2126,6 @@ export class VoiceGateway
                                   language: flowVoice.language,
                                   voiceId,
                                   template: variation,
-                                  customerName,
                                   variables: session.state as Record<
                                     string,
                                     unknown
@@ -2249,8 +2146,8 @@ export class VoiceGateway
                               }
 
                               session.isAiSpeaking = true;
-                              session.isGreetingPlaying = true;
-                              provider.setInterruptionBlocked?.(true);
+                              speechGuard.audio(res.audioBuffer.length);
+                              speechGuard.complete();
                               session.gateSession?.notifyAiSpeakingChanged(
                                 true,
                               );
@@ -2342,9 +2239,7 @@ export class VoiceGateway
                                 Math.round(totalBytes / 48) + 200;
                               setTimeout(() => {
                                 if (generation === session.providerGeneration) {
-                                  session.isGreetingPlaying = false;
                                   session.isAiSpeaking = false;
-                                  provider.setInterruptionBlocked?.(false);
                                   session.gateSession?.notifyAiSpeakingChanged(
                                     false,
                                   );
@@ -2372,6 +2267,7 @@ export class VoiceGateway
                             'session',
                             '🤖 IA inicia a conversa (saudação automática).',
                           );
+                          speechGuard.begin();
                           provider.sendText(greetingTurn);
                         }
                       }, 0);
@@ -2384,6 +2280,7 @@ export class VoiceGateway
                     generation !== session.providerGeneration
                   )
                     return;
+                  speechGuard.audio(Buffer.from(base64Audio, 'base64').length);
                   session.isAiSpeaking = true;
                   session.gateSession?.notifyAiSpeakingChanged(true);
                   // Áudio da IA volta pelo adapter (frame JSON ao navegador)
@@ -2478,6 +2375,7 @@ export class VoiceGateway
                     generation !== session.providerGeneration
                   )
                     return;
+                  speechGuard.complete();
                   inactivity?.outputComplete();
                   session.auditTurn.complete();
                   session.isAiSpeaking = false;
@@ -2635,6 +2533,7 @@ export class VoiceGateway
                   await this.prisma.conversations.update({
                     where: { id: session.conversationId },
                     data: {
+                      current_agent_id: targetAgent.id,
                       metadata: {
                         ...((conversation?.metadata as Record<
                           string,
@@ -2656,17 +2555,8 @@ export class VoiceGateway
                 );
                 const targetRawPrompt = buildRawAgentPrompt(targetAgent);
                 const targetVariables: Record<string, any> = {
-                  nome_agente:
-                    clientDb?.agent_name ||
-                    targetAgent?.service_step ||
-                    'Assistente',
-                  agent_name:
-                    clientDb?.agent_name ||
-                    targetAgent?.service_step ||
-                    'Assistente',
-                  nome_empresa: clientDb?.company_name || 'Synexa',
-                  company_name: clientDb?.company_name || 'Synexa',
                   ...session.state,
+                  ...identity,
                 };
                 const targetSystemPrompt = buildVoiceSystemPrompt({
                   agent: targetAgent,

@@ -53,7 +53,6 @@ describe('ClientsService', () => {
   const service = new ClientsService(
     clientsRepository as never,
     duplication as never,
-    metadata as never,
     prisma as never,
     configService as never,
     credentialAuditService as never,
@@ -75,7 +74,7 @@ describe('ClientsService', () => {
 
     await expect(
       service.create(
-        { user_id: 'user-1', company_name: 'ACME' } as any,
+        { user_id: 'user-1', company_name: 'ACME', agent_name: 'Ana' } as any,
         'company-1',
       ),
     ).resolves.toEqual({
@@ -90,10 +89,10 @@ describe('ClientsService', () => {
     expect(clientsRepository.create).toHaveBeenCalledWith({
       company_id: 'company-1',
       company_name: 'ACME',
+      agent_name: 'Ana',
       metadata: {},
-      max_concurrent_calls: null,
     });
-    expect(metadata.refresh).toHaveBeenCalledWith('client-1');
+    expect(metadata.refresh).not.toHaveBeenCalled();
   });
 
   it('creates a client with sip_extension and provisions telephony_endpoints', async () => {
@@ -171,6 +170,7 @@ describe('ClientsService', () => {
         {
           user_id: 'user-1',
           company_name: 'ACME 3',
+          agent_name: 'Ana',
           sip_extension: '2000',
           telephony_provider: 'audiosocket',
         } as any,
@@ -194,6 +194,8 @@ describe('ClientsService', () => {
     await service.create(
       {
         user_id: 'user-1',
+        company_name: 'ACME 4',
+        agent_name: 'Ana',
         sip_extension: '3000',
       } as any,
       companyId,
@@ -255,7 +257,7 @@ describe('ClientsService', () => {
 
   it('preserves current provider metadata when a stale Flow saves other settings', async () => {
     const providers = {
-      groq: { apiKey: 'encrypted-placeholder', enabledModels: ['current'] },
+      groq: { enabledModels: ['current'] },
     };
     clientsRepository.findOne.mockResolvedValue({
       metadata: {
@@ -445,12 +447,16 @@ describe('ClientsService', () => {
   it('ignores legacy operation capacity on create and update', async () => {
     clientsRepository.create.mockResolvedValue({ id: 'client-1' });
     await service.create(
-      { company_name: 'ACME', max_concurrent_calls: 999 } as any,
+      {
+        company_name: 'ACME',
+        agent_name: 'Ana',
+        max_concurrent_calls: 999,
+      } as any,
       companyId,
     );
     expect(
       clientsRepository.create.mock.calls[0][0].max_concurrent_calls,
-    ).toBeNull();
+    ).toBeUndefined();
     clientsRepository.update.mockResolvedValue({
       id: 'client-1',
       company_id: companyId,

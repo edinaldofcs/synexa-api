@@ -85,7 +85,7 @@ describe('NativeToolsService', () => {
       expect(res.valid).toBe(true);
     });
 
-    it('deve resolver alias semântico (cpf -> cnpj_cpf)', () => {
+    it('não deve buscar CPF em outra variável', () => {
       const res = service.validateVariablePart(
         {
           variable_name: 'cpf',
@@ -95,8 +95,8 @@ describe('NativeToolsService', () => {
         sessionState,
       );
 
-      expect(res.ok).toBe(true);
-      expect(res.valid).toBe(true);
+      expect(res.ok).toBe(false);
+      expect(res.valid).toBe(false);
     });
 
     it('deve retornar erro se a variável não existir na sessão', () => {
@@ -129,7 +129,7 @@ describe('NativeToolsService', () => {
       expect(state.forma_pagamento).toBe('PIX');
     });
 
-    it('deve criar aliases automáticos para CPF', () => {
+    it('não deve criar aliases automáticos para CPF', () => {
       const state: Record<string, unknown> = {};
       const res = service.setSessionVariable(
         {
@@ -141,8 +141,8 @@ describe('NativeToolsService', () => {
 
       expect(res.ok).toBe(true);
       expect(state.cpf).toBe('12345678900');
-      expect(state.cnpj_cpf).toBe('12345678900');
-      expect(state.documento).toBe('12345678900');
+      expect(state.cnpj_cpf).toBeUndefined();
+      expect(state.documento).toBeUndefined();
     });
   });
 

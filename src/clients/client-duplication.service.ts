@@ -1,3 +1,4 @@
+import { clientIdentity } from '../common/utils/session-variables.util';
 import {
   BadRequestException,
   ConflictException,
@@ -12,7 +13,6 @@ import { Prisma } from '@prisma/client';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { extname } from 'path';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import type { MediaService } from '../media/media.service';
 import { TelephonyEndpointResolverService } from '../voice/services/telephony-endpoint-resolver.service';
 import { DuplicateClientDto } from './dto/duplicate-client.dto';
@@ -27,7 +27,6 @@ const TABLES = [
   'painel_agents',
   'painel_subagents',
   'painel_apis',
-  'painel_tracks',
   'provider_credentials',
   'knowledge_bases',
   'knowledge_documents',
@@ -52,7 +51,6 @@ const CONFIG_KEYS = new Set([
   'inbound_mapping',
   'interaction_mode',
   'variable_schema',
-  'session_output_config',
   'flow_layout',
   'flow_studio',
   'flow_settings',
@@ -64,7 +62,6 @@ const REFERENCE_KEYS = new Set([
   'next_agent_id',
   'next_api_id',
   'default_next_api_id',
-  'next_tool',
   'knowledge_base_id',
   'chunk_id',
   'document_id',
@@ -121,7 +118,6 @@ export class ClientDuplicationService {
       MediaService,
       'copyFlowFile' | 'removeFlowFile'
     >,
-    private readonly metadata: ClientMetadataService,
     private readonly telephony: TelephonyEndpointResolverService,
   ) {}
 
@@ -435,13 +431,13 @@ export class ClientDuplicationService {
           const testEndpoint = endpoints.find((e) => e.agent_step === 'test');
           if (testEndpoint)
             client.metadata.test_sip_extension = testEndpoint.did_number;
+          clientIdentity(client);
           await tx.painel_clients.create({ data: client as any });
 
           for (const table of [
             'painel_agents',
             'painel_subagents',
             'painel_apis',
-            'painel_tracks',
             'provider_credentials',
             'knowledge_bases',
             'media_assets',
@@ -540,14 +536,6 @@ export class ClientDuplicationService {
         },
       );
       committed = true;
-      try {
-        await this.metadata.refresh(newId);
-      } catch {
-        this.logger.error({
-          event: 'flow_copy_metadata_refresh_failed',
-          clientId: newId,
-        });
-      }
       for (const endpoint of dto.endpoints || []) {
         try {
           await this.telephony.invalidate(endpoint.did_number);

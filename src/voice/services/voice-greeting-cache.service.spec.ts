@@ -37,7 +37,7 @@ describe('VoiceGreetingCacheService', () => {
   });
 
   describe('buildCacheKey', () => {
-    it('deve gerar chave determinística com provedor, voz, template e nome sanitizado', () => {
+    it('deve gerar chave determinística sem nome pessoal', () => {
       const key = service.buildCacheKey({
         companyId: 'comp-123',
         agentId: 'ag-456',
@@ -48,20 +48,20 @@ describe('VoiceGreetingCacheService', () => {
       });
 
       expect(key).toContain(
-        'voice:greeting:comp-123:ag-456:cartesia:cb2694c3:',
+        'voice:greeting:v2:comp-123:ag-456:cartesia:cb2694c3:',
       );
-      expect(key).toContain(':edinaldo');
+      expect(key).not.toContain('edinaldo');
     });
 
-    it('deve normalizar anon quando cliente não possuir nome', () => {
+    it('deve gerar chave sem identidade quando o texto não usa variáveis', () => {
       const key = service.buildCacheKey({
         provider: 'google',
         voiceId: 'Aoede',
         template: 'Olá, tudo bem?',
       });
 
-      expect(key).toContain('voice:greeting:global:default:google:aoede:');
-      expect(key.endsWith(':anon')).toBe(true);
+      expect(key).toContain('voice:greeting:v2:global:default:google:aoede:');
+      expect(key).toMatch(/[a-f0-9]{64}$/);
     });
   });
 
@@ -107,10 +107,10 @@ describe('VoiceGreetingCacheService', () => {
         variables: { nome: 'Edinaldo', nome_cliente: 'Leonardo' },
       });
       expect(result.text).toBe('Olá Leonardo!');
-      expect(result.sanitizedName).toBe('Leonardo');
-      expect(mockRedis.get.mock.calls[0][0]).toMatch(/:leonardo$/);
+      expect(result.sanitizedName).toBe('');
+      expect(mockRedis.get.mock.calls[0][0]).not.toContain('leonardo');
     });
-    it('resolves caller names and the anonymous fallback before caching audio', async () => {
+    it('keeps an unconfigured placeholder without inferring caller identity', async () => {
       mockRedis.get.mockResolvedValue(null);
       const template =
         '[SE nome_cliente]Olá, falo com {{nome_cliente}}?[SENÃO]Olá, com quem eu falo?[FIM SE]';
@@ -148,8 +148,8 @@ describe('VoiceGreetingCacheService', () => {
 
       expect(res.fromCache).toBe(true);
       expect(res.audioBuffer).toEqual(samplePcm);
-      expect(res.sanitizedName).toBe('Edinaldo');
-      expect(res.text).toBe('Olá Edinaldo, tudo bem?');
+      expect(res.sanitizedName).toBe('');
+      expect(res.text).toBe('Olá {{primeiro_nome}}, tudo bem?');
       expect(mockSynthesizer.synthesize).not.toHaveBeenCalled();
     });
 
@@ -162,13 +162,13 @@ describe('VoiceGreetingCacheService', () => {
         provider: 'cartesia',
         voiceId: 'sofia',
         template: 'Olá, falo com {{primeiro_nome}}?',
-        customerName: 'Carlos Eduardo',
+        variables: { primeiro_nome: 'Carlos Eduardo' },
         apiKey: 'fake-api-key',
       });
 
       expect(res.fromCache).toBe(false);
       expect(res.audioBuffer).toEqual(freshlyGeneratedPcm);
-      expect(res.sanitizedName).toBe('Carlos');
+      expect(res.sanitizedName).toBe('');
       expect(mockSynthesizerFactory.get).toHaveBeenCalledWith('cartesia');
       expect(mockSynthesizer.synthesize).toHaveBeenCalledTimes(1);
       expect(mockRedis.set).toHaveBeenCalledTimes(1);
@@ -218,13 +218,14 @@ describe('VoiceGreetingCacheService', () => {
         voiceId: 'sofia',
         template: 'Olá {{primeiro_nome}}',
         names,
+        variableName: 'primeiro_nome',
         apiKey: 'fake-key',
         concurrency: 2,
       });
 
       // 4 nomes distintos após sanitização: Edinaldo, Maria Clara, Joao Pedro, Carlos
-      expect(result.total).toBe(4);
-      expect(result.synthesized).toBe(4);
+      expect(result.total).toBe(5);
+      expect(result.synthesized).toBe(5);
       expect(result.failed).toBe(0);
     });
   });
@@ -233,8 +234,8 @@ describe('VoiceGreetingCacheService', () => {
     it('deve remover todas as chaves do agente', async () => {
       const client = mockRedis.getClient();
       (client.keys as jest.Mock).mockResolvedValueOnce([
-        'voice:greeting:comp:ag1:cartesia:v1:hash:edinaldo',
-        'voice:greeting:comp:ag1:cartesia:v1:hash:maria',
+        'voice:greeting:v2:comp:ag1:cartesia:v1:hash:edinaldo',
+        'voice:greeting:v2:comp:ag1:cartesia:v1:hash:maria',
       ]);
       (client.del as jest.Mock).mockResolvedValueOnce(2);
 

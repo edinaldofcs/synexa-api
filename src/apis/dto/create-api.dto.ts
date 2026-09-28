@@ -8,6 +8,10 @@ import {
 } from 'class-validator';
 
 export class CreateApiDto {
+  @IsObject()
+  @IsOptional()
+  headers?: Record<string, string>;
+
   @IsString()
   @IsOptional()
   next_api_id?: string;

@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 @Injectable()
@@ -35,6 +39,13 @@ export class ClientsRepository {
 
   async remove(id: string) {
     return this.prisma.$transaction(async (tx) => {
+      const usage =
+        (await tx.agent_runs.count({ where: { client_id: id } })) +
+        (await tx.voice_session_telemetry.count({ where: { client_id: id } }));
+      if (usage)
+        throw new ConflictException(
+          'Cliente possui histórico de consumo e não pode ser excluído. Desative seus agentes e canais.',
+        );
       // 1. Limpar eventos de entrada do cliente
       await tx.inbound_events.deleteMany({
         where: { client_id: id },
@@ -78,7 +89,7 @@ export class ClientsRepository {
       });
 
       // 8. Deletar o cliente em painel_clients
-      // As demais tabelas (painel_agents, painel_apis, painel_tracks, media_assets,
+      // As demais tabelas (painel_agents, painel_apis, media_assets,
       // telephony_endpoints, provider_credentials, knowledge_*, etc.) possuem
       // ON DELETE CASCADE configurado no banco de dados.
       await tx.painel_clients.delete({

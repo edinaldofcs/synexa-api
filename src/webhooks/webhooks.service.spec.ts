@@ -1,125 +1,112 @@
 jest.mock('../common/utils/public-http', () => ({
-  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
+  publicFetch: (...args: any[]) => (global.fetch as any)(...args),
 }));
-import { WebhooksService } from './services/webhooks.service';
-
 jest.mock('../common/utils/ssrf-guard', () => ({
-  validateWebhookUrl: jest.fn().mockResolvedValue(undefined),
+  validateWebhookUrl: jest.fn(),
 }));
+import { createHmac } from 'crypto';
+import { WebhooksService } from './services/webhooks.service';
+import { sealWebhookSecret } from './services/webhook-secret';
 
-describe('WebhooksService - processRetry claim atômico', () => {
-  const build = (overrides: Partial<Record<string, unknown>> = {}) => {
-    const prisma = {
-      webhook_deliveries: {
-        findUnique: jest.fn(),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        update: jest.fn().mockResolvedValue({}),
-        create: jest.fn().mockResolvedValue({ id: 'delivery-new' }),
+describe('Durable message webhook delivery', () => {
+  const build = (overrides: Record<string, any> = {}) => {
+    process.env.ENCRYPTION_KEY = 'unit-test-encryption-key-not-a-real-secret';
+    const row: any = {
+      id: 'event',
+      status: 'pending',
+      attempt: 1,
+      max_attempts: 3,
+      payload: {
+        event: 'message.completed',
+        variables: { CPF: '0012', flag: false, count: 0 },
       },
-      webhook_endpoints: { findMany: jest.fn().mockResolvedValue([]) },
-      $queryRaw: jest.fn(),
-      $executeRaw: jest.fn(),
+      webhook_endpoints: {
+        url: 'https://example.test/webhook',
+        signing_secret_enc: sealWebhookSecret('test-signature'),
+      },
+      ...overrides,
     };
-    const configService = {
-      get: jest.fn().mockReturnValue('development'),
+    const prisma: any = {
+      webhook_deliveries: {
+        findUnique: jest.fn(async () => ({ ...row })),
+        findMany: jest.fn(async () => [{ id: row.id }]),
+        updateMany: jest.fn(async ({ where, data }) => {
+          if (where.lease_token && where.lease_token !== row.lease_token)
+            return { count: 0 };
+          Object.assign(row, data);
+          return { count: 1 };
+        }),
+      },
     };
-    const queueService = { addWebhookJob: jest.fn() };
+    const queue = { addWebhookJob: jest.fn() };
     const service = new WebhooksService(
-      prisma as never,
-      configService as never,
-      queueService as never,
+      prisma,
+      { get: () => 'development' } as any,
+      queue as any,
     );
-    return { prisma, queueService, service };
+    return { service, prisma, row, queue };
   };
-
-  const delivery = {
-    id: 'delivery-1',
-    webhook_endpoint_id: 'endpoint-1',
-    attempt: 1,
-    max_attempts: 3,
-    status: 'pending',
-    next_retry_at: null,
-    payload: { event: 'message.completed', conversation_id: 'conv-1' },
-    webhook_endpoints: {
-      url: 'https://cliente.example.com/hook',
-      secret_hash: 'secret',
-    },
-  };
-
   beforeEach(() => {
-    jest.restoreAllMocks();
-    global.fetch = jest.fn() as never;
-  });
-
-  it('reivindica o delivery com transição pending→processing antes de enviar', async () => {
-    const { prisma, service } = build();
-    prisma.webhook_deliveries.findUnique.mockResolvedValue(delivery);
-    (global.fetch as jest.Mock).mockResolvedValue({
+    global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => 'ok',
+      body: { cancel: jest.fn() },
     });
-
-    await service.processRetry('delivery-1');
-
-    expect(prisma.webhook_deliveries.updateMany).toHaveBeenCalledWith({
-      where: { id: 'delivery-1', status: 'pending' },
-      data: { status: 'processing' },
+  });
+  it('signs the exact payload and uses a stable event ID', async () => {
+    const { service, row } = build();
+    await service.processRetry(row.id);
+    const init = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(init.headers['X-Synexa-Signature']).toBe(
+      'sha256=' +
+        createHmac('sha256', 'test-signature')
+          .update(init.headers['X-Synexa-Timestamp'] + '.' + init.body)
+          .digest('hex'),
+    );
+    expect(init.headers['X-Synexa-Event-Id']).toBe('event');
+    expect(row.status).toBe('delivered');
+    expect(row.lease_token).toBeNull();
+  });
+  it('does not send while another worker owns a valid lease', async () => {
+    const { service } = build({
+      status: 'processing',
+      lease_until: new Date(Date.now() + 60000),
     });
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    expect(prisma.webhook_deliveries.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'delivery-1' },
-        data: expect.objectContaining({ status: 'delivered' }),
-      }),
+    await service.processRetry('event');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+  it('recovers abandoned processing, keeping the same event', async () => {
+    const { service, row } = build({
+      status: 'processing',
+      lease_token: 'old',
+      lease_until: new Date(0),
+    });
+    await service.processRetry(row.id);
+    expect(row.status).toBe('delivered');
+  });
+  it('retains a failed delivery and schedules retry without duplicating the row', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 503 });
+    const { service, row, queue } = build();
+    await service.processRetry(row.id);
+    expect(row).toMatchObject({
+      status: 'pending',
+      attempt: 2,
+      error_message: 'http_503',
+    });
+    expect(queue.addWebhookJob).toHaveBeenCalledWith(
+      { delivery_id: 'event' },
+      expect.any(Number),
     );
   });
-
-  it('ignora o envio quando outro worker já reivindicou o delivery', async () => {
-    const { prisma, service } = build();
-    prisma.webhook_deliveries.findUnique.mockResolvedValue(delivery);
+  it('ignores a lost claim', async () => {
+    const { service, prisma } = build();
     prisma.webhook_deliveries.updateMany.mockResolvedValue({ count: 0 });
-
-    await service.processRetry('delivery-1');
-
-    expect(global.fetch).not.toHaveBeenCalled();
-    expect(prisma.webhook_deliveries.update).not.toHaveBeenCalled();
-  });
-
-  it('não envia quando o delivery não está pendente', async () => {
-    const { prisma, service } = build();
-    prisma.webhook_deliveries.findUnique.mockResolvedValue({
-      ...delivery,
-      status: 'delivered',
-    });
-
-    await service.processRetry('delivery-1');
-
-    expect(prisma.webhook_deliveries.updateMany).not.toHaveBeenCalled();
+    await service.processRetry('event');
     expect(global.fetch).not.toHaveBeenCalled();
   });
-
-  it('agenda próxima tentativa e marca failed quando o envio falha', async () => {
-    const { prisma, queueService, service } = build();
-    prisma.webhook_deliveries.findUnique.mockResolvedValue(delivery);
-    (global.fetch as jest.Mock).mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => 'err',
-    });
-
-    await service.processRetry('delivery-1');
-
-    expect(prisma.webhook_deliveries.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ attempt: 2, status: 'pending' }),
-      }),
-    );
-    expect(queueService.addWebhookJob).toHaveBeenCalled();
-    expect(prisma.webhook_deliveries.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ status: 'failed' }),
-      }),
-    );
+  it('reconciles pending records even when the queue lost its job', async () => {
+    const { service, queue } = build();
+    await service.sweep();
+    expect(queue.addWebhookJob).toHaveBeenCalledWith({ delivery_id: 'event' });
   });
 });

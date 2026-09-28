@@ -1,3 +1,7 @@
+import {
+  clientIdentity,
+  businessVariables,
+} from '../common/utils/session-variables.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -46,7 +50,6 @@ import {
   retryWithBackoff,
   isRetryableError,
 } from './utils/retry-with-backoff.util';
-import { SessionDataTransformerService } from '../common/services/session-data-transformer.service';
 
 @Injectable()
 export class OrchestrationService {
@@ -63,7 +66,6 @@ export class OrchestrationService {
     private readonly modelPricingService: ModelPricingService,
     private readonly circuitBreaker: ProviderCircuitBreakerService,
     private readonly fallbackProviderService: FallbackProviderService,
-    private readonly sessionDataTransformer: SessionDataTransformerService,
   ) {}
 
   async processMessage(
@@ -77,9 +79,15 @@ export class OrchestrationService {
     const conversation =
       await this.conversationsService.getConversation(conversationId);
     const activeChannel = conversation?.origin_channel || 'webchat';
+    const identityClient = await this.prisma.painel_clients.findUnique({
+      where: { id: clientId },
+      select: { agent_name: true, company_name: true },
+    });
+    const identity = clientIdentity(identityClient);
 
     const state: Record<string, unknown> = {
       ...(await this.conversationsService.getState(conversationId)),
+      ...identity,
       canal: activeChannel,
       origin_channel: activeChannel,
       channel: activeChannel,
@@ -271,7 +279,7 @@ export class OrchestrationService {
             resultRecord.data && typeof resultRecord.data === 'object'
               ? (resultRecord.data as Record<string, unknown>)
               : resultRecord;
-          Object.assign(state, returnedState);
+          Object.assign(state, businessVariables(returnedState));
 
           // Transição pós-API: avalia as condições de ativação dos outros
           // agentes sobre o estado enriquecido com o retorno
@@ -830,47 +838,6 @@ export class OrchestrationService {
       content: output.text,
       request_id: requestId,
     });
-
-    try {
-      const conv = await this.prisma.conversations.findUnique({
-        where: { id: conversationId },
-        include: {
-          end_users: true,
-          painel_clients: { select: { metadata: true } },
-        },
-      });
-
-      if (conv) {
-        const clientMeta =
-          (conv.painel_clients?.metadata as Record<string, unknown>) || {};
-        const outputConfig = (clientMeta.session_output_config as any) || null;
-        const freshState =
-          await this.conversationsService.getState(conversationId);
-
-        const sessionRecord = this.sessionDataTransformer.transform({
-          sessionState: freshState,
-          endUser: conv.end_users,
-          conversation: conv,
-          config: outputConfig,
-        });
-
-        const existingMeta = (conv.metadata as Record<string, unknown>) || {};
-        await this.prisma.conversations.update({
-          where: { id: conversationId },
-          data: {
-            metadata: {
-              ...existingMeta,
-              session_record: sessionRecord,
-            } as any,
-          },
-        });
-      }
-    } catch (outputErr) {
-      this.logger.warn(
-        { error: (outputErr as Error).message },
-        'Falha ao atualizar session_record no handleOutput',
-      );
-    }
 
     return {
       responseText: output.text,

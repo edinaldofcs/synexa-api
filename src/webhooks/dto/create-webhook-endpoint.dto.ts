@@ -15,8 +15,8 @@ import {
 
 export class UpdateWebhookEndpointDto {
   @ValidateIf((_object, value) => value !== undefined)
-  @IsIn([1, 2])
-  payload_version?: 1 | 2;
+  @IsIn([3])
+  payload_version?: 3;
   @ValidateIf((_object, value) => value !== undefined)
   @IsUUID()
   client_id?: string;
@@ -45,8 +45,8 @@ export class UpdateWebhookEndpointDto {
 
 export class CreateWebhookEndpointDto {
   @ValidateIf((_object, value) => value !== undefined)
-  @IsIn([1, 2])
-  payload_version?: 1 | 2;
+  @IsIn([3])
+  payload_version?: 3;
   @IsUUID() client_id: string;
   @IsUrl() @IsNotEmpty() url: string;
   @IsArray()

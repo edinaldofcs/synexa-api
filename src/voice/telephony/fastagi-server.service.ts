@@ -246,7 +246,7 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
     // 1. Transporte: variáveis AGI viram metadados normalizados do adapter
     const adapter = new AsteriskFastAgiAdapter(socket, agiEnv, { trusted });
     this.logger.log(
-      `📞 [FastAGI] Chamada recebida | canal=${adapter.metadata.channelId} | caller=${adapter.metadata.callerNumber} | did=${adapter.metadata.didNumber} | vars=${JSON.stringify(adapter.metadata.customVariables || {})}`,
+      `📞 [FastAGI] Chamada recebida | canal=${adapter.metadata.channelId} | did=${adapter.metadata.didNumber}`,
     );
 
     const customVariables = (adapter.metadata.customVariables || {}) as Record<
@@ -276,6 +276,15 @@ export class FastAgiServerService implements OnModuleInit, OnModuleDestroy {
         adapter.hangup('no_route');
         return;
       }
+
+      const inboundRules = ((route.client as any)?.metadata
+        ?.inbound_variable_mapping?.rules || []) as Array<{
+        source_field: string;
+      }>;
+      adapter.importConfiguredVariables(
+        agiEnv,
+        inboundRules.map((rule) => rule.source_field),
+      );
 
       if ((route.agent as any)?.interaction_mode === 'text') {
         this.logger.warn(

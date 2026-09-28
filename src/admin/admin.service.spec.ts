@@ -12,7 +12,10 @@ describe('AdminService - deleteCompany', () => {
       webhook_deliveries: { deleteMany: jest.fn() },
       webhook_endpoints: { deleteMany: jest.fn() },
       tool_calls: { deleteMany: jest.fn() },
-      agent_runs: { deleteMany: jest.fn() },
+      agent_runs: {
+        deleteMany: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
+      },
       message_events: { deleteMany: jest.fn() },
       inbound_events: { deleteMany: jest.fn() },
       outbox_events: { deleteMany: jest.fn() },
@@ -22,8 +25,10 @@ describe('AdminService - deleteCompany', () => {
       knowledge_bases: { deleteMany: jest.fn() },
       credential_audit_logs: { deleteMany: jest.fn() },
       provider_credentials: { deleteMany: jest.fn() },
-      painel_interactions: { deleteMany: jest.fn() },
-      voice_session_telemetry: { deleteMany: jest.fn() },
+      voice_session_telemetry: {
+        deleteMany: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
+      },
       telephony_endpoints: { deleteMany: jest.fn() },
       media_assets: { deleteMany: jest.fn() },
       messages: { deleteMany: jest.fn() },
@@ -45,7 +50,9 @@ describe('AdminService - deleteCompany', () => {
   };
 
   const buildService = (tx: Record<string, any>) =>
-    new AdminService(tx as never, {} as never);
+    new AdminService(tx as never, {} as never, undefined, {
+      purgeConversationAssets: jest.fn(),
+    } as any);
 
   it('executa a exclusão completa dentro de uma única transação', async () => {
     const tx = buildTx();
@@ -121,15 +128,18 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       tool_calls: { deleteMany: jest.fn().mockResolvedValue({ count: 3 }) },
-      agent_runs: { deleteMany: jest.fn().mockResolvedValue({ count: 5 }) },
+      agent_runs: {
+        deleteMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 5 }),
+      },
+      webhook_deliveries: { deleteMany: jest.fn() },
+      call_exports: { updateMany: jest.fn() },
+      outbox_events: { deleteMany: jest.fn() },
       media_assets: { deleteMany: jest.fn().mockResolvedValue({ count: 2 }) },
       voice_session_telemetry: {
         updateMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
       messages: { deleteMany: jest.fn().mockResolvedValue({ count: 40 }) },
-      painel_interactions: {
-        updateMany: jest.fn().mockResolvedValue({ count: 4 }),
-      },
       end_users: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'eu-1',
@@ -145,7 +155,9 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
   };
 
   const buildService = (tx: Record<string, any>) =>
-    new AdminService(tx as never, {} as never);
+    new AdminService(tx as never, {} as never, undefined, {
+      purgeConversationAssets: jest.fn(),
+    } as any);
 
   it('platform_admin apaga titular dentro de uma unica transacao', async () => {
     const tx = buildTx();
@@ -166,34 +178,7 @@ describe('AdminService - eraseEndUserData (LGPD art. 18, VI)', () => {
         data: expect.objectContaining({ caller_number: null }),
       }),
     );
-    expect(tx.painel_interactions.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ company_id: 'company-1' }),
-      }),
-    );
     expect(tx.end_users.delete).toHaveBeenCalledWith({ where: { id: 'eu-1' } });
-  });
-
-  it('anonimiza interacoes pelos identificadores do titular (telefone/JID) e nome', async () => {
-    const tx = buildTx();
-    const service = buildService(tx);
-
-    await service.eraseEndUserData(
-      { id: 'admin-1', role: 'platform_admin' },
-      'eu-1',
-    );
-
-    const where = tx.painel_interactions.updateMany.mock.calls[0][0].where;
-    expect(where.OR).toEqual(
-      expect.arrayContaining([
-        {
-          client_identifier: {
-            in: ['5511999@s.whatsapp.net', '+5511999999999'],
-          },
-        },
-        { client_name: 'Joao da Silva' },
-      ]),
-    );
   });
 
   it('company_admin de outra empresa recebe Forbidden antes da transacao', async () => {

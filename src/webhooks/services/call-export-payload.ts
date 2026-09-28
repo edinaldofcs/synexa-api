@@ -1,14 +1,14 @@
-import { redactAudit } from '../../voice/services/voice-tool-audit';
-import type { conversations, painel_interactions } from '@prisma/client';
+import type { conversations, voice_session_telemetry } from '@prisma/client';
+import { projectCollectedVariables } from '../../common/utils/session-variables.util';
 import {
   buildCallTurns,
   type ExportMessage,
   type ExportTool,
 } from './call-export-turns';
 
-/** Shared by delivery and the read-only Flow preview. */
+/** One contract for delivery and the read-only Flow preview. */
 export function buildCallExportPayload(input: {
-  payloadVersion?: 1 | 2;
+  payloadVersion?: 3;
   eventId: string;
   companyId: string;
   clientId: string;
@@ -18,15 +18,15 @@ export function buildCallExportPayload(input: {
   >;
   endedAt: Date;
   recoveredCall?: boolean;
-  interaction?: Partial<painel_interactions> | null;
+  telemetry?: Partial<voice_session_telemetry> | null;
   variables?: unknown;
   messages?: ExportMessage[];
   tools: ExportTool[];
 }) {
-  const { conversation, endedAt, interaction } = input;
+  const { conversation, endedAt, telemetry } = input;
   const metadata = (conversation.metadata || {}) as Record<string, unknown>;
   return {
-    schema_version: input.payloadVersion ?? 1,
+    schema_version: 3,
     event: 'call.completed',
     event_id: input.eventId,
     occurred_at: endedAt.toISOString(),
@@ -34,11 +34,11 @@ export function buildCallExportPayload(input: {
     client_id: input.clientId,
     call: {
       id: conversation.id,
-      external_id: interaction?.call_id || metadata.call_id || null,
+      external_id: telemetry?.asterisk_unique_id || metadata.call_id || null,
       started_at: conversation.started_at,
       ended_at: endedAt,
       duration_seconds:
-        interaction?.duration_seconds ??
+        telemetry?.duration_sec ??
         Math.max(
           0,
           Math.round(
@@ -49,38 +49,17 @@ export function buildCallExportPayload(input: {
         ),
       end_reason: input.recoveredCall
         ? 'connection_lost'
-        : interaction?.hangup_cause || metadata.hangup_cause || 'completed',
-      agent_id:
-        interaction?.agent_id ||
-        metadata.agent_id ||
-        conversation.current_agent_id ||
-        null,
-      caller_number: metadata.caller || null,
-      dialed_number: metadata.did || interaction?.company_identifier || null,
-      customer_identifier: interaction?.client_identifier || null,
-      customer_name: interaction?.client_name || null,
-      variables: input.variables || interaction?.context_variables || {},
-      summary: interaction?.summary || null,
-      transcript:
-        input.payloadVersion === 2
-          ? undefined
-          : input.messages?.map(
-              ({ metadata: _metadata, ...message }) => message,
-            ),
+        : telemetry?.hangup_cause || metadata.hangup_cause || 'completed',
+      agent_id: conversation.current_agent_id || metadata.agent_id || null,
+      caller_number: telemetry?.caller_number || metadata.caller || null,
+      dialed_number: telemetry?.did_number || metadata.did || null,
+      variables: projectCollectedVariables(input.variables),
       transcript_included: input.messages !== undefined,
-      tools:
-        input.payloadVersion === 2
-          ? undefined
-          : input.tools.map(({ audit: _audit, ...tool }) => redactAudit(tool)),
-      turns: buildCallTurns(
-        input.messages,
-        input.tools,
-        input.payloadVersion === 2,
-      ),
-      usage: interaction
+      turns: buildCallTurns(input.messages, input.tools),
+      usage: telemetry
         ? {
-            total_tokens: interaction.total_tokens,
-            estimated_cost_usd: interaction.estimated_cost_usd,
+            total_tokens: telemetry.total_tokens,
+            estimated_cost_usd: telemetry.cost_usd,
           }
         : null,
     },

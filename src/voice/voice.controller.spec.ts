@@ -60,7 +60,7 @@ describe('VoiceController', () => {
   describe('prewarmGreetings', () => {
     it('deve retornar erro se agentId ou lista de nomes estiverem vazios', async () => {
       const res = await controller.prewarmGreetings(
-        { agentId: '', names: [] },
+        { agentId: '', names: [], variableName: 'Contato' },
         { company_id: 'comp-1' },
       );
       expect(res.ok).toBe(false);
@@ -73,7 +73,11 @@ describe('VoiceController', () => {
 
       await expect(
         controller.prewarmGreetings(
-          { agentId: 'ag-inexistente', names: ['Edinaldo'] },
+          {
+            agentId: 'ag-inexistente',
+            names: ['Edinaldo'],
+            variableName: 'Contato',
+          },
           { company_id: 'comp-1' },
         ),
       ).rejects.toThrow(NotFoundException);
@@ -82,6 +86,7 @@ describe('VoiceController', () => {
     it('deve executar o prewarm com sucesso para as variações do agente', async () => {
       (mockPrisma.painel_agents.findFirst as jest.Mock).mockResolvedValueOnce({
         id: 'ag-1',
+        painel_clients: { agent_name: 'Ana', company_name: 'Empresa' },
         client_id: 'cli-1',
         transitions: {
           capabilities: {
@@ -93,7 +98,11 @@ describe('VoiceController', () => {
       });
 
       const res = await controller.prewarmGreetings(
-        { agentId: 'ag-1', names: ['Edinaldo', 'Carlos'] },
+        {
+          agentId: 'ag-1',
+          names: ['Edinaldo', 'Carlos'],
+          variableName: 'Contato',
+        },
         { company_id: 'comp-1' },
       );
 

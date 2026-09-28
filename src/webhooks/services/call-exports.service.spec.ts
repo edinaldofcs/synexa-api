@@ -70,10 +70,6 @@ function setup(status = 'pending') {
         .fn()
         .mockResolvedValue({ state: { customer: 'private' } }),
     },
-    painel_interactions: {
-      findUnique: jest.fn().mockResolvedValue(null),
-      updateMany: jest.fn(),
-    },
     messages: {
       findMany: jest
         .fn()
@@ -85,10 +81,13 @@ function setup(status = 'pending') {
       findMany: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn(),
     },
-    agent_runs: { updateMany: jest.fn() },
+    agent_runs: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     webhook_deliveries: { deleteMany: jest.fn() },
     outbox_events: { deleteMany: jest.fn() },
-    voice_session_telemetry: { updateMany: jest.fn() },
+    voice_session_telemetry: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const media = { purgeConversationAssets: jest.fn() };
@@ -103,7 +102,7 @@ function setup(status = 'pending') {
 
 beforeEach(() => sender.mockReset());
 
-it.each([1, 2])(
+it.each([3])(
   'decrypts private HTTP evidence only for the webhook and joins it to the recorded transcript turn (v%s)',
   async (payloadVersion) => {
     sender.mockResolvedValue(503);
@@ -163,9 +162,7 @@ it.each([1, 2])(
     });
     expect(JSON.stringify(payload)).not.toContain('audit_enc');
     expect(payload.schema_version).toBe(payloadVersion);
-    if (payloadVersion === 1)
-      expect(payload.call.tools[0]).not.toHaveProperty('audit');
-    else {
+    {
       expect(payload.call).not.toHaveProperty('tools');
       expect(payload.call).not.toHaveProperty('transcript');
     }
@@ -208,9 +205,7 @@ it('signs the exact payload, accepts 2xx and scrubs content while preserving bil
   expect(prisma.conversations.deleteMany).toHaveBeenCalledWith({
     where: { id: 'call', company_id: 'company' },
   });
-  expect(
-    prisma.painel_interactions.updateMany.mock.calls[0][0].data,
-  ).not.toHaveProperty('total_tokens');
+
   expect(
     prisma.voice_session_telemetry.updateMany.mock.calls[0][0].data,
   ).toMatchObject({ caller_number: null, did_number: null });
@@ -300,7 +295,7 @@ it('exports the transcript when enabled', async () => {
   );
   await service.process(row.id);
   expect(
-    JSON.parse(decrypt(row.payload_enc, key)).call.transcript[0].content,
+    JSON.parse(decrypt(row.payload_enc, key)).call.turns[0].messages[0].text,
   ).toBe('private transcript');
 });
 it('recovers a disconnected call without touching unrelated calls', async () => {

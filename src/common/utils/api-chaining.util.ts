@@ -18,7 +18,7 @@
  * Ordem de resolução:
  * 1. Primeira regra cuja condição casa com os dados extraídos;
  * 2. `default_next_api_id`, se configurado;
- * 3. Fallback legado (`next_api_id`/`next_tool`) — encadeamento direto atual.
+ * 3. Encadeamento direto (`next_api_id`) — encadeamento direto atual.
  */
 
 export interface ApiChainingRule {
@@ -181,7 +181,7 @@ export function extractChainingConfig(
 /**
  * Resolve o ID da próxima API a partir das regras condicionais.
  * Sem configuração ou sem correspondência, cai no fallback legado
- * (encadeamento direto `next_api_id`/`next_tool`).
+ * (encadeamento direto `next_api_id`).
  */
 export function resolveChainedApiId(
   extractData: unknown,

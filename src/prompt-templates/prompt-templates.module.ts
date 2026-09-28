@@ -37,7 +37,6 @@ export class SaveTemplateDto extends TemplateScopeDto {
     'tools',
     'style',
     'closing',
-    'human_handover',
     'custom',
   ])
   category: string;

@@ -33,7 +33,6 @@ describe('Flow duplication contract', () => {
       'painel_agents',
       'painel_subagents',
       'painel_apis',
-      'painel_tracks',
       'provider_credentials',
       'knowledge_bases',
       'knowledge_documents',
@@ -42,12 +41,7 @@ describe('Flow duplication contract', () => {
       'knowledge_embeddings',
     ])
       db[table] = { findMany: jest.fn().mockResolvedValue([]) };
-    const service = new ClientDuplicationService(
-      db,
-      {} as any,
-      {} as any,
-      {} as any,
-    );
+    const service = new ClientDuplicationService(db, {} as any, {} as any);
     const snapshot = await (service as any).snapshot(db, clientId, {
       id: 'user',
       company_id: 'company',
@@ -123,7 +117,6 @@ describe('Flow duplication contract', () => {
     const prisma = { painel_clients: { findFirst: jest.fn() } };
     const service = new ClientDuplicationService(
       prisma as any,
-      {} as any,
       {} as any,
       {} as any,
     );

@@ -186,7 +186,7 @@ describe('InboundDataMapperService', () => {
     expect(whatsappResult.voice_only_var).toBeUndefined();
   });
 
-  it('normaliza regras com colchetes [[target]] e extrai aliases de headers SIP', () => {
+  it('normaliza regras com colchetes [[target]] e exige a origem configurada', () => {
     const rawData = {
       caller_name: 'Carlos Eduardo',
       param: '12345678909',
@@ -197,13 +197,13 @@ describe('InboundDataMapperService', () => {
       rules: [
         {
           source_channel: 'all',
-          source_field: 'X-CPF',
+          source_field: 'param',
           target_variable: '[[cnpj_cpf]]',
           transform: 'cpf_cnpj',
         },
         {
           source_channel: 'all',
-          source_field: 'X-Cliente-Nome',
+          source_field: 'caller_name',
           target_variable: '[[cliente_nome]]',
           transform: 'text',
         },
@@ -213,9 +213,9 @@ describe('InboundDataMapperService', () => {
     const result = service.mapInboundData(rawData, config, 'voice');
 
     expect(result.cnpj_cpf).toBe('123.456.789-09');
-    expect(result.cpf).toBe('123.456.789-09');
+    expect(result.cpf).toBeUndefined();
     expect(result.cliente_nome).toBe('Carlos Eduardo');
-    expect(result.nome_cliente).toBe('Carlos Eduardo');
+    expect(result.nome_cliente).toBeUndefined();
   });
 
   it('injeta variáveis padrão da sessão mesmo quando rawData for vazio ou nulo', () => {
@@ -242,11 +242,11 @@ describe('InboundDataMapperService', () => {
     };
 
     const emptyResult = service.mapInboundData({}, config, 'voice');
-    expect(emptyResult.nome_empresa).toBe('Acme Financeira');
+    expect(emptyResult.nome_empresa).toBeUndefined();
     expect(emptyResult.departamento).toBe('Cobrança');
 
     const nullResult = service.mapInboundData(null, config, 'voice');
-    expect(nullResult.nome_empresa).toBe('Acme Financeira');
+    expect(nullResult.nome_empresa).toBeUndefined();
     expect(nullResult.departamento).toBe('Cobrança');
   });
 

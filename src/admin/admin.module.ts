@@ -1,3 +1,4 @@
+import { MediaModule } from '../media/media.module';
 import { Module } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { AdminController } from './admin.controller';
@@ -12,7 +13,7 @@ import { PartnersService } from './partners.service';
 import { PlatformOwnerGuard } from '../common/auth/platform-owner.guard';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, MediaModule],
   controllers: [
     AdminController,
     PartnersController,

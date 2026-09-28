@@ -4,6 +4,10 @@ import { NotFoundException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { CallPreviewDto } from './dto/call-preview.dto';
+import { Test } from '@nestjs/testing';
+import { ValidationPipe } from '@nestjs/common';
+import { PrismaService } from '../common/prisma/prisma.service';
+import request from 'supertest';
 
 const previewBody = {
   duration_seconds: 15,
@@ -13,13 +17,91 @@ const previewBody = {
 };
 
 describe('read-only call preview', () => {
+  it('accepts persisted seed agent IDs at the root and inside MicroSIP events', async () => {
+    const agentId = '00000000-0000-0000-0000-000000000011';
+    const input = {
+      ...previewBody,
+      agent_id: agentId,
+      transcript: [{ ...previewBody.transcript[0], agent_id: agentId }],
+      tools: [{ ...previewBody.tools[0], agent_id: agentId }],
+    };
+    const dto = plainToInstance(CallPreviewDto, input);
+    expect(
+      await validate(dto, { whitelist: true, forbidNonWhitelisted: true }),
+    ).toHaveLength(0);
+    const { controller } = setup(true, true);
+    const result = await controller.previewCall(
+      { id: 'user', company_id: 'company' },
+      'client',
+      dto,
+    );
+    expect(result.payload.call.agent_id).toBe(agentId);
+    expect(result.payload.call.variables).toEqual(previewBody.variables);
+    expect(
+      result.payload.call.turns.flatMap((turn) => turn.messages),
+    ).toHaveLength(1);
+  });
+
+  it('returns HTTP 200 for a MicroSIP preview with existing local IDs', async () => {
+    const { prisma } = setup(true, true);
+    const module = await Test.createTestingModule({
+      controllers: [WebhooksController],
+      providers: [{ provide: PrismaService, useValue: prisma }],
+    }).compile();
+    const app = module.createNestApplication();
+    app.use((req: any, _res: any, next: () => void) => {
+      req.user = { id: 'user', company_id: 'company' };
+      next();
+    });
+    app.useGlobalPipes(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    );
+    await app.init();
+    try {
+      const agentId = '00000000-0000-0000-0000-000000000011';
+      const response = await request(app.getHttpServer())
+        .post(
+          '/webhooks/clients/00000000-0000-0000-0000-000000000002/call-preview',
+        )
+        .send({
+          ...previewBody,
+          agent_id: agentId,
+          transcript: [{ ...previewBody.transcript[0], agent_id: agentId }],
+          tools: [{ ...previewBody.tools[0], agent_id: agentId }],
+        })
+        .expect(200);
+      expect(response.body.payload.schema_version).toBe(3);
+      expect(response.body.payload.call.variables).toEqual(
+        previewBody.variables,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('still rejects malformed agent IDs at every nesting level', async () => {
+    const dto = plainToInstance(CallPreviewDto, {
+      ...previewBody,
+      agent_id: 'invalid',
+      transcript: [{ ...previewBody.transcript[0], agent_id: 'invalid' }],
+      tools: [{ ...previewBody.tools[0], agent_id: 'invalid' }],
+    });
+    expect((await validate(dto)).map((error) => error.property)).toEqual(
+      expect.arrayContaining(['agent_id', 'transcript', 'tools']),
+    );
+  });
+
   it('joins messages and repeated/chained API calls by source IDs without requiring private HTTP audit', async () => {
     const { controller } = setup(true, true);
     const first = '10000000-0000-4000-8000-000000000001';
     const second = '10000000-0000-4000-8000-000000000002';
     const body: CallPreviewDto = {
       ...previewBody,
-      payload_version: 2,
+      payload_version: 3,
       transcript: [
         { role: 'user', text: 'Consultar', turn_id: first },
         { role: 'ai', text: 'Localizei', turn_id: first },
@@ -119,27 +201,29 @@ describe('read-only call preview', () => {
         previewBody,
       );
       expect(result.payload).toMatchObject({
-        schema_version: 1,
+        schema_version: 3,
         event: 'call.completed',
         company_id: 'company',
         client_id: 'client',
         call: {
           duration_seconds: 15,
           variables: previewBody.variables,
-          tools: [
-            {
-              tool_name: 'consulta',
-              status: 'completed',
-              result: { ok: true },
-            },
-          ],
         },
       });
-      expect(result.payload.call.transcript).toEqual(
+      expect(
+        result.payload.call.turns.flatMap((turn) => turn.messages),
+      ).toEqual(
         includeTranscript
-          ? [{ sender_type: 'customer', content: 'Teste', created_at: null }]
-          : undefined,
+          ? [expect.objectContaining({ role: 'customer', text: 'Teste' })]
+          : [],
       );
+      expect(result.payload.call.turns.flatMap((turn) => turn.tools)).toEqual([
+        expect.objectContaining({
+          tool_name: 'consulta',
+          status: 'completed',
+          model_result: { ok: true },
+        }),
+      ]);
       expect(
         prisma.webhook_endpoints.findFirst.mock.calls[0][0].select,
       ).toEqual({ retry_policy: true });
@@ -158,9 +242,9 @@ describe('read-only call preview', () => {
     ).toMatchObject({
       configured: false,
       include_transcript: true,
-      payload_version: 2,
+      payload_version: 3,
       payload: {
-        schema_version: 2,
+        schema_version: 3,
         call: {
           turns: expect.arrayContaining([
             expect.objectContaining({
@@ -172,12 +256,12 @@ describe('read-only call preview', () => {
     });
   });
 
-  it('can simulate messages and v2 without changing a saved destination', async () => {
+  it('can simulate messages and v3 without changing a saved destination', async () => {
     const { controller, prisma } = setup(true, false);
     const result = await controller.previewCall(
       { id: 'user', company_id: 'company' },
       'client',
-      { ...previewBody, include_transcript: true, payload_version: 2 },
+      { ...previewBody, include_transcript: true, payload_version: 3 },
     );
     expect(result).toMatchObject({
       configured: true,
@@ -198,7 +282,7 @@ describe('read-only call preview', () => {
     );
     expect(saved).toMatchObject({
       include_transcript: false,
-      payload_version: 1,
+      payload_version: 3,
       settings_overridden: false,
     });
   });
@@ -214,7 +298,7 @@ describe('read-only call preview', () => {
       ...previewBody,
       company_id: 'foreign',
       duration_seconds: -1,
-      payload_version: 3,
+      payload_version: 2,
       include_transcript: 'true',
       transcript: [{ role: 'system', text: 123 }],
       tools: [{ status: 'bogus' }],
@@ -260,7 +344,7 @@ it('refuses listing without a company scope', async () => {
 });
 it('preserves the export policy on a partial enabled update', async () => {
   const policy = {
-    payload_version: 2,
+    payload_version: 3,
     retention_hours: 12,
     include_transcript: true,
     max_retries: 5,

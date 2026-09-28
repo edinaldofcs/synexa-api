@@ -10,7 +10,7 @@ it('validates retention, transcript type and client UUID', async () => {
     events: ['call.completed'],
     retention_hours: 0,
     include_transcript: 'false',
-    payload_version: 3,
+    payload_version: 2,
   });
   const errors = await validate(input);
   expect(errors.map((error) => error.property)).toEqual(

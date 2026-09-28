@@ -273,56 +273,6 @@ export function resolvePromptTemplateString(
       resolvedValue = variables[key];
     }
 
-    // 2.2 Fallbacks de aliases comuns (bidirecionais)
-    if (
-      resolvedValue === undefined ||
-      resolvedValue === null ||
-      resolvedValue === ''
-    ) {
-      const aliases: Record<string, string[]> = {
-        nome_agente: ['agent_name', 'nome_atendente', 'atendente'],
-        agent_name: ['nome_agente', 'nome_atendente', 'atendente'],
-        nome_atendente: ['nome_agente', 'agent_name', 'atendente'],
-        atendente: ['nome_agente', 'agent_name', 'nome_atendente'],
-        nome_empresa: ['company_name', 'empresa'],
-        company_name: ['nome_empresa', 'empresa'],
-        empresa: ['company_name', 'nome_empresa'],
-        nome_cliente: [
-          'client_name',
-          'caller_name',
-          'customer_name',
-          'cliente',
-        ],
-        client_name: ['nome_cliente', 'cliente', 'customer_name'],
-        cliente: [
-          'nome_cliente',
-          'client_name',
-          'caller_name',
-          'customer_name',
-        ],
-        customer_name: ['nome_cliente', 'client_name', 'cliente'],
-        caller_name: ['nome_cliente', 'client_name', 'cliente'],
-        contrato: ['contract_id', 'contract', 'numero_contrato'],
-        contract_id: ['contrato', 'contract', 'numero_contrato'],
-        contract: ['contrato', 'contract_id', 'numero_contrato'],
-        numero_contrato: ['contrato', 'contract_id', 'contract'],
-        valor_original: ['valor', 'debt_amount', 'valor_divida'],
-        valor: ['valor_original', 'debt_amount', 'valor_divida'],
-        dias_atraso: ['atraso', 'dias_em_atraso'],
-        atraso: ['dias_atraso', 'dias_em_atraso'],
-      };
-      const keyAliases = aliases[key] || [];
-      for (const alias of keyAliases) {
-        if (Object.prototype.hasOwnProperty.call(variables, alias)) {
-          const val = variables[alias];
-          if (val !== null && val !== undefined && val !== '') {
-            resolvedValue = val;
-            break;
-          }
-        }
-      }
-    }
-
     // 2.3 Verifica variáveis dinâmicas do sistema (ex: hoje, saudacao_tempo, etc.)
     if (resolvedValue === undefined || resolvedValue === null) {
       const dynamicVal = resolveDynamicSystemVariable(key, now, timeZone);

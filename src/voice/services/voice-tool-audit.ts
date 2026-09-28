@@ -171,17 +171,24 @@ export function sealToolAudit(
 /** The ID is captured before awaits, so parallel tools stay on their originating turn. */
 export class VoiceAuditTurn {
   id = randomUUID();
+  private readonly observed = new Set<string>();
+  get count() {
+    return this.observed.size;
+  }
   private answered = false;
   user() {
     if (this.answered) this.id = randomUUID();
     this.answered = false;
+    this.observed.add(this.id);
     return this.id;
   }
   assistant() {
+    this.observed.add(this.id);
     this.answered = true;
     return this.id;
   }
   complete() {
+    this.observed.add(this.id);
     this.answered = true;
   }
 }

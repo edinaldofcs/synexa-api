@@ -1,3 +1,7 @@
+import {
+  sealWebhookSecret,
+  publicWebhookEndpoint,
+} from './services/webhook-secret';
 import { validateWebhookUrl } from '../common/utils/ssrf-guard';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
@@ -58,7 +62,7 @@ export class WebhooksController {
     const savedTranscript = endpoint
       ? policy?.include_transcript === true
       : true;
-    const savedVersion = endpoint && policy?.payload_version !== 2 ? 1 : 2;
+    const savedVersion = 3 as const;
     const includeTranscript = body.include_transcript ?? savedTranscript;
     const payloadVersion = body.payload_version ?? savedVersion;
     const endedAt = new Date();
@@ -128,7 +132,7 @@ export class WebhooksController {
     const ctx = extractTenantContext(user);
     if (!ctx.companyId)
       throw new UnauthorizedException('Empresa não identificada');
-    return this.prisma.webhook_endpoints.findMany({
+    const endpoints = await this.prisma.webhook_endpoints.findMany({
       where: {
         ...(clientId ? { client_id: clientId } : {}),
         painel_clients: {
@@ -144,6 +148,7 @@ export class WebhooksController {
       },
       orderBy: { created_at: 'desc' },
     });
+    return endpoints.map(publicWebhookEndpoint);
   }
 
   @Post('endpoints')
@@ -181,16 +186,20 @@ export class WebhooksController {
           client_id: body.client_id,
           url: body.url,
           events: body.events,
-          secret_hash: secretHash,
+          signing_secret_enc: sealWebhookSecret(secretHash),
           enabled: body.enabled ?? true,
           retry_policy: {
             max_retries: 3,
             retention_hours: body.retention_hours ?? 24,
             include_transcript: body.include_transcript ?? false,
-            payload_version: body.payload_version ?? 1,
+            payload_version: body.payload_version ?? 3,
           },
         },
       })
+      .then((endpoint) => ({
+        ...publicWebhookEndpoint(endpoint),
+        signing_secret: secretHash,
+      }))
       .catch((error) => {
         if (error.code === 'P2002')
           throw new ConflictException(
@@ -239,12 +248,12 @@ export class WebhooksController {
           url: body.url,
           events: body.events,
           enabled: body.enabled,
-          secret_hash:
-            !endpoint.secret_hash &&
+          signing_secret_enc:
+            !endpoint.signing_secret_enc &&
             ((body.events ?? endpoint.events) as string[]).includes(
               'call.completed',
             )
-              ? 'whsec_' + randomBytes(24).toString('hex')
+              ? sealWebhookSecret('whsec_' + randomBytes(24).toString('hex'))
               : undefined,
           updated_at: new Date(),
           retry_policy: {
@@ -253,11 +262,11 @@ export class WebhooksController {
               body.retention_hours ?? policy.retention_hours ?? 24,
             include_transcript:
               body.include_transcript ?? policy.include_transcript ?? false,
-            payload_version:
-              body.payload_version ?? policy.payload_version ?? 1,
+            payload_version: body.payload_version ?? 3,
           },
         },
       })
+      .then(publicWebhookEndpoint)
       .catch((error) => {
         if (error.code === 'P2002')
           throw new ConflictException(
@@ -265,6 +274,29 @@ export class WebhooksController {
           );
         throw error;
       });
+  }
+
+  @Post('endpoints/:id/rotate-secret')
+  async rotateSecret(
+    @CurrentUser() user: any,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const ctx = extractTenantContext(user);
+    if (!ctx.companyId)
+      throw new UnauthorizedException('Empresa não identificada');
+    const endpoint = await this.prisma.webhook_endpoints.findFirst({
+      where: { id, painel_clients: { company_id: ctx.companyId } },
+    });
+    if (!endpoint) throw new NotFoundException('Webhook endpoint not found');
+    const secret = 'whsec_' + randomBytes(24).toString('hex');
+    const saved = await this.prisma.webhook_endpoints.update({
+      where: { id },
+      data: {
+        signing_secret_enc: sealWebhookSecret(secret),
+        updated_at: new Date(),
+      },
+    });
+    return { ...publicWebhookEndpoint(saved), signing_secret: secret };
   }
 
   @Delete('endpoints/:id')

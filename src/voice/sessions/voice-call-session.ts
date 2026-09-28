@@ -1,3 +1,12 @@
+import { patchConversationState } from '../../common/prisma/conversation-state';
+import { InitialSpeechGuard } from '../services/initial-speech-guard';
+import { NativeToolsService } from '../../common/services/native-tools.service';
+import {
+  clientIdentity,
+  businessVariables,
+  assertBusinessVariable,
+  variableKey,
+} from '../../common/utils/session-variables.util';
 import { ApiWaitController } from '../services/api-wait-controller';
 import { WaitingMusicService } from '../../media/waiting-music.service';
 import { readWaitingMusic, wavToPcm } from '../../media/waiting-music.util';
@@ -54,7 +63,6 @@ import {
 } from '../services/voice-runtime.util';
 
 import { VoiceGreetingCacheService } from '../services/voice-greeting-cache.service';
-import { extractFunnelFromState } from '../../common/utils/funnel-mapping.util';
 import { evaluateConditionsWithDetails } from '../../orchestrator/utils/condition-evaluator.util';
 
 export interface VoiceGateRuntimeConfig {
@@ -86,7 +94,7 @@ export interface VoiceCallSessionConfig {
   contextCompressionEnabled?: boolean;
   /** Config de audio gate resolvida (por padrão usa valores do cliente/env) */
   gateConfig?: VoiceGateRuntimeConfig;
-  /** Canal usado na sincronização com painel_interactions (ex: voice_sip, voice_webrtc) */
+  /** Canal de transporte da sessão (ex: voice_sip, voice_webrtc) */
   channel?: string;
   voiceEngine?: 'hybrid' | 'live_api';
   /** Provedor TTS efetivo da chamada: 'cartesia' | 'custom' | 'google'. */
@@ -170,6 +178,7 @@ export class VoiceCallSession {
   /** Transporte de telefonia iniciado (greeting aguarda isto) */
   private transportStarted = false;
   private greetingSent = false;
+  private initialSpeechGuard?: InitialSpeechGuard;
   /** Watchdog do tempo limite da chamada (max_call_duration_sec) */
   private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   /** Sinaliza que a IA solicitou encerramento e aguarda o término da fala da despedida */
@@ -276,6 +285,13 @@ export class VoiceCallSession {
         companyId,
       } = this.config;
       let selectedAgent = initialSelectedAgent;
+      this.initialSpeechGuard = new InitialSpeechGuard(
+        initialSelectedAgent?.is_initial === true,
+        (blocked) => {
+          this.isGreetingPlaying = blocked;
+          this.liveProvider.setInterruptionBlocked?.(blocked);
+        },
+      );
 
       // 1. Consolida e Mapeia variáveis recebidas da telefonia (ex: Asterisk AGI / CallFlex)
       let inboundConfig: InboundMappingConfig | undefined;
@@ -298,78 +314,33 @@ export class VoiceCallSession {
         }
       }
 
-      const fallbackAgentName =
-        clientAgentName ||
-        (selectedAgent as any)?.agent_name ||
-        (selectedAgent as any)?.name ||
-        'Maria';
-      const fallbackCompanyName = clientCompanyName || 'Cliente';
-
-      // Nome da PESSOA na linha: prioridade para o caller_name filtrado que
-      // o servidor de telefonia já normalizou (ex.: descarta o display name
-      // padrão do softphone "microsip"); por último o caller_name cru.
-      const adapterCustomVars = (this.telephonyAdapter.metadata
-        .customVariables || {}) as Record<string, unknown>;
-      const rawCallerName =
-        (adapterCustomVars.caller_name as string) ||
-        this.telephonyAdapter.metadata.callerName ||
-        '';
-      const callerNameClean =
-        /^(microsip|unknown|anonymous|desconhecido)$/i.test(
-          rawCallerName.trim(),
-        )
-          ? ''
-          : rawCallerName.trim();
-
-      const rawContextVariables: Record<string, any> = {
-        ...adapterCustomVars,
-        canal: 'voice',
-        origin_channel: 'voice',
-        channel: 'voice',
+      const identity = clientIdentity({
+        agent_name: clientAgentName,
+        company_name: clientCompanyName,
+      });
+      const rawContextVariables = {
+        ...businessVariables(this.telephonyAdapter.metadata.customVariables),
         caller_number: this.telephonyAdapter.metadata.callerNumber,
-        caller_name: callerNameClean,
+        caller_name: this.telephonyAdapter.metadata.callerName,
         did_number: this.telephonyAdapter.metadata.didNumber,
         channel_id: this.telephonyAdapter.metadata.channelId,
-        nome_agente: fallbackAgentName,
-        agent_name: fallbackAgentName,
-        // nome_cliente = nome da PESSOA na linha (caller_name limpo, ou
-        // sobrescrito pelo mapeamento inbound de variáveis); NUNCA o nome da empresa
-        nome_cliente: callerNameClean,
-        // nome_empresa/empresa/company_name = empresa (tenant)
-        nome_empresa: fallbackCompanyName,
-        company_name: fallbackCompanyName,
-        empresa: fallbackCompanyName,
       };
-
       const mapper = new InboundDataMapperService();
-      const contextVariables = mapper.mapInboundData(
-        rawContextVariables,
-        inboundConfig,
-        'voice',
-      );
+      const contextVariables = {
+        ...mapper.mapInboundData(rawContextVariables, inboundConfig, 'voice'),
+        ...identity,
+        canal: 'voice',
+        origin_channel: 'voice',
+        current_agent_id: this.config.agentId,
+        channel: 'voice',
+      };
       this.sessionState = { ...contextVariables };
-
-      // 2. Interpola variáveis no Prompt do Agente (pipeline compartilhado
-      //    com o canal Web do painel)
       const systemPrompt = buildVoiceSystemPrompt({
         agent: selectedAgent,
         agentVariables: contextVariables,
         fallbackPrompt:
-          'Você é um assistente de voz inteligente e natural. Responda com clareza e empatia.',
-        variables: {
-          ...contextVariables,
-          canal: 'voice',
-          origin_channel: 'voice',
-          channel: 'voice',
-          nome_agente: contextVariables.nome_agente || fallbackAgentName,
-          agent_name: contextVariables.agent_name || fallbackAgentName,
-          // nome da pessoa na linha: sem valor => vazio (não vaza o nome da
-          // empresa); o mapeamento inbound pode preencher
-          nome_cliente: contextVariables.nome_cliente || '',
-          nome_empresa: fallbackCompanyName,
-          company_name: fallbackCompanyName,
-          empresa: fallbackCompanyName,
-        },
+          'Você é um assistente de voz. Responda com clareza e empatia.',
+        variables: contextVariables,
       });
 
       // 3. Inicializa Conversa Omnichannel no Banco de Dados
@@ -389,28 +360,18 @@ export class VoiceCallSession {
               company_id: companyId,
               client_id: clientId,
               origin_channel: 'voice',
+              current_agent_id: this.config.agentId,
               status: 'active',
               metadata: convMetadata as any,
             },
           });
           this.conversationId = conv.id;
           this.exportEnabled = conv.exportEnabled;
-          this.stopHeartbeat = this.exportEnabled
-            ? startVoiceHeartbeat(this.prisma, conv.id)
-            : undefined;
+          this.stopHeartbeat = startVoiceHeartbeat(this.prisma, conv.id);
           this.conversationMetadata = convMetadata;
 
           // Persiste variáveis mapeadas no estado da conversa
-          await this.prisma.conversation_state.upsert({
-            where: { conversation_id: conv.id },
-            create: {
-              conversation_id: conv.id,
-              state: contextVariables as any,
-            },
-            update: {
-              state: contextVariables as any,
-            },
-          });
+          await patchConversationState(this.prisma, conv.id, contextVariables);
         } catch (err: any) {
           this.logger.error(`Erro ao criar conversa ou estado no banco`);
           throw err;
@@ -418,6 +379,19 @@ export class VoiceCallSession {
       }
 
       // 4. Carrega Tools & Subagentes
+      const nativeTools = new NativeToolsService();
+      const nativeDeclarations = (agent: any) =>
+        nativeTools.getDeclarations().filter((decl) => {
+          const caps = agent?.transitions?.capabilities || {};
+          return (
+            (decl.name === 'set_session_variable' &&
+              caps.set_variables === true) ||
+            (decl.name === 'validate_variable_part' &&
+              caps.validate_variables === true) ||
+            (decl.name === 'calculate_financial' &&
+              caps.financial_calculator === true)
+          );
+        });
       let toolsDeclarations: any[] = [];
       if (this.voiceToolsService && clientId && selectedAgent?.id) {
         try {
@@ -440,6 +414,8 @@ export class VoiceCallSession {
           this.logger.warn(`Erro ao carregar tools do agente: ${err.message}`);
         }
       }
+
+      toolsDeclarations.push(...nativeDeclarations(selectedAgent));
 
       // Adiciona tool nativa de controle de variáveis de telefonia
       toolsDeclarations.push({
@@ -545,7 +521,11 @@ export class VoiceCallSession {
                 }))
               : [];
           const names = new Set<string>();
-          toolsDeclarations = [...nextTools, ...nativeTools].filter((tool) => {
+          toolsDeclarations = [
+            ...nextTools,
+            ...nativeTools,
+            ...nativeDeclarations(targetAgent),
+          ].filter((tool) => {
             if (!tool.name || names.has(tool.name)) return false;
             names.add(tool.name);
             return true;
@@ -572,6 +552,7 @@ export class VoiceCallSession {
           await this.liveProvider.waitForOutput?.();
           if (this.isEnded) return;
           // Preserve the previous voice in the transport playback queue.
+          this.initialSpeechGuard?.cancel();
           this.isAiSpeaking = false;
           this.gateSession?.notifyAiSpeakingChanged(false);
           this.inactivity?.stop();
@@ -582,6 +563,11 @@ export class VoiceCallSession {
           this.config.model = nextModel;
           this.config.voiceName = nextVoice;
           this.sessionState.current_agent_id = targetAgent.id;
+          if (this.conversationId)
+            await this.prisma.conversations.update({
+              where: { id: this.conversationId },
+              data: { current_agent_id: targetAgent.id },
+            });
           pendingSwitchTurn = buildSwitchTurn(
             targetAgent,
             typeof this.sessionState.user_transcript === 'string'
@@ -605,6 +591,7 @@ export class VoiceCallSession {
               ...this.sessionState,
               canal: 'voice',
               origin_channel: 'voice',
+              current_agent_id: this.config.agentId,
               channel: 'voice',
             },
           });
@@ -694,6 +681,7 @@ export class VoiceCallSession {
         },
         onAudio: (base64Audio) => {
           const pcm24k = Buffer.from(base64Audio, 'base64');
+          this.initialSpeechGuard?.audio(pcm24k.length);
           this.inactivity?.outputAudio(pcm24k.length);
           if (!this.isAiSpeaking) {
             this.isAiSpeaking = true;
@@ -720,6 +708,18 @@ export class VoiceCallSession {
         },
         onUserTranscript: async (text) => {
           if (this.isEnded) return;
+          // O provedor pode concluir a geração antes de a fila telefônica tocar.
+          // Nesse intervalo ele não emite interrupted; a transcrição confirma
+          // fala do usuário e permite descartar a cauda ainda não reproduzida.
+          if (
+            text.trim() &&
+            !this.isAiSpeaking &&
+            !this.isGreetingPlaying &&
+            providerOptions.allowInterruption !== false &&
+            (this.telephonyAdapter.getQueuedAudioMs?.() ?? 0) > 0
+          ) {
+            providerOptions.onInterrupted?.();
+          }
           const turnId = this.auditTurn.user();
           this.inactivity?.userActivity();
           this.inactivity?.outputStarted();
@@ -745,6 +745,12 @@ export class VoiceCallSession {
           this.isAiSpeaking = false;
           this.onSpeakingStateChange?.('listening_user');
           this.interruptedCount++;
+          this.logger.log({
+            event: 'voice_interrupted',
+            call_id: this.id,
+            agent_id: this.config.agentId,
+            queued_audio_ms: this.telephonyAdapter.getQueuedAudioMs?.() ?? 0,
+          });
           this.inactivity?.interrupted();
           // Barge-in: descarta o áudio do Gemini ainda enfileirado para que
           // a IA pare de falar imediatamente (evita cauda obsoleta tocando)
@@ -755,6 +761,9 @@ export class VoiceCallSession {
         onTurnComplete: () => {
           if (this.isEnded) return;
           this.telephonyAdapter.finishAudio?.();
+          this.initialSpeechGuard?.complete(
+            this.telephonyAdapter.getQueuedAudioMs?.(),
+          );
           this.auditTurn.complete();
           this.inactivity?.outputComplete();
           this.isAiSpeaking = false;
@@ -869,17 +878,42 @@ export class VoiceCallSession {
                       };
                     }
 
+                    if (
+                      nativeDeclarations(selectedAgent).some(
+                        (decl) => decl.name === call.name,
+                      )
+                    ) {
+                      return {
+                        id: call.id,
+                        name: call.name,
+                        response: nativeTools.execute(
+                          call.name,
+                          call.args || {},
+                          this.sessionState,
+                        ),
+                      };
+                    }
                     if (call.name === 'set_call_variable') {
-                      const varName = call.args?.name;
+                      const varName = variableKey(
+                        String(call.args?.name || ''),
+                      );
+                      assertBusinessVariable(varName);
+                      if (/^(SYNEXA_|agi_|CHANNEL|CALLERID)/i.test(varName))
+                        throw new Error('INVALID_VARIABLE');
                       const varVal = call.args?.value;
                       if (
                         varName &&
-                        varVal &&
+                        varVal !== undefined &&
+                        varVal !== null &&
                         this.telephonyAdapter.setVariable
                       ) {
                         await this.telephonyAdapter.setVariable(
                           String(varName),
                           String(varVal),
+                        );
+                        nativeTools.setSessionVariable(
+                          { name: varName, value: varVal },
+                          this.sessionState,
                         );
                         return {
                           id: call.id,
@@ -1018,7 +1052,7 @@ export class VoiceCallSession {
                             );
                       this.sessionState = {
                         ...this.sessionState,
-                        ...returnedState,
+                        ...businessVariables(returnedState),
                       };
 
                       // Notifica variáveis de sessão enriquecidas
@@ -1166,7 +1200,8 @@ export class VoiceCallSession {
         this.liveAudioTap?.('user', pcm16k, 16000);
         const result = this.gateSession?.processChunk(
           pcm16k.toString('base64'),
-          this.isAiSpeaking,
+          this.isAiSpeaking ||
+            (this.telephonyAdapter.getQueuedAudioMs?.() ?? 0) > 0,
         );
         if (result) {
           for (const chunk of result.forwardChunks) {
@@ -1258,12 +1293,6 @@ export class VoiceCallSession {
             : this.config.voiceName ||
               (isHybrid ? 'cb2694c3-715f-4da9-99f3-1c974fff2928' : 'Aoede');
 
-        const customerName =
-          (this.sessionState.nome as string) ||
-          (this.sessionState.nome_cliente as string) ||
-          (this.sessionState.primeiro_nome as string) ||
-          undefined;
-
         if (apiKey) {
           const res =
             await this.greetingCacheService.resolveOrSynthesizeGreeting({
@@ -1281,7 +1310,6 @@ export class VoiceCallSession {
               language: resolveVoiceFlowSettings(this.config.voiceSettings)
                 .language,
               template: variation,
-              customerName,
               variables: this.sessionState,
               apiKey,
               customTts: provider === 'custom' ? customTts : undefined,
@@ -1294,12 +1322,14 @@ export class VoiceCallSession {
             );
             this.isAiSpeaking = true;
             this.onSpeakingStateChange?.('speaking_ai');
-            this.isGreetingPlaying = true;
-            this.liveProvider.setInterruptionBlocked?.(true);
+            this.initialSpeechGuard?.audio(res.audioBuffer.length);
             this.gateSession?.notifyAiSpeakingChanged(true);
             this.liveAudioTap?.('ai', res.audioBuffer, 24000);
             this.telephonyAdapter.sendAudio(res.audioBuffer);
             this.telephonyAdapter.finishAudio?.();
+            this.initialSpeechGuard?.complete(
+              this.telephonyAdapter.getQueuedAudioMs?.(),
+            );
             this.inactivity?.outputAudio(res.audioBuffer.length);
             this.inactivity?.outputComplete();
 
@@ -1311,9 +1341,8 @@ export class VoiceCallSession {
             // 24kHz 16-bit mono = 48 bytes/ms + margem de reprodução
             const playbackMs = Math.round(res.audioBuffer.length / 48) + 200;
             setTimeout(() => {
-              this.isGreetingPlaying = false;
+              if (this.isEnded) return;
               this.isAiSpeaking = false;
-              this.liveProvider.setInterruptionBlocked?.(false);
               this.gateSession?.notifyAiSpeakingChanged(false);
             }, playbackMs);
 
@@ -1331,7 +1360,10 @@ export class VoiceCallSession {
     const turn = buildGreetingTurn(agent, {
       ...this.sessionState,
     });
-    setTimeout(() => this.liveProvider.sendText(turn), 0);
+    this.initialSpeechGuard?.begin();
+    setTimeout(() => {
+      if (!this.isEnded) this.liveProvider.sendText(turn);
+    }, 0);
   }
 
   /**
@@ -1552,6 +1584,7 @@ export class VoiceCallSession {
     this.apiWait.dispose();
     if (this.isEnded) return;
     this.isEnded = true;
+    this.initialSpeechGuard?.cancel();
     // Stop media immediately; persistence may be unavailable during quota loss.
     try {
       this.liveProvider.close();
@@ -1595,14 +1628,11 @@ export class VoiceCallSession {
 
     try {
       if (this.conversationId)
-        await this.prisma.conversation_state.upsert({
-          where: { conversation_id: this.conversationId },
-          create: {
-            conversation_id: this.conversationId,
-            state: this.sessionState as any,
-          },
-          update: { state: this.sessionState as any },
-        });
+        await patchConversationState(
+          this.prisma,
+          this.conversationId,
+          this.sessionState,
+        );
       const durationSeconds = Math.max(
         1,
         Math.round((Date.now() - this.startTime) / 1000),
@@ -1646,10 +1676,14 @@ export class VoiceCallSession {
             audio_gate_closes: stats?.closes || 0,
             interrupted_count: this.interruptedCount,
             total_tokens: this.totalTokens,
-            audio_input_tokens: this.inputTokens,
-            audio_output_tokens: this.outputTokens,
+            input_tokens: this.inputTokens,
+            output_tokens: this.outputTokens,
+            turns: this.auditTurn.count,
+            exchange_rate: this.pricingService.getExchangeRate(),
             cost_usd: rawCost,
-            cost_brl: Number((rawCost * 5.5).toFixed(4)),
+            cost_brl: Number(
+              (rawCost * this.pricingService.getExchangeRate()).toFixed(4),
+            ),
             model: this.config.model || null,
             voice_name: this.config.voiceName || 'Aoede',
             audio_gate_enabled: this.gateSession?.enabled ?? true,
@@ -1671,117 +1705,13 @@ export class VoiceCallSession {
               ...this.conversationMetadata,
               hangup_cause: this.hangupCause,
               duration_sec: durationSeconds,
+              turns: this.auditTurn.count,
+              exchange_rate: this.pricingService.getExchangeRate(),
               cost_usd: rawCost,
               interrupted_count: this.interruptedCount,
             } as any,
           },
         });
-
-        // Sincroniza interação unificada (painel_interactions)
-        if (this.config.clientId && this.config.companyId) {
-          try {
-            const now = new Date();
-            const startedAt = new Date(this.startTime);
-            const funnel = extractFunnelFromState(this.sessionState, now);
-
-            await this.prisma.painel_interactions.upsert({
-              where: { session_id: this.conversationId },
-              create: {
-                company_id: this.config.companyId,
-                client_id: this.config.clientId,
-                agent_id: this.config.agentId || null,
-                agent_name: (this.sessionState?.nome_agente as string) || null,
-                session_id: this.conversationId,
-                channel: this.config.channel || 'voice_sip',
-                direction: 'inbound',
-                interaction_mode: 'voice',
-                client_identifier: funnel.client_identifier,
-                client_name: funnel.client_name,
-                has_human_answer: true,
-                human_answered_at: startedAt,
-                is_right_party: funnel.is_right_party,
-                right_party_at: funnel.right_party_at,
-                is_debt_presented: funnel.is_debt_presented,
-                debt_presented_at: funnel.debt_presented_at,
-                debt_amount:
-                  funnel.debt_amount !== null
-                    ? (funnel.debt_amount as any)
-                    : null,
-                is_agreement_reached: funnel.is_agreement_reached,
-                agreement_at: funnel.agreement_at,
-                agreement_id: funnel.agreement_id,
-                agreement_amount:
-                  funnel.agreement_amount !== null
-                    ? (funnel.agreement_amount as any)
-                    : null,
-                is_promise_to_pay: funnel.is_promise_to_pay,
-                promise_to_pay_at: funnel.promise_to_pay_at,
-                promise_due_date: funnel.promise_due_date,
-                promise_amount:
-                  funnel.promise_amount !== null
-                    ? (funnel.promise_amount as any)
-                    : null,
-                disposition: funnel.disposition,
-                barge_in_count: this.interruptedCount,
-                duration_seconds: durationSeconds,
-                billable_seconds: durationSeconds,
-                total_tokens: this.totalTokens,
-                prompt_tokens: this.inputTokens,
-                completion_tokens: this.outputTokens,
-                estimated_cost_usd: rawCost as any,
-                llm_model: this.config.model || 'gemini-2.0-flash-exp',
-                hangup_cause: this.hangupCause || null,
-                context_variables: (this.sessionState || {}) as any,
-                started_at: startedAt,
-                ended_at: now,
-                status: 'completed',
-              },
-              update: {
-                client_identifier: funnel.client_identifier || undefined,
-                client_name: funnel.client_name || undefined,
-                has_human_answer: true,
-                is_right_party: funnel.is_right_party,
-                right_party_at: funnel.right_party_at || undefined,
-                is_debt_presented: funnel.is_debt_presented,
-                debt_presented_at: funnel.debt_presented_at || undefined,
-                debt_amount:
-                  funnel.debt_amount !== null
-                    ? (funnel.debt_amount as any)
-                    : undefined,
-                is_agreement_reached: funnel.is_agreement_reached,
-                agreement_at: funnel.agreement_at || undefined,
-                agreement_id: funnel.agreement_id || undefined,
-                agreement_amount:
-                  funnel.agreement_amount !== null
-                    ? (funnel.agreement_amount as any)
-                    : undefined,
-                is_promise_to_pay: funnel.is_promise_to_pay,
-                promise_to_pay_at: funnel.promise_to_pay_at || undefined,
-                promise_due_date: funnel.promise_due_date || undefined,
-                promise_amount:
-                  funnel.promise_amount !== null
-                    ? (funnel.promise_amount as any)
-                    : undefined,
-                disposition: funnel.disposition,
-                barge_in_count: this.interruptedCount,
-                duration_seconds: durationSeconds,
-                billable_seconds: durationSeconds,
-                total_tokens: this.totalTokens,
-                prompt_tokens: this.inputTokens,
-                completion_tokens: this.outputTokens,
-                estimated_cost_usd: rawCost as any,
-                hangup_cause: this.hangupCause || undefined,
-                context_variables: (this.sessionState || {}) as any,
-                ended_at: now,
-                status: 'completed',
-              },
-            });
-          } catch (intErr: any) {
-            this.logger.warn(
-              `Falha ao registrar painel_interactions na sessão de voz: ${intErr.message}`,
-            );
-          }
-        }
       }
 
       this.logger.log(

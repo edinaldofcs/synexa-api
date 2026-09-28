@@ -5,7 +5,11 @@ import { OpenAiProvider } from '../providers/openai.provider';
 import type { AgentChatParams } from '../providers/llm-provider.interface';
 
 describe('LlmToolLoopService OpenAI', () => {
-  const executor = { buildOpenAiTools: jest.fn(), executeToolCall: jest.fn() };
+  const executor = {
+    getSessionState: jest.fn().mockResolvedValue({}),
+    buildOpenAiTools: jest.fn(),
+    executeToolCall: jest.fn(),
+  };
   const keys = { resolveApiKey: jest.fn() };
   const service = new LlmToolLoopService(
     executor as unknown as ApiToolExecutorService,

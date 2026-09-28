@@ -40,7 +40,6 @@ export interface ConversationResult {
   company_id: string;
   client_id: string | null;
   status: string;
-  mode: string | null;
   end_user_id: string | null;
   origin_channel: string | null;
   external_conversation_key: string | null;

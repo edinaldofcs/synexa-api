@@ -65,7 +65,6 @@ export class ConversationsRepository {
         origin_channel: data.origin_channel,
         external_conversation_key: data.external_conversation_key || null,
         status: 'active',
-        mode: 'auto',
         metadata: (data.metadata || {}) as any,
       },
       include: { end_users: true, channel_connections: true },
@@ -79,7 +78,6 @@ export class ConversationsRepository {
         end_users: true,
         channel_connections: true,
         conversation_state: true,
-        painel_tracks: true,
         messages: {
           orderBy: { created_at: 'asc' },
           take: 50,

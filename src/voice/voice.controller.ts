@@ -1,3 +1,4 @@
+import { clientIdentity } from '../common/utils/session-variables.util';
 import { isUuid } from '../common/utils/uuid.helper';
 import {
   Controller,
@@ -23,6 +24,7 @@ import { ActiveCallsRegistryService } from './services/active-calls-registry.ser
 import { AsteriskAmiService } from './telephony/asterisk-ami.service';
 
 export interface PrewarmGreetingsDto {
+  variableName: string;
   agentId: string;
   names: string[];
 }
@@ -86,6 +88,10 @@ export class VoiceController {
     @CurrentUser() user: { company_id: string },
   ) {
     const { agentId, names } = body;
+    if (typeof body.variableName !== 'string' || !body.variableName.trim())
+      throw new BadRequestException(
+        'Informe a variável que receberá os nomes.',
+      );
     if (!agentId || !Array.isArray(names) || names.length === 0) {
       return { ok: false, error: 'agentId e lista de nomes são obrigatórios' };
     }
@@ -95,12 +101,16 @@ export class VoiceController {
         id: agentId,
         painel_clients: { company_id: user.company_id },
       },
+      include: {
+        painel_clients: { select: { agent_name: true, company_name: true } },
+      },
     });
 
     if (!agent) {
       throw new NotFoundException('Agente não encontrado');
     }
 
+    const identity = clientIdentity(agent.painel_clients);
     const transitions = (agent.transitions as any) || {};
     const capabilities = transitions.capabilities || {};
     const variations = resolveVoiceGreetingVariations(agent);
@@ -188,6 +198,8 @@ export class VoiceController {
         voiceId,
         template,
         names,
+        variableName: body.variableName,
+        variables: identity,
         apiKey,
         customTts: provider === 'custom' ? customTts : undefined,
       });

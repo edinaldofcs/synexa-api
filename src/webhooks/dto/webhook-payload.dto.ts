@@ -20,12 +20,5 @@ export interface WebhookCallbackPayload {
     email?: string;
     custom_attributes?: Record<string, unknown>;
   };
-  /** Registro de dados consolidados e estruturados da sessão */
-  session_record?: Record<string, unknown>;
-  session_data?: {
-    operation_type?: string;
-    updated_at?: string;
-    variables?: Record<string, unknown>;
-  };
   metadata?: Record<string, unknown>;
 }

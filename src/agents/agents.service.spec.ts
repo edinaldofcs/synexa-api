@@ -26,15 +26,13 @@ describe('AgentsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new AgentsService(
-      mockRepository as never,
-      mockMetadata as never,
-      mockPrisma as never,
-    );
+    service = new AgentsService(mockRepository as never, mockPrisma as never);
 
     mockPrisma.painel_clients.findUnique.mockResolvedValue({
       id: clientId,
       company_id: companyId,
+      agent_name: 'Ana',
+      company_name: 'Empresa',
     });
   });
 
@@ -145,20 +143,16 @@ describe('AgentsService', () => {
 
       expect(agent.id).toBe('agent-1');
       expect(agent.llm_provider).toBe('gemini');
-      expect(mockPrisma.painel_agents.updateMany).toHaveBeenCalledWith({
-        where: {
-          client_id: clientId,
-          is_initial: true,
-          id: { not: 'agent-1' },
-        },
-        data: { is_initial: false },
-      });
-      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+      expect(mockRepository.create).toHaveBeenCalledWith(
+        clientId,
+        expect.objectContaining({ is_initial: true }),
+      );
+      expect(mockMetadata.refresh).not.toHaveBeenCalled();
     });
   });
 
-  describe('Mutations & Metadata Refresh', () => {
-    it('atualiza agente e atualiza cache de metadados do cliente', async () => {
+  describe('Mutations without generated metadata', () => {
+    it('atualiza agente sem regenerar metadados', async () => {
       mockRepository.findOne.mockResolvedValue({
         id: 'agent-1',
         client_id: clientId,
@@ -181,10 +175,10 @@ describe('AgentsService', () => {
         execution_order: 2,
         transitions: {},
       });
-      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+      expect(mockMetadata.refresh).not.toHaveBeenCalled();
     });
 
-    it('remove agente e atualiza cache de metadados', async () => {
+    it('remove agente sem regenerar metadados', async () => {
       mockRepository.findOne.mockResolvedValue({
         id: 'agent-1',
         client_id: clientId,
@@ -197,7 +191,7 @@ describe('AgentsService', () => {
       const result = await service.remove('agent-1', companyId);
 
       expect(result).toEqual({ success: true });
-      expect(mockMetadata.refresh).toHaveBeenCalledWith(clientId);
+      expect(mockMetadata.refresh).not.toHaveBeenCalled();
     });
   });
 });

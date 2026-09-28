@@ -63,6 +63,8 @@ export interface ITelephonyAdapter {
    * barge-in/interrupção para que a IA pare imediatamente de falar.
    */
   clearQueuedAudio?(): void;
+  /** Áudio de fala ainda aguardando reprodução no transporte, em milissegundos. */
+  getQueuedAudioMs?(): number;
   setWaitingMusic?(
     pcm24k: Buffer,
     volume: number,

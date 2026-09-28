@@ -4,7 +4,6 @@ import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve, dirname, basename } from 'path';
 import { ClientDuplicationService } from './client-duplication.service';
-import { ClientMetadataService } from '../common/metadata/client-metadata.service';
 import { AgentConfigResolver } from '../orchestrator/services/agent-config-resolver.service';
 import { ApiToolExecutorService } from '../orchestrator/services/api-tool-executor.service';
 import { KnowledgeService } from '../knowledge/knowledge.service';
@@ -13,6 +12,9 @@ import { encrypt, decrypt } from '../common/utils/crypto.util';
 
 jest.mock('../common/utils/ssrf-guard', () => ({
   validateWebhookUrl: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../common/utils/public-http', () => ({
+  publicFetch: (...args: Parameters<typeof fetch>) => global.fetch(...args),
 }));
 const databaseUrl = process.env.FLOW_DUPLICATION_TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -81,7 +83,6 @@ suite('complete flow duplication on disposable PostgreSQL', () => {
     service = new ClientDuplicationService(
       prisma as any,
       media,
-      new ClientMetadataService(prisma as any),
       resolver as any,
     );
     await prisma.companies.createMany({
@@ -106,7 +107,7 @@ suite('complete flow duplication on disposable PostgreSQL', () => {
           tentativas: 9,
           test_sip_extension: '7001',
           llm_providers: {
-            gemini: { apiKey: `enc:${encrypt(secret, encryptionKey)}` },
+            gemini: { enabledModels: ['test-model'] },
           },
         },
       },
@@ -159,8 +160,8 @@ suite('complete flow duplication on disposable PostgreSQL', () => {
           agent_id: firstAgent,
           name: 'lookup',
           url: 'https://example.com/lookup',
-          headers: { next_api_id: nextApi, headers: { Authorization: secret } },
-          next_tool: nextApi,
+          headers: { Authorization: secret },
+          config: { next_api_id: nextApi },
         },
         {
           id: nextApi,
@@ -176,15 +177,6 @@ suite('complete flow duplication on disposable PostgreSQL', () => {
           url: 'https://example.com/shared',
         },
       ],
-    });
-    await prisma.painel_tracks.create({
-      data: {
-        client_id: sourceId,
-        agent_id: firstAgent,
-        code: 'support',
-        label: 'Support',
-        description: 'Support flow',
-      },
     });
     await prisma.provider_credentials.create({
       data: {
@@ -346,8 +338,10 @@ suite('complete flow duplication on disposable PostgreSQL', () => {
     });
     const lookup = tools.find((t) => t.name === 'lookup')!;
     expect(lookup.agent_id).toBe(agents[0].id);
-    expect(lookup.next_tool).toBe(tools.find((t) => t.name === 'finish')!.id);
-    expect((lookup.headers as any).next_api_id).toBe(lookup.next_tool);
+    expect((lookup.config as any).next_api_id).toBe(
+      tools.find((t) => t.name === 'finish')!.id,
+    );
+    expect(lookup.headers).toEqual({ Authorization: secret });
     expect(tools.find((t) => t.name === 'shared_tool')!.agent_id).toBeNull();
     const clonedEndpoints = await prisma.telephony_endpoints.findMany({
       where: { client_id: copy.id },
@@ -612,7 +606,11 @@ suite('complete flow duplication on disposable PostgreSQL', () => {
 
   it('duplicates a client with no agents, documents or endpoints', async () => {
     const source = await prisma.painel_clients.create({
-      data: { company_id: actor.company_id, company_name: 'Empty flow' },
+      data: {
+        company_id: actor.company_id,
+        company_name: 'Empty flow',
+        agent_name: 'Test agent',
+      },
     });
     const copy = await service.duplicate(source.id, { endpoints: [] }, actor);
     expect(copy.company_name).toBe('Empty flow (Cópia)');

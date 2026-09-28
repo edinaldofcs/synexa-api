@@ -132,6 +132,10 @@ export class VonageVoiceAdapter implements ITelephonyAdapter {
     this.sendJson({ action: 'clear' });
   }
 
+  public getQueuedAudioMs(): number {
+    return this.pacer.getMetrics().queuedMs;
+  }
+
   public hangup(reason = 'normal_hangup'): void {
     if (this.isClosed) return;
     this.logger.log(`📞 [Vonage] Encerrando stream (${reason})`);

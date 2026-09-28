@@ -144,6 +144,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
   private readonly logger = new Logger(GeminiLiveVoiceProvider.name);
   private ws: WebSocket | null = null;
   private isReady = false;
+  private interruptionBlocked = false;
   private options: GeminiLiveConnectOptions | null = null;
   private readonly backpressureBytes: number;
   private droppedAudioFramesCount = 0;
@@ -164,6 +165,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
   }
 
   public connect(options: GeminiLiveConnectOptions): void {
+    this.interruptionBlocked = false;
     this.options = options;
     this.pendingModelText = [];
     this.outputTranscriptionSeen = false;
@@ -404,7 +406,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
   }
 
   public sendAudio(base64Pcm16: string, sampleRate = 16000): void {
-    if (!this.ws || !base64Pcm16) return;
+    if (!this.ws || !base64Pcm16 || this.interruptionBlocked) return;
     if (
       this.ws.readyState !== WebSocket.CONNECTING &&
       this.ws.readyState !== WebSocket.OPEN
@@ -431,6 +433,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
   }
 
   public sendAudioStreamEnd(): void {
+    if (this.interruptionBlocked) return;
     if (this.ws) {
       this.sendClientMessage({ realtimeInput: { audioStreamEnd: true } });
     }
@@ -453,8 +456,8 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
     }
   }
 
-  public setInterruptionBlocked(_blocked: boolean): void {
-    // Provedor nativo Gemini Live compat
+  public setInterruptionBlocked(blocked: boolean): void {
+    this.interruptionBlocked = blocked;
   }
 
   public seedGreetingTurn(text: string): void {
@@ -503,6 +506,7 @@ export class GeminiLiveVoiceProvider implements IVoiceProvider {
   }
 
   public close(): void {
+    this.interruptionBlocked = false;
     if (this.ws) {
       const socket = this.ws;
       this.ws = null;
