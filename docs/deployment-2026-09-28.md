@@ -7,6 +7,7 @@ Backend, voz, workers e frontend foram reconstruídos e publicados juntos. A atu
 - `vw_bi_resumo_diario` ainda dependia de `painel_interactions`. A migration `20260928140000` a remove explicitamente, sem CASCADE e sem editar migrations anteriores.
 - `activation_mode` e `logo_icon` eram varchar(20) e varchar(50), divergentes do contrato Text do Prisma. A migration `20260928235900` amplia os tipos sem truncamento.
 - O banco pertence a `synexa_migrator` e usa FORCE RLS. Durante as migrations de dados, a administração concedeu temporariamente a associação ao papel `synexa_app`, revogando-a ao finalizar. Não foi concedido SUPERUSER nem BYPASSRLS. Ensaios futuros devem preservar o proprietário do banco ao restaurar a cópia; restaurar somente as tabelas em um banco com outro proprietário não reproduz as permissões de produção.
+- A ativação de RLS em `sip_accounts` ocultou as contas individuais das views do Asterisk, causando `No matching endpoint found` e Unauthorized. A migration `20260929001000` permite SELECT somente ao proprietário NOLOGIN `synexa_sip_view_owner`; o login SIP continua sem acesso direto à tabela. O ensaio transacional recuperou as quatro contas sem alterar senhas. Executar `test/sip-view-rls.sql` como administrador após migrations em ambientes com os papéis SIP provisionados e ao menos uma conta habilitada, incluindo o teste com o papel real `synexa_sip`.
 
 ## Backup e validação
 
