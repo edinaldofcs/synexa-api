@@ -12,6 +12,8 @@ O Synexa coleta variáveis livres; interpretação e métricas ficam no receptor
 
 ## Transição por ambiente
 
+A migration adicional `20260928140000_remove_remaining_bi_view` remove explicitamente `vw_bi_resumo_diario` antes das tabelas. Essa view de agregações foi encontrada no ensaio de produção de 28/09 e não existia no banco local. Não usa `CASCADE`; dependências desconhecidas continuam bloqueando a publicação. Nenhuma migration já aplicada foi alterada.
+
 1. Executar `scripts/bi-removal-inventory.sql` com acesso somente de leitura. Conferir dependências SQL, configurações, sessões, endpoints e filas. Revisar também aplicações externas que consomem o webhook; o banco não prova que um receptor já suporta v3. O inventário não imprime valores pessoais nem segredos.
 2. Atualizar os receptores para `schema_version: 3`, `call.variables` e `call.turns`. Não há opção de v1/v2 ou de compatibilidade com BI.
 3. Suspender ingresso de novas sessões e concluir as que estão em execução. Estados históricos marcados como ativos não equivalem a sessões de voz em execução; conferir heartbeat e os processos do atendimento. Manter o worker antigo até todas as entregas antigas e limpezas terminarem. Nunca descartar ou reescrever payloads preparados.
